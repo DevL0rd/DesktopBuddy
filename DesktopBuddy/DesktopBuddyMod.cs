@@ -510,6 +510,10 @@ public class DesktopBuddyMod : ResoniteMod
         StyleButton(privateBtn, darkBtn);
         var githubBtn = btnBarUi.Button("🔗");
         StyleButton(githubBtn, darkBtn);
+        githubBtn.SendSlotEvents.Value = true;
+        var hyperlink = githubBtn.Slot.AttachComponent<Hyperlink>();
+        hyperlink.URL.Value = new Uri("https://github.com/DevL0rd/DesktopBuddy");
+        hyperlink.Reason.Value = "DesktopBuddy GitHub";
 
         btnBarUi.NestOut(); // exit horizontal layout
 
@@ -680,13 +684,6 @@ public class DesktopBuddyMod : ResoniteMod
             // Update button visual
             var img = privateBtn.Slot.GetComponent<Image>();
             if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : darkBtn;
-        };
-
-        githubBtn.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            Msg("[GitHub] Opening project page");
-            try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy") { UseShellExecute = true }); }
-            catch (Exception ex) { Msg($"[GitHub] Failed to open browser: {ex.Message}"); }
         };
 
         // Volume slider — drives the per-user volume override for the local user

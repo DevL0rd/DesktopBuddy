@@ -85,8 +85,11 @@
 
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
   <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
+    <ItemGroup>
+      <FfmpegDlls Include="$(MSBuildThisFileDirectory)..\ffmpeg\*.dll" />
+    </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\ffmpeg\avcodec-61.dll;$(MSBuildThisFileDirectory)..\ffmpeg\avformat-61.dll;$(MSBuildThisFileDirectory)..\ffmpeg\avutil-59.dll;$(MSBuildThisFileDirectory)..\ffmpeg\swresample-5.dll;$(MSBuildThisFileDirectory)..\ffmpeg\swscale-8.dll" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
+    <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" />
   </Target>
 

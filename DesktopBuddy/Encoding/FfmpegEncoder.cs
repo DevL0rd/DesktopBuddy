@@ -196,11 +196,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Initializing: {width}x{height} @ {_fps}fps");
 
-            // Try GPU-accelerated encoders: NVENC (NVIDIA) > AMF (AMD) > QSV (Intel)
+            // Try GPU-accelerated encoders: NVENC (NVIDIA) > AMF (AMD)
+            // QSV (Intel) excluded — requires AV_HWDEVICE_TYPE_QSV + AV_PIX_FMT_QSV, incompatible with our D3D11VA setup
             bool useHevc = width > 4096 || height > 4096;
             string[] encoders = useHevc
-                ? new[] { "hevc_nvenc", "hevc_amf", "hevc_qsv" }
-                : new[] { "h264_nvenc", "h264_amf", "h264_qsv" };
+                ? new[] { "hevc_nvenc", "hevc_amf" }
+                : new[] { "h264_nvenc", "h264_amf" };
 
             AVCodec* codec = null;
             string codecName = null;
@@ -233,7 +234,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->rc_max_rate = 12_000_000;
                 _codecCtx->rc_buffer_size = 8_000_000;
 
-                SetupHardwareContext(d3dDevice);
+                // NVENC accepts BGRA as sw_format; AMF and QSV require NV12
+                var swFormat = name.Contains("nvenc")
+                    ? AVPixelFormat.AV_PIX_FMT_BGRA
+                    : AVPixelFormat.AV_PIX_FMT_NV12;
+                SetupHardwareContext(d3dDevice, swFormat);
 
                 AVDictionary* opts = null;
                 if (name.Contains("nvenc"))
@@ -250,11 +255,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_dict_set(&opts, "usage", "ultralowlatency", 0);
                     ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
                     ffmpeg.av_dict_set(&opts, "rc", "vbr_latency", 0);
-                }
-                else if (name.Contains("qsv"))
-                {
-                    ffmpeg.av_dict_set(&opts, "preset", "veryfast", 0);
-                    ffmpeg.av_dict_set(&opts, "low_power", "1", 0);
                 }
 
                 lock (_d3dContextLock)
@@ -314,7 +314,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         } // lock
     }
 
-    private void SetupHardwareContext(IntPtr d3dDevice)
+    private void SetupHardwareContext(IntPtr d3dDevice, AVPixelFormat swFormat)
     {
         // Create hw device context and inject the WGC D3D11 device.
         // IMPORTANT: We share the same D3D11 device as WgcCapture so textures are compatible.
@@ -328,8 +328,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         d3d11DevCtx->device = (ID3D11Device*)d3dDevice;
 
-        // Lock the D3D context during init — OnFrameArrived on the WGC callback thread
-        // may be using the same immediate context concurrently.
         lock (_d3dContextLock)
         {
             int ret = ffmpeg.av_hwdevice_ctx_init(_hwDeviceCtx);
@@ -339,15 +337,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] D3D11VA hardware context initialized with device 0x{d3dDevice:X}");
 
         // Create hardware frames context
+        // sw_format differs per encoder: NVENC accepts BGRA, AMF requires NV12
         _hwFramesCtx = ffmpeg.av_hwframe_ctx_alloc(_hwDeviceCtx);
         if (_hwFramesCtx == null) throw new Exception("av_hwframe_ctx_alloc failed");
 
         var framesCtx = (AVHWFramesContext*)_hwFramesCtx->data;
         framesCtx->format = AVPixelFormat.AV_PIX_FMT_D3D11;
-        framesCtx->sw_format = AVPixelFormat.AV_PIX_FMT_BGRA;
+        framesCtx->sw_format = swFormat;
         framesCtx->width = (int)_width;
         framesCtx->height = (int)_height;
-        framesCtx->initial_pool_size = 0; // Let FFmpeg manage pool — fixed value causes texture creation failure
+        framesCtx->initial_pool_size = 0;
 
         lock (_d3dContextLock)
         {
@@ -356,7 +355,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         }
 
         _codecCtx->hw_frames_ctx = ffmpeg.av_buffer_ref(_hwFramesCtx);
-        ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Hardware frames context initialized: {_width}x{_height} D3D11/BGRA");
+        ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Hardware frames context initialized: {_width}x{_height} {swFormat}");
     }
 
     private void SetupMuxer()
