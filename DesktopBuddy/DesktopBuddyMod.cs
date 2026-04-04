@@ -1005,8 +1005,9 @@ public class DesktopBuddyMod : ResoniteMod
         // Start update loop in this world
         ScheduleUpdate(root.World);
 
-        // Focus the window in Windows immediately so user can start using it
-        WindowInput.FocusWindow(hwnd);
+        // Focus the window in Windows — but only for user-initiated panels, not child popups
+        if (!isChild)
+            WindowInput.FocusWindow(hwnd);
         Msg($"[StartStreaming] Window focused, streaming started for: {title}");
     }
 

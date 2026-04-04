@@ -810,12 +810,15 @@ public sealed class WgcCapture : IDisposable
         }
         ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture:Dispose] === START === hwnd={_hwnd}");
 
-        // NOW safe to dispose WGC session and frame pool — no callback is using them
-        ResoniteModLoader.ResoniteMod.Msg("[WgcCapture:Dispose] Disposing WGC session");
-        try { _session?.Dispose(); } catch (Exception ex) { ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture:Dispose] session dispose error: {ex.Message}"); }
-        ResoniteModLoader.ResoniteMod.Msg("[WgcCapture:Dispose] Disposing frame pool");
-        try { _framePool?.Dispose(); } catch (Exception ex) { ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture:Dispose] framePool dispose error: {ex.Message}"); }
+        // Release WGC references — do NOT call Dispose() on session/framePool.
+        // WinRT's IClosable.Close() on these objects can crash with a native access violation
+        // when called from the ThreadPool thread. Instead, null the references and let the
+        // GC finalizer handle the release. The capture is already stopped (_disposed = true
+        // and lock barrier ensures no callbacks are running).
+        _session = null;
+        _framePool = null;
         _item = null;
+        ResoniteModLoader.ResoniteMod.Msg("[WgcCapture:Dispose] WGC session/pool references released");
 
         // Release GPU resources — no lock needed, all callbacks are stopped
         ResoniteModLoader.ResoniteMod.Msg("[WgcCapture:Dispose] Releasing GPU resources");
