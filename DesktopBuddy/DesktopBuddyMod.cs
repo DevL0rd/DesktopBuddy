@@ -51,6 +51,10 @@ public class DesktopBuddyMod : ResoniteMod
     private static Process _tunnelProcess;
     internal static readonly PerfTimer Perf = new();
 
+    // Update check
+    private static string _latestVersion;
+    private static bool _updateShown;
+
     public override void OnEngineInit()
     {
         Config = GetConfiguration();
@@ -87,7 +91,45 @@ public class DesktopBuddyMod : ResoniteMod
             catch (Exception ex) { Msg($"[Tunnel] Kill failed: {ex.Message}"); }
         };
 
+        // Check for updates in background
+        System.Threading.Tasks.Task.Run(() => CheckForUpdate());
+
         Msg("DesktopBuddy initialized!");
+    }
+
+    private static string GetBuildSha()
+    {
+        var attr = typeof(DesktopBuddyMod).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "GitSha");
+        return attr?.Value ?? "unknown";
+    }
+
+    private static void CheckForUpdate()
+    {
+        try
+        {
+            var buildSha = GetBuildSha();
+            Msg($"[Update] Current build: {buildSha}");
+
+            using var http = new System.Net.Http.HttpClient();
+            http.DefaultRequestHeaders.Add("User-Agent", "DesktopBuddy");
+            var json = http.GetStringAsync("https://api.github.com/repos/DevL0rd/DesktopBuddy/releases/latest").Result;
+            var match = System.Text.RegularExpressions.Regex.Match(json, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
+            if (match.Success)
+            {
+                var tag = match.Groups[1].Value; // e.g. "build-aaccf2a"
+                var remoteSha = tag.StartsWith("build-") ? tag.Substring(6) : tag;
+                Msg($"[Update] Latest release: {tag} (sha: {remoteSha})");
+                if (buildSha != "unknown" && remoteSha != buildSha)
+                    _latestVersion = tag;
+            }
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Update] Check failed: {ex.Message}");
+        }
     }
 
     internal static void SpawnStreaming(World world, IntPtr hwnd, string title)
@@ -373,7 +415,7 @@ public class DesktopBuddyMod : ResoniteMod
         float worldHalfH = (h / 2f) * canvasScale;
         var btnBarSlot = root.AddSlot("ButtonBar");
         float btnBarHeight = 80f * canvasScale; // 0.08f
-        btnBarSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight / 2f - 0.005f, 0f);
+        btnBarSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight / 2f, 0f);
         btnBarSlot.LocalScale = float3.One * canvasScale;
         var btnBarCanvas = btnBarSlot.AttachComponent<Canvas>();
         btnBarCanvas.Size.Value = new float2(w, 80);
@@ -417,18 +459,20 @@ public class DesktopBuddyMod : ResoniteMod
         var darkBtn = new colorX(0.2f, 0.2f, 0.25f, 1f);
         var accentBtn = new colorX(0.25f, 0.35f, 0.55f, 1f);
 
-        var kbBtn = btnBarUi.Button("Keyboard");
+        var kbBtn = btnBarUi.Button("⌨");
         StyleButton(kbBtn, darkBtn);
-        var pasteBtn = btnBarUi.Button("Paste");
+        var pasteBtn = btnBarUi.Button("📋");
         StyleButton(pasteBtn, darkBtn);
-        var testStreamBtn = btnBarUi.Button("Preview");
+        var testStreamBtn = btnBarUi.Button("👁");
         StyleButton(testStreamBtn, accentBtn);
-        var resyncBtn = btnBarUi.Button("Resync");
+        var resyncBtn = btnBarUi.Button("🔄");
         StyleButton(resyncBtn, darkBtn);
-        var anchorBtn = btnBarUi.Button("Anchor");
+        var anchorBtn = btnBarUi.Button("⚓");
         StyleButton(anchorBtn, darkBtn);
-        var privateBtn = btnBarUi.Button("Private");
+        var privateBtn = btnBarUi.Button("🔒");
         StyleButton(privateBtn, darkBtn);
+        var githubBtn = btnBarUi.Button("🔗");
+        StyleButton(githubBtn, darkBtn);
 
         btnBarUi.NestOut(); // exit horizontal layout
 
@@ -601,6 +645,13 @@ public class DesktopBuddyMod : ResoniteMod
             if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : darkBtn;
         };
 
+        githubBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            Msg("[GitHub] Opening project page");
+            try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy") { UseShellExecute = true }); }
+            catch (Exception ex) { Msg($"[GitHub] Failed to open browser: {ex.Message}"); }
+        };
+
         // Volume slider — drives the per-user volume override for the local user
         volSlider.Value.OnValueChange += (SyncField<float> field) =>
         {
@@ -723,6 +774,57 @@ public class DesktopBuddyMod : ResoniteMod
             backUi.Spacer(1f);
 
             Msg($"[BackPanel] Created with title '{title}'");
+        }
+
+        // --- Update notification (once per session) ---
+        if (_latestVersion != null && !_updateShown)
+        {
+            _updateShown = true;
+            Msg($"[Update] Showing update popup: {_latestVersion}");
+
+            var updateSlot = root.AddSlot("UpdateNotice");
+            updateSlot.LocalPosition = new float3(0f, 0f, -0.002f); // slightly in front
+            updateSlot.LocalScale = float3.One * canvasScale;
+
+            var updateCanvas = updateSlot.AttachComponent<Canvas>();
+            float popupW = Math.Min(w * 0.6f, 400f);
+            updateCanvas.Size.Value = new float2(popupW, 120f);
+            var updateUi = new UIBuilder(updateCanvas);
+
+            var bg = updateUi.Image(new colorX(0.12f, 0.12f, 0.15f, 0.95f));
+            updateUi.NestInto(bg.RectTransform);
+            updateUi.VerticalLayout(8f, childAlignment: Alignment.MiddleCenter);
+            updateUi.Style.FlexibleWidth = 1f;
+
+            updateUi.Style.MinHeight = 32f;
+            var msg = updateUi.Text("Update available!", bestFit: false, alignment: Alignment.MiddleCenter);
+            msg.Size.Value = 22f;
+            msg.Color.Value = new colorX(0.95f, 0.85f, 0.3f, 1f);
+
+            updateUi.Style.MinHeight = 36f;
+            var dlBtn = updateUi.Button("Download");
+            var dlTxt = dlBtn.Slot.GetComponentInChildren<TextRenderer>();
+            if (dlTxt != null) { dlTxt.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f); dlTxt.Size.Value = 18f; }
+            if (dlBtn.ColorDrivers.Count > 0)
+            {
+                var cd = dlBtn.ColorDrivers[0];
+                cd.NormalColor.Value = new colorX(0.2f, 0.4f, 0.6f, 1f);
+                cd.HighlightColor.Value = new colorX(0.25f, 0.5f, 0.75f, 1f);
+                cd.PressColor.Value = new colorX(0.15f, 0.3f, 0.45f, 1f);
+            }
+            dlBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+            {
+                Msg("[Update] Opening releases page");
+                try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy/releases") { UseShellExecute = true }); }
+                catch (Exception ex) { Msg($"[Update] Failed: {ex.Message}"); }
+                if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            };
+
+            // Auto-dismiss after 15 seconds
+            root.World.RunInUpdates(15 * 60, () =>
+            {
+                if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            });
         }
 
         // --- Remote stream: WGC frames → FFmpeg → MPEG-TS → CloudFlare tunnel → VideoTextureProvider ---

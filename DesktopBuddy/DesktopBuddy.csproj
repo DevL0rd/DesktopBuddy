@@ -6,7 +6,24 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
+
+  <!-- Embed git SHA at build time -->
+  <Target Name="SetGitSha" BeforeTargets="GenerateAssemblyInfo">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitSha" />
+    </Exec>
+    <PropertyGroup>
+      <GitSha Condition="'$(GitSha)' == ''">unknown</GitSha>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitSha</_Parameter1>
+        <_Parameter2>$(GitSha)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
 
   <PropertyGroup>
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>

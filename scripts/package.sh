@@ -25,9 +25,6 @@ done
 cp "$ROOT_DIR/cloudflared/cloudflared.exe" "$STAGING/cloudflared/"
 echo "  cloudflared/cloudflared.exe"
 
-cp "$ROOT_DIR/manifest.json" "$STAGING/"
-echo "  manifest.json"
-
 # Create zip
 rm -f "$OUT_ZIP"
 echo ""
