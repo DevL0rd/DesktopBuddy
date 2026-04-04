@@ -186,6 +186,7 @@ public class DesktopBuddyMod : ResoniteMod
             var forward = headRot * float3.Forward;
             root.GlobalPosition = headPos + forward * 0.8f;
             root.GlobalRotation = floatQ.LookRotation(forward, float3.Up);
+            root.Tag = "Desktop Buddy";
             Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
 
             StartStreaming(root, hwnd, title);
@@ -217,6 +218,15 @@ public class DesktopBuddyMod : ResoniteMod
 
         Msg($"[StartStreaming] Window size: {w}x{h}, target {fps}fps");
 
+        // Add collider to root encompassing all canvases
+        float canvasScale = 0.001f;
+        float worldHalfH = (h / 2f) * canvasScale;
+        float btnBarHeight = 80f * canvasScale;
+        var collider = root.AttachComponent<BoxCollider>();
+        collider.Size.Value = new float3(w * canvasScale, h * canvasScale + btnBarHeight, 0.001f);
+        collider.Offset.Value = new float3(0f, -(btnBarHeight / 2f), 0f);
+        Msg("[StartStreaming] Collider added to root");
+
         // Display slot holds the Canvas — separate from root so keyboard etc. aren't nested inside Canvas
         var displaySlot = root.AddSlot("Display");
         Msg("[StartStreaming] Display slot created");
@@ -239,7 +249,6 @@ public class DesktopBuddyMod : ResoniteMod
         Msg("[StartStreaming] Texture component created");
 
         // Canvas with RawImage pointing at the texture — on displaySlot, NOT root
-        float canvasScale = 0.001f;
         var ui = new UIBuilder(displaySlot, w, h, canvasScale);
 
         var displayBg = ui.Image(new colorX(0f, 0f, 0f, 1f));
@@ -461,9 +470,7 @@ public class DesktopBuddyMod : ResoniteMod
         };
 
         // Button bar below the canvas — dark themed toolbar
-        float worldHalfH = (h / 2f) * canvasScale;
         var btnBarSlot = root.AddSlot("ButtonBar");
-        float btnBarHeight = 80f * canvasScale; // 0.08f
         btnBarSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight / 2f, 0f);
         btnBarSlot.LocalScale = float3.One * canvasScale;
         var btnBarCanvas = btnBarSlot.AttachComponent<Canvas>();
