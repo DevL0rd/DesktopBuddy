@@ -221,7 +221,7 @@ public sealed class WgcCapture : IDisposable
     /// <summary>
     /// Initialize WGC capture for a window (hwnd) or entire desktop (hwnd=IntPtr.Zero uses primary monitor).
     /// </summary>
-    public bool Init(IntPtr hwnd)
+    public bool Init(IntPtr hwnd, IntPtr monitorHandle = default)
     {
         _hwnd = hwnd;
         _isDesktop = hwnd == IntPtr.Zero;
@@ -252,8 +252,9 @@ public sealed class WgcCapture : IDisposable
 
             if (hwnd == IntPtr.Zero)
             {
-                var monitorHandle = MonitorFromPoint(0, 0, 1);
-                _item = CreateItemForMonitor(monitorHandle);
+                var hMon = MonitorFromPoint(0, 0, 1);
+                ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] Creating capture for monitor 0x{hMon:X}");
+                _item = CreateItemForMonitor(hMon);
             }
             else
             {

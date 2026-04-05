@@ -8,6 +8,7 @@ namespace DesktopBuddy;
 public sealed class DesktopStreamer : IDisposable
 {
     private readonly IntPtr _hwnd;
+    private readonly IntPtr _monitorHandle;
     private WgcCapture _wgc;
     private int _disposed;
 
@@ -25,23 +26,35 @@ public sealed class DesktopStreamer : IDisposable
         set { if (_wgc != null) _wgc.OnGpuFrame = value; }
     }
 
-
-
-    public DesktopStreamer(IntPtr hwnd)
+    public DesktopStreamer(IntPtr hwnd, IntPtr monitorHandle = default)
     {
         _hwnd = hwnd;
+        _monitorHandle = monitorHandle;
     }
 
     public bool TryInitialCapture()
     {
-        _wgc = new WgcCapture();
-        if (!_wgc.Init(_hwnd))
+        var wgc = new WgcCapture();
+        bool success = false;
+
+        // Run WGC init on a background thread with timeout to avoid freezing the engine.
+        // D3D11CreateDevice and CreateForWindow can hang on certain windows or when GPU
+        // resources are exhausted.
+        // WGC uses WinRT COM — must init on the calling thread (engine thread).
+        // Cannot move to background thread due to COM apartment requirements.
+        try { success = wgc.Init(_hwnd, _monitorHandle); }
+        catch (Exception ex)
         {
-            _wgc.Dispose();
-            _wgc = null;
+            ResoniteModLoader.ResoniteMod.Msg($"[DesktopStreamer] WGC init exception: {ex.Message}");
+        }
+
+        if (!success)
+        {
+            wgc.Dispose();
             return false;
         }
 
+        _wgc = wgc;
         Width = _wgc.Width;
         Height = _wgc.Height;
         ResoniteModLoader.ResoniteMod.Msg($"[DesktopStreamer] WGC capture initialized ({Width}x{Height})");

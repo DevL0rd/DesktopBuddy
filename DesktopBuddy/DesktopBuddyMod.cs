@@ -130,7 +130,7 @@ public class DesktopBuddyMod : ResoniteMod
 
         var updateCanvas = updateSlot.AttachComponent<Canvas>();
         float popupW = Math.Min(w * 0.6f, 400f);
-        updateCanvas.Size.Value = new float2(popupW, 120f);
+        updateCanvas.Size.Value = new float2(popupW, 160f);
         var updateUi = new UIBuilder(updateCanvas);
 
         var bg = updateUi.Image(new colorX(0.12f, 0.12f, 0.15f, 0.95f));
@@ -162,6 +162,22 @@ public class DesktopBuddyMod : ResoniteMod
             if (!updateSlot.IsDestroyed) updateSlot.Destroy();
         };
 
+        updateUi.Style.MinHeight = 30f;
+        var dismissBtn = updateUi.Button("Dismiss");
+        var dismissTxt = dismissBtn.Slot.GetComponentInChildren<TextRenderer>();
+        if (dismissTxt != null) { dismissTxt.Color.Value = new colorX(0.7f, 0.7f, 0.7f, 1f); dismissTxt.Size.Value = 14f; }
+        if (dismissBtn.ColorDrivers.Count > 0)
+        {
+            var cd = dismissBtn.ColorDrivers[0];
+            cd.NormalColor.Value = new colorX(0.2f, 0.2f, 0.25f, 1f);
+            cd.HighlightColor.Value = new colorX(0.3f, 0.3f, 0.35f, 1f);
+            cd.PressColor.Value = new colorX(0.15f, 0.15f, 0.18f, 1f);
+        }
+        dismissBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+        };
+
         // Auto-dismiss after 15 seconds
         root.World.RunInUpdates(15 * 60, () =>
         {
@@ -169,7 +185,7 @@ public class DesktopBuddyMod : ResoniteMod
         });
     }
 
-    internal static void SpawnStreaming(World world, IntPtr hwnd, string title)
+    internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default)
     {
         try
         {
@@ -189,7 +205,7 @@ public class DesktopBuddyMod : ResoniteMod
             root.Tag = "Desktop Buddy";
             Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
 
-            StartStreaming(root, hwnd, title);
+            StartStreaming(root, hwnd, title, monitorHandle: monitorHandle);
         }
         catch (Exception ex)
         {
@@ -197,14 +213,14 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false)
+    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default)
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd})");
 
         // Restore if minimized before attempting capture
         WindowInput.RestoreIfMinimized(hwnd);
 
-        var streamer = new DesktopStreamer(hwnd);
+        var streamer = new DesktopStreamer(hwnd, monitorHandle);
         if (!streamer.TryInitialCapture())
         {
             Msg($"[StartStreaming] Failed initial capture for: {title}");
@@ -219,7 +235,7 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[StartStreaming] Window size: {w}x{h}, target {fps}fps");
 
         // Add collider to root encompassing all canvases
-        float canvasScale = 0.001f;
+        float canvasScale = 0.0005f;
         float worldHalfH = (h / 2f) * canvasScale;
         float btnBarHeight = 80f * canvasScale;
         var collider = root.AttachComponent<BoxCollider>();
@@ -257,9 +273,10 @@ public class DesktopBuddyMod : ResoniteMod
         var rawImage = ui.RawImage(procTex);
         Msg("[StartStreaming] Canvas + RawImage created");
 
-        // Opaque material so the texture isn't transparent
         var mat = displaySlot.AttachComponent<UI_UnlitMaterial>();
-        mat.BlendMode.Value = BlendMode.Opaque;
+        mat.BlendMode.Value = BlendMode.Alpha;
+        mat.ZWrite.Value = ZWrite.On;
+        mat.OffsetUnits.Value = 100f;
         rawImage.Material.Target = mat;
 
         // Attach Button to the RawImage's slot for touch input
@@ -477,8 +494,13 @@ public class DesktopBuddyMod : ResoniteMod
         btnBarCanvas.Size.Value = new float2(w, 80);
         var btnBarUi = new UIBuilder(btnBarCanvas);
 
-        // Black canvas background — everything nests inside this
+        var btnBarMat = btnBarSlot.AttachComponent<UI_UnlitMaterial>();
+        btnBarMat.BlendMode.Value = BlendMode.Alpha;
+        btnBarMat.ZWrite.Value = ZWrite.On;
+        btnBarMat.OffsetUnits.Value = 100f;
+
         var barBg = btnBarUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
+        barBg.Material.Target = btnBarMat;
         btnBarUi.NestInto(barBg.RectTransform);
 
         btnBarUi.VerticalLayout(0f);
@@ -520,7 +542,7 @@ public class DesktopBuddyMod : ResoniteMod
         var pasteBtn = btnBarUi.Button("📋");
         StyleButton(pasteBtn, darkBtn);
         var testStreamBtn = btnBarUi.Button("👁");
-        StyleButton(testStreamBtn, accentBtn);
+        StyleButton(testStreamBtn, darkBtn);
         var resyncBtn = btnBarUi.Button("🔄");
         StyleButton(resyncBtn, darkBtn);
         var anchorBtn = btnBarUi.Button("⚓");
@@ -536,11 +558,13 @@ public class DesktopBuddyMod : ResoniteMod
 
         btnBarUi.NestOut(); // exit horizontal layout
 
-        // Bottom row: volume slider
+        // Bottom row: two volume sliders — one for stream (remote users), one for Windows (spawner)
         btnBarUi.Style.MinHeight = 32f;
         btnBarUi.Style.PreferredHeight = 32f;
         btnBarUi.Style.FlexibleHeight = -1f;
-        btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter);
+
+        // Stream volume row — visible to remote users, hidden from spawner
+        var streamVolRow = btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter).Slot;
         btnBarUi.Style.FlexibleWidth = 1f;
 
         btnBarUi.Style.FlexibleWidth = -1f;
@@ -553,7 +577,47 @@ public class DesktopBuddyMod : ResoniteMod
         btnBarUi.Style.MinWidth = -1f;
         var volSlider = btnBarUi.Slider<float>(28f, 1f, 0f, 1f, false);
 
-        btnBarUi.NestOut(); // exit horizontal layout
+        // Per-user slider so each remote user has their own volume
+        var volSliderOverride = volSlider.Slot.AttachComponent<ValueUserOverride<float>>();
+        volSliderOverride.Target.Target = volSlider.Value;
+        volSliderOverride.Default.Value = 1f;
+        volSliderOverride.CreateOverrideOnWrite.Value = true;
+
+        btnBarUi.NestOut(); // exit stream vol row
+
+        // Windows volume row — visible only to spawner, hidden from others
+        var winVolRow = btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter).Slot;
+        btnBarUi.Style.FlexibleWidth = 1f;
+
+        btnBarUi.Style.FlexibleWidth = -1f;
+        btnBarUi.Style.MinWidth = 60f;
+        var winVolLabel = btnBarUi.Text("Vol", bestFit: false, alignment: Alignment.MiddleLeft);
+        winVolLabel.Size.Value = 18f;
+        winVolLabel.Color.Value = new colorX(0.7f, 0.7f, 0.7f, 1f);
+
+        btnBarUi.Style.FlexibleWidth = 1f;
+        btnBarUi.Style.MinWidth = -1f;
+        var winVolSlider = btnBarUi.Slider<float>(28f, 1f, 0f, 1f, false);
+
+        btnBarUi.NestOut(); // exit win vol row
+
+        // Set visibility AFTER both rows are fully built to avoid deactivating
+        // slots while UIBuilder still has them in its parent stack
+        var streamVolVis = streamVolRow.AttachComponent<ValueUserOverride<bool>>();
+        streamVolVis.Target.Target = streamVolRow.ActiveSelf_Field;
+        streamVolVis.Default.Value = true;
+        streamVolVis.CreateOverrideOnWrite.Value = false;
+        streamVolVis.SetOverride(root.World.LocalUser, false);
+
+        var winVolVis = winVolRow.AttachComponent<ValueUserOverride<bool>>();
+        winVolVis.Target.Target = winVolRow.ActiveSelf_Field;
+        winVolVis.Default.Value = false;
+        winVolVis.CreateOverrideOnWrite.Value = false;
+        winVolVis.SetOverride(root.World.LocalUser, true);
+
+        // Child popup windows don't get the button bar
+        if (isChild)
+            btnBarSlot.ActiveSelf = false;
 
         Msg($"[StartStreaming] Button bar created at y={btnBarSlot.LocalPosition.y:F4}");
 
@@ -569,7 +633,7 @@ public class DesktopBuddyMod : ResoniteMod
                 if (show)
                 {
                     // Reset to default position/rotation in case user dragged it
-                    keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.05f, -0.08f);
+                    keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.15f, -0.08f);
                     keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
                     keyboardSlot.LocalScale = float3.One;
                 }
@@ -578,7 +642,7 @@ public class DesktopBuddyMod : ResoniteMod
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
             keyboardSlot = root.AddSlot("Virtual Keyboard");
             // Position just below the keyboard button, angled up toward user
-            keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.05f, -0.08f);
+            keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
             // Do NOT set LocalScale — the cloud keyboard has its own natural size
             // SpawnEntity loads the user's favorited keyboard from cloud, falls back to SimpleVirtualKeyboard
@@ -608,7 +672,8 @@ public class DesktopBuddyMod : ResoniteMod
         bool streamTestMode = false;
         ValueUserOverride<bool> streamVisRef = null; // Set when stream is created
         VideoTextureProvider videoTexRef = null; // Set when stream is created
-        ValueUserOverride<float> volOverrideRef = null; // Set when stream is created
+        // volOverrideRef removed — stream volume driven by ValueDriver from volSlider
+        var testActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f); // Green when active
         testStreamBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[TestStream] Button pressed");
@@ -620,11 +685,11 @@ public class DesktopBuddyMod : ResoniteMod
                 var displayVisComp = displaySlot.GetComponent<ValueUserOverride<bool>>();
                 if (displayVisComp != null)
                     displayVisComp.SetOverride(root.World.LocalUser, !streamTestMode);
-                if (volOverrideRef != null && !volOverrideRef.IsDestroyed)
-                {
-                    float vol = streamTestMode ? volSlider.Value.Value : 0f;
-                    volOverrideRef.SetOverride(root.World.LocalUser, vol);
-                }
+                // Mute/unmute spawner's stream audio when previewing
+                volSliderOverride.SetOverride(root.World.LocalUser, streamTestMode ? 1f : 0f);
+                // Update button color to show active state
+                var img = testStreamBtn.Slot.GetComponent<Image>();
+                if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : darkBtn;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
             }
             else
@@ -660,6 +725,7 @@ public class DesktopBuddyMod : ResoniteMod
 
         // Anchor button — parents/unparents the viewer to the local user
         bool isAnchored = false;
+        var anchorActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f); // Green when active
         anchorBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Anchor] Button pressed");
@@ -667,7 +733,6 @@ public class DesktopBuddyMod : ResoniteMod
             if (localUser?.Root == null) return;
             if (!isAnchored)
             {
-                // Save world transform, parent to user, restore world transform
                 var pos = root.GlobalPosition;
                 var rot = root.GlobalRotation;
                 root.SetParent(localUser.Root.Slot, keepGlobalTransform: true);
@@ -682,6 +747,8 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg($"[Anchor] Unanchored to world");
                 isAnchored = false;
             }
+            var img = anchorBtn.Slot.GetComponent<Image>();
+            if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : darkBtn;
         };
 
         // Paste button — sends Ctrl+V to Resonite window
@@ -691,25 +758,69 @@ public class DesktopBuddyMod : ResoniteMod
             WindowInput.SendPaste();
         };
 
-        // Private mode — hides stream visual from all other users
+        // Private mode — hides entire desktop buddy from others, stops stream
         bool isPrivate = false;
         ValueUserOverride<bool> streamVisForPrivate = null; // set when stream is created
+        string savedStreamUrl = null; // saved URL to restore when ungoing private
+
+        // Per-user visibility on the root slot: others see/collide, host always sees
+        var rootVis = root.AttachComponent<ValueUserOverride<bool>>();
+        rootVis.Target.Target = root.ActiveSelf_Field;
+        rootVis.Default.Value = true;
+        rootVis.CreateOverrideOnWrite.Value = false;
+
         privateBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             isPrivate = !isPrivate;
             Msg($"[Private] Mode: {isPrivate}");
-            if (streamVisForPrivate != null && !streamVisForPrivate.IsDestroyed)
-                streamVisForPrivate.Default.Value = !isPrivate; // false = hidden from others
+
+            // Hide/show entire desktop buddy for everyone except host
+            rootVis.Default.Value = !isPrivate;
+            // Ensure host always sees it
+            rootVis.SetOverride(root.World.LocalUser, true);
+
+            // Disconnect/reconnect the stream
+            if (videoTexRef != null && !videoTexRef.IsDestroyed)
+            {
+                if (isPrivate)
+                {
+                    savedStreamUrl = videoTexRef.URL.Value?.ToString();
+                    videoTexRef.URL.Value = null;
+                    videoTexRef.Stop();
+                    Msg("[Private] Stream disconnected");
+                }
+                else if (savedStreamUrl != null)
+                {
+                    videoTexRef.URL.Value = new Uri(savedStreamUrl);
+                    Msg($"[Private] Stream restored: {savedStreamUrl}");
+                }
+            }
+
             // Update button visual
             var img = privateBtn.Slot.GetComponent<Image>();
             if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : darkBtn;
         };
 
-        // Volume slider — drives the per-user volume override for the local user
-        volSlider.Value.OnValueChange += (SyncField<float> field) =>
+        // Volume slider — per-user via ValueUserOverride
+        // Spawner: controls Windows system/process volume via WASAPI
+        // All users: controls their own Resonite stream playback volume
+        bool isDesktopCapture = hwnd == IntPtr.Zero;
+        uint capturedPid = processId;
+
+        // Store spawner identity so we can gate Windows volume to the correct user
+        var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
+        ownerRef.Reference.Target = root.World.LocalUser;
+
+        // Windows volume slider — only the spawner sees this, drives Windows API directly
+        winVolSlider.Value.OnValueChange += (SyncField<float> field) =>
         {
-            if (volOverrideRef != null && !volOverrideRef.IsDestroyed)
-                volOverrideRef.SetOverride(root.World.LocalUser, field.Value);
+            if (ownerRef.Reference.Target == root.World.LocalUser)
+            {
+                if (isDesktopCapture)
+                    WindowVolume.SetMasterVolume(field.Value);
+                else if (capturedPid != 0)
+                    WindowVolume.SetProcessVolume(capturedPid, field.Value);
+            }
         };
 
         // --- Back panel: dark opaque background with centered icon + title ---
@@ -723,10 +834,11 @@ public class DesktopBuddyMod : ResoniteMod
             backCanvas.Size.Value = new float2(w, h);
             var backUi = new UIBuilder(backCanvas);
 
-            // Opaque material for the whole back panel
             var backMat = backSlot.AttachComponent<UI_UnlitMaterial>();
-            backMat.BlendMode.Value = BlendMode.Opaque;
+            backMat.BlendMode.Value = BlendMode.Alpha;
             backMat.Sidedness.Value = Sidedness.Double;
+            backMat.ZWrite.Value = ZWrite.On;
+            backMat.OffsetUnits.Value = 100f;
 
             // Dark background filling the whole canvas
             var bg = backUi.Image(new colorX(0.08f, 0.08f, 0.1f, 1f));
@@ -921,13 +1033,16 @@ public class DesktopBuddyMod : ResoniteMod
                 audioOutput.Source.Target = videoTex;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
 
-                // Per-user volume: others hear at 100%, spawner hears nothing (test stream toggles)
-                var volOverride = videoSlot.AttachComponent<ValueUserOverride<float>>();
-                volOverride.Target.Target = audioOutput.Volume;
-                volOverride.Default.Value = 1f; // Other users: full volume
-                volOverride.CreateOverrideOnWrite.Value = true;
-                volOverride.SetOverride(root.World.LocalUser, 0f); // Spawner: muted
-                volOverrideRef = volOverride;
+                // Drive audio volume from the per-user slider value.
+                // The slider has ValueUserOverride so each user has their own position.
+                // ValueDriver propagates the per-user value → each user controls their own volume.
+                var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
+                volDriver.DriveTarget.Target = audioOutput.Volume;
+                volDriver.ValueSource.Target = volSlider.Value;
+                // Spawner starts muted (they hear from Windows, not the stream).
+                // The slider's ValueUserOverride default is 1.0 for others.
+                volSliderOverride.SetOverride(root.World.LocalUser, 0f);
+                // Volume driven by ValueDriver from volSlider — no separate override needed
 
                 // Visual display on a separate slot with per-user visibility
                 var streamSlot = root.AddSlot("RemoteStreamVisual");
@@ -953,7 +1068,9 @@ public class DesktopBuddyMod : ResoniteMod
 
                 var streamImg = streamUi.RawImage(videoTex);
                 var streamMat = streamSlot.AttachComponent<UI_UnlitMaterial>();
-                streamMat.BlendMode.Value = BlendMode.Opaque;
+                streamMat.BlendMode.Value = BlendMode.Alpha;
+                streamMat.ZWrite.Value = ZWrite.On;
+                streamMat.OffsetUnits.Value = -100f;
                 streamImg.Material.Target = streamMat;
 
                 Msg($"[RemoteStream] Created, URL={shared.StreamUrl}, streamId={shared.StreamId}, refs={shared.RefCount}");
@@ -1035,7 +1152,7 @@ public class DesktopBuddyMod : ResoniteMod
         if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
 
         // Position relative to parent: map screen pixel offset to world space
-        float canvasScale = 0.001f;
+        float canvasScale = 0.0005f;
         float offsetX, offsetY;
         float offsetZ = -0.01f; // 1cm in front of parent
 

@@ -48,7 +48,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private int _totalFrames;
     private readonly uint _fps = 30;
 
-    private const int RING_SIZE = 16 * 1024 * 1024; // 16MB — absorbs tunnel throughput gaps
+    private const int RING_SIZE = 4 * 1024 * 1024; // 4MB
     private const int AVIO_BUFFER_SIZE = 65536;
     private const byte MPEGTS_SYNC = 0x47;
     private const int MPEGTS_PACKET_SIZE = 188;
@@ -71,6 +71,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private uint _lastWidth, _lastHeight;
     private long _startTicks;
     private long _lastVideoPts = -1; // Ensure monotonic pts
+    private long _lastKeyframeRingPos; // Ring buffer position of the latest keyframe start (written under _ringLock)
 
     // Pin this delegate so GC doesn't collect it while AVIO holds a pointer
     private avio_alloc_context_write_packet _writeCallbackDelegate;
@@ -149,18 +150,32 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (!aligned)
             {
-                for (long s = readPos; s < _ringWritePos - MPEGTS_PACKET_SIZE; s++)
+                // Jump to the latest keyframe so VLC gets an IDR + SPS/PPS on reconnect.
+                // Without this, VLC starts on a random P-frame it can't decode and dies
+                // within its 300ms cache window.
+                long kfPos = Interlocked.Read(ref _lastKeyframeRingPos);
+                if (kfPos > 0 && kfPos >= _ringWritePos - RING_SIZE && kfPos < _ringWritePos)
                 {
-                    byte b = _ringBuffer[(int)(s % RING_SIZE)];
-                    if (b == MPEGTS_SYNC)
+                    readPos = kfPos;
+                    available = _ringWritePos - readPos;
+                    aligned = true;
+                }
+                else
+                {
+                    // Fallback: scan for MPEG-TS sync bytes
+                    for (long s = readPos; s < _ringWritePos - MPEGTS_PACKET_SIZE; s++)
                     {
-                        byte next = _ringBuffer[(int)((s + MPEGTS_PACKET_SIZE) % RING_SIZE)];
-                        if (next == MPEGTS_SYNC)
+                        byte b = _ringBuffer[(int)(s % RING_SIZE)];
+                        if (b == MPEGTS_SYNC)
                         {
-                            readPos = s;
-                            available = _ringWritePos - readPos;
-                            aligned = true;
-                            break;
+                            byte next = _ringBuffer[(int)((s + MPEGTS_PACKET_SIZE) % RING_SIZE)];
+                            if (next == MPEGTS_SYNC)
+                            {
+                                readPos = s;
+                                available = _ringWritePos - readPos;
+                                aligned = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -239,21 +254,23 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->height = (int)_height;
                 _codecCtx->time_base = new AVRational { num = 1, den = (int)_fps };
                 _codecCtx->framerate = new AVRational { num = (int)_fps, den = 1 };
-                _codecCtx->gop_size = (int)_fps;
+                // Frequent keyframes (every ~0.33s) so VLC can recover quickly after tunnel
+                // reconnects — Resonite's libVLC has only 300ms cache, so it needs an IDR
+                // within that window when starting mid-stream.
+                _codecCtx->gop_size = (int)_fps / 3;
                 _codecCtx->max_b_frames = 0;
                 _codecCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_D3D11;
                 _codecCtx->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY | ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
 
                 bool isAmf = name.Contains("amf");
 
-                // AMF's vbr_peak produces ~4-5x more bits per pixel than NVENC at the same target,
-                // overwhelming the Cloudflare tunnel + 4MB ring buffer. Use CBR with a lower cap
-                // so AMF's actual output stays under typical upload bandwidth (~3-5 Mbps).
+                // AMF uses CBR instead of vbr_peak to avoid massive overshoot (vbr_peak hit 9+Mbps).
+                // Same target as NVENC — bandwidth isn't the issue, tunnel QUIC stream recycling is.
                 if (isAmf)
                 {
-                    _codecCtx->bit_rate = 4_000_000;
-                    _codecCtx->rc_max_rate = 5_000_000;
-                    _codecCtx->rc_buffer_size = 4_000_000;
+                    _codecCtx->bit_rate = 8_000_000;
+                    _codecCtx->rc_max_rate = 10_000_000;
+                    _codecCtx->rc_buffer_size = 8_000_000;
                 }
                 else
                 {
@@ -648,6 +665,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 _pkt->stream_index = _stream->index;
                 ffmpeg.av_packet_rescale_ts(_pkt, _codecCtx->time_base, _stream->time_base);
+
+                // Record ring buffer position before writing keyframe so new readers
+                // can start from a decodable point (IDR + SPS/PPS via MPEG-TS muxer)
+                bool isKey = (_pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
+                if (isKey)
+                {
+                    ffmpeg.avio_flush(_fmtCtx->pb);
+                    Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
+                }
 
                 ret = ffmpeg.av_write_frame(_fmtCtx, _pkt);
                 if (ret < 0) ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
