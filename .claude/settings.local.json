@@ -10,7 +10,8 @@
       "Bash(cp \"C:/bins/ffmpeg.exe\" /tmp/DesktopBuddy_zip/)",
       "Read(//tmp/**)",
       "Bash(dotnet build:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(scripts/build.sh)"
     ]
   }
 }

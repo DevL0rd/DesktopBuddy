@@ -48,7 +48,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private int _totalFrames;
     private readonly uint _fps = 30;
 
-    private const int RING_SIZE = 4 * 1024 * 1024; // 4MB
+    private const int RING_SIZE = 16 * 1024 * 1024; // 16MB — absorbs tunnel throughput gaps
     private const int AVIO_BUFFER_SIZE = 65536;
     private const byte MPEGTS_SYNC = 0x47;
     private const int MPEGTS_PACKET_SIZE = 188;
@@ -243,14 +243,29 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->max_b_frames = 0;
                 _codecCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_D3D11;
                 _codecCtx->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY | ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
-                _codecCtx->bit_rate = 8_000_000;
-                _codecCtx->rc_max_rate = 12_000_000;
-                _codecCtx->rc_buffer_size = 8_000_000;
+
+                bool isAmf = name.Contains("amf");
+
+                // AMF's vbr_peak produces ~4-5x more bits per pixel than NVENC at the same target,
+                // overwhelming the Cloudflare tunnel + 4MB ring buffer. Use CBR with a lower cap
+                // so AMF's actual output stays under typical upload bandwidth (~3-5 Mbps).
+                if (isAmf)
+                {
+                    _codecCtx->bit_rate = 4_000_000;
+                    _codecCtx->rc_max_rate = 5_000_000;
+                    _codecCtx->rc_buffer_size = 4_000_000;
+                }
+                else
+                {
+                    _codecCtx->bit_rate = 8_000_000;
+                    _codecCtx->rc_max_rate = 12_000_000;
+                    _codecCtx->rc_buffer_size = 8_000_000;
+                }
 
                 // NVENC accepts BGRA as sw_format directly. AMF needs NV12 (BGRA not in AMF format_map,
                 // BGR0 not in D3D11VA hwcontext). For AMF, we create NV12 hw frames and use D3D11
                 // Video Processor to convert BGRA→NV12 before encoding.
-                var swFormat = name.Contains("amf")
+                var swFormat = isAmf
                     ? AVPixelFormat.AV_PIX_FMT_NV12
                     : AVPixelFormat.AV_PIX_FMT_BGRA;
                 SetupHardwareContext(d3dDevice, swFormat);
@@ -265,11 +280,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_dict_set(&opts, "delay", "0", 0);
                     ffmpeg.av_dict_set(&opts, "rc-lookahead", "0", 0);
                 }
-                else if (name.Contains("amf"))
+                else if (isAmf)
                 {
                     ffmpeg.av_dict_set(&opts, "usage", "ultralowlatency", 0);
                     ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
-                    ffmpeg.av_dict_set(&opts, "rc", "vbr_latency", 0);
+                    // CBR keeps bitrate predictable — vbr_peak spiked to 9+ Mbps on AMF,
+                    // overwhelming tunnel bandwidth and causing ring buffer overflows
+                    ffmpeg.av_dict_set(&opts, "rc", "cbr", 0);
+                    ffmpeg.av_dict_set(&opts, "enforce_hrd", "1", 0);
                 }
 
                 lock (_d3dContextLock)
@@ -602,7 +620,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         }
         frameToEncode = _hwFrame;
 
-        // Wall clock pts — monotonically increasing, never duplicate
+        // Wall clock pts
         double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
         long videoPts = (long)(elapsedSec * _fps);
         if (videoPts <= _lastVideoPts) videoPts = _lastVideoPts + 1;
