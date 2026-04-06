@@ -11,7 +11,8 @@
       "Read(//tmp/**)",
       "Bash(dotnet build:*)",
       "Bash(npm run:*)",
-      "Bash(scripts/build.sh)"
+      "Bash(scripts/build.sh)",
+      "Bash(ilspycmd lib/FrooxEngine.dll)"
     ]
   }
 }

@@ -47,78 +47,7 @@ public sealed class WgcCapture : IDisposable
         IntPtr pFeatureLevels, uint FeatureLevels, uint SDKVersion,
         out IntPtr ppDevice, out int pFeatureLevel, out IntPtr ppImmediateContext);
 
-    [DllImport("dxgi.dll", EntryPoint = "CreateDXGIFactory1")]
-    private static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);
 
-    // IDXGIFactory vtable index
-    private const int IDXGIFactory_EnumAdapters = 7;
-    // IDXGIAdapter vtable index
-    private const int IDXGIAdapter_GetDesc = 8;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct DXGI_ADAPTER_DESC
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string Description;
-        public uint VendorId;
-        public uint DeviceId;
-        public uint SubSysId;
-        public uint Revision;
-        public nuint DedicatedVideoMemory;
-        public nuint DedicatedSystemMemory;
-        public nuint SharedSystemMemory;
-        public long AdapterLuid;
-    }
-
-    private const int D3D_DRIVER_TYPE_UNKNOWN = 0;
-
-    /// <summary>
-    /// Enumerate DXGI adapters and prefer a discrete GPU (NVIDIA/AMD) over integrated (Intel/Microsoft).
-    /// On hybrid GPU laptops, the default adapter may be the iGPU which lacks NVENC/AMF.
-    /// </summary>
-    private static unsafe IntPtr FindPreferredAdapter()
-    {
-        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387"); // IDXGIFactory1
-        int hr = CreateDXGIFactory1(ref factoryGuid, out IntPtr factory);
-        if (hr < 0 || factory == IntPtr.Zero) return IntPtr.Zero;
-
-        var vtable = *(IntPtr**)factory;
-        var enumAdapters = (delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, int>)vtable[IDXGIFactory_EnumAdapters];
-
-        IntPtr bestAdapter = IntPtr.Zero;
-        bool bestIsDiscrete = false;
-
-        for (uint i = 0; ; i++)
-        {
-            IntPtr adapter;
-            hr = enumAdapters(factory, i, &adapter);
-            if (hr < 0) break;
-
-            var adapterVtable = *(IntPtr**)adapter;
-            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, DXGI_ADAPTER_DESC*, int>)adapterVtable[IDXGIAdapter_GetDesc];
-            DXGI_ADAPTER_DESC desc;
-            getDesc(adapter, &desc);
-
-            // 0x10DE = NVIDIA, 0x1002 = AMD
-            bool isDiscrete = desc.VendorId == 0x10DE || desc.VendorId == 0x1002;
-            ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] Adapter {i}: '{desc.Description}' VendorId=0x{desc.VendorId:X4} VRAM={desc.DedicatedVideoMemory / 1048576}MB{(isDiscrete ? " [discrete]" : "")}");
-
-            if (isDiscrete && !bestIsDiscrete)
-            {
-                if (bestAdapter != IntPtr.Zero) Marshal.Release(bestAdapter);
-                bestAdapter = adapter;
-                bestIsDiscrete = true;
-            }
-            else
-            {
-                if (bestAdapter == IntPtr.Zero) bestAdapter = adapter;
-                else Marshal.Release(adapter);
-            }
-        }
-
-        Marshal.Release(factory);
-        return bestAdapter;
-    }
 
     [DllImport("d3dcompiler_47.dll", EntryPoint = "D3DCompile")]
     private static extern int D3DCompile(
@@ -303,15 +232,9 @@ public sealed class WgcCapture : IDisposable
             // BGRA support required for WGC frame surfaces. Debug layer disabled — it causes
             // assertion crashes when D3D context is used from multiple threads during disposal.
             uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-
-            // On hybrid GPU laptops (e.g. Intel iGPU + NVIDIA dGPU), the default adapter may
-            // be the iGPU which lacks NVENC/AMF. Enumerate adapters and prefer discrete GPU.
-            IntPtr preferredAdapter = FindPreferredAdapter();
-            int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
-            int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
+            int hr = D3D11CreateDevice(IntPtr.Zero, D3D_DRIVER_TYPE_HARDWARE, IntPtr.Zero,
                 deviceFlags, IntPtr.Zero, 0, 7,
                 out _d3dDevice, out _, out _d3dContext);
-            if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
             if (hr < 0) { ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}"); return false; }
             ResoniteModLoader.ResoniteMod.Msg("[WgcCapture] D3D11 device created");
 

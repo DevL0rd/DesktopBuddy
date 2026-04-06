@@ -607,6 +607,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         lock (_d3dContextLock)
         {
+            if (_disposed) return; // Bail early if dispose was requested while waiting for lock
             using (DesktopBuddyMod.Perf.Time("ffmpeg_get_buffer"))
             {
                 ret = ffmpeg.av_hwframe_get_buffer(_hwFramesCtx, _hwFrame, 0);
@@ -941,12 +942,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] WARNING: encode thread did not exit in 5s");
         ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Dispose: encode thread joined");
 
-        // Lock the D3D context during all FFmpeg cleanup — OnFrameArrived on the WGC
-        // callback thread may still be using the same D3D11 immediate context concurrently.
-        // The streamer (WgcCapture) hasn't been disposed yet at this point.
-        // av_write_trailer flushes the codec which can use the D3D context via NVENC.
+        // Lock the D3D context during FFmpeg cleanup. Use TryEnter with timeout to avoid
+        // deadlock if the encode thread is still holding the lock (Join timed out above).
         var ctxLock = _d3dContextLock;
-        if (ctxLock != null) Monitor.Enter(ctxLock);
+        bool gotLock = false;
+        if (ctxLock != null)
+        {
+            gotLock = Monitor.TryEnter(ctxLock, 3000);
+            if (!gotLock)
+                ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] WARNING: could not acquire D3D context lock for cleanup, proceeding without lock");
+        }
         try
         {
             ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Dispose: writing trailer");
@@ -979,7 +984,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
             catch (Exception ex) { ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Dispose: VP cleanup error: {ex.Message}"); }
         }
-        finally { if (ctxLock != null) Monitor.Exit(ctxLock); }
+        finally { if (gotLock) Monitor.Exit(ctxLock); }
         _audioCapture = null;
 
         ResoniteMod.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing format context");

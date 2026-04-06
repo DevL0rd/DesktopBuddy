@@ -243,10 +243,9 @@ public class DesktopBuddyMod : ResoniteMod
         float canvasScale = 0.0005f;
         float worldHalfH = h / 2f * canvasScale;
         float worldHalfW = w / 2f * canvasScale;
-        float btnBarHeight = 80f * canvasScale;
         var collider = root.AttachComponent<BoxCollider>();
-        collider.Size.Value = new float3(w * canvasScale, h * canvasScale + btnBarHeight, 0.001f);
-        collider.Offset.Value = new float3(0f, -(btnBarHeight / 2f), 0f);
+        collider.Size.Value = new float3(w * canvasScale, h * canvasScale, 0.001f);
+        collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
         // Display slot holds the Canvas — separate from root so keyboard etc. aren't nested inside Canvas
@@ -492,123 +491,204 @@ public class DesktopBuddyMod : ResoniteMod
             }
         };
 
-        // Button bar below the canvas — dark themed toolbar
-        var btnBarSlot = root.AddSlot("ButtonBar");
-        btnBarSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight / 2f, 0f);
-        btnBarSlot.LocalScale = float3.One * canvasScale;
-        var btnBarCanvas = btnBarSlot.AttachComponent<Canvas>();
-        btnBarCanvas.Size.Value = new float2(w, 80);
-        var btnBarUi = new UIBuilder(btnBarCanvas);
+        // --- Unified top bar: avatar + name + toggle + collapsible tools ---
+        // One single slot, one background, one canvas. Left-anchored above the desktop.
+        float barCollapsedW = 290f;  // avatar(48) + pad + name(~160) + pad + toggle(40)
+        float barExpandedW = 660f;   // + buttons + vol
+        float barH = 64f;
+        float barMarginTop = 10f * canvasScale;
 
-        var btnBarMat = btnBarSlot.AttachComponent<UI_UnlitMaterial>();
-        btnBarMat.BlendMode.Value = BlendMode.Alpha;
-        btnBarMat.ZWrite.Value = ZWrite.On;
-        btnBarMat.OffsetUnits.Value = 100f;
+        var barSlot = root.AddSlot("TopBar");
+        barSlot.LocalScale = float3.One * canvasScale;
 
-        var barBg = btnBarUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
-        barBg.Material.Target = btnBarMat;
-        btnBarUi.NestInto(barBg.RectTransform);
+        var barCanvas = barSlot.AttachComponent<Canvas>();
 
-        btnBarUi.VerticalLayout(0f);
-        btnBarUi.Style.FlexibleWidth = 1f;
-        btnBarUi.Style.FlexibleHeight = 1f;
+        var barMat = barSlot.AttachComponent<UI_UnlitMaterial>();
+        barMat.BlendMode.Value = BlendMode.Alpha;
+        barMat.ZWrite.Value = ZWrite.On;
+        barMat.OffsetUnits.Value = 100f;
 
-        // Top row: buttons
-        btnBarUi.Style.MinHeight = 36f;
-        btnBarUi.Style.PreferredHeight = 36f;
-        btnBarUi.Style.FlexibleHeight = -1f;
-        btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter);
-        btnBarUi.Style.FlexibleWidth = 1f;
-        btnBarUi.Style.MinHeight = 32f;
+        var barUi = new UIBuilder(barCanvas);
+        var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
+        barBg.Material.Target = barMat;
+        // Rounded corners — nine-slice the disc texture with ~0.49 borders so each corner
+        // gets a full circle quadrant, and the tiny center strip stretches flat
+        var roundedSprite = barSlot.AttachComponent<SpriteProvider>();
+        roundedSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
+        roundedSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
+        roundedSprite.FixedSize.Value = 16f;
+        barBg.Sprite.Target = roundedSprite;
+        barBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
+        barBg.Tint.Value = new colorX(0.1f, 0.1f, 0.12f, 1f);
 
-        // Helper: style a button with dark theme
-        void StyleButton(Button btn, colorX bgColor)
+        barUi.NestInto(barBg.RectTransform);
+        barUi.HorizontalLayout(8f, padding: 8f, childAlignment: Alignment.MiddleLeft);
+        barUi.Style.FlexibleWidth = -1f;
+        barUi.Style.FlexibleHeight = 1f;
+
+        var localUser = root.World.LocalUser;
+
+        // --- Avatar ---
+        barUi.Style.MinWidth = 48f;
+        barUi.Style.PreferredWidth = 48f;
+        barUi.Style.MinHeight = 48f;
+        barUi.Style.PreferredHeight = 48f;
+        barUi.Style.FlexibleWidth = -1f;
+        barUi.Style.FlexibleHeight = -1f;
+
+        var imageSpaceSlot = barUi.Empty("Image Space");
+        var imgMask = imageSpaceSlot.AttachComponent<Mask>();
+        var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
+        // Rounded square mask using nine-sliced circle (same technique as the bar bg)
+        var avatarMaskSprite = imageSpaceSlot.AttachComponent<SpriteProvider>();
+        avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
+        avatarMaskSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
+        avatarMaskSprite.FixedSize.Value = 10f;
+        imgMaskImage.Sprite.Target = avatarMaskSprite;
+        imgMaskImage.NineSliceSizing.Value = NineSliceSizing.FixedSize;
+
+        barUi.NestInto(imageSpaceSlot);
+        barUi.Style.FlexibleWidth = -1f;
+        barUi.Style.FlexibleHeight = -1f;
+
+        var cloudUserInfo = barSlot.AttachComponent<CloudUserInfo>();
+        var defaultImg = new Uri("resdb:///bb7d7f1414e0c0a44b4684ecd2a5dc2086c18b3f70c9ed53d467fe96af94e9a9.png");
+        var avatarTex = barSlot.AttachComponent<StaticTexture2D>();
+        var imgMux = barSlot.AttachComponent<ValueMultiplexer<Uri>>();
+        cloudUserInfo.UserId.ForceSet(localUser.UserID);
+        imgMux.Target.Target = avatarTex.URL;
+        imgMux.Values.Add(defaultImg);
+        imgMux.Values.Add();
+        var urlCopy = barSlot.AttachComponent<ValueCopy<Uri>>();
+        try { urlCopy.Source.Target = cloudUserInfo.TryGetField<Uri>("IconURL"); }
+        catch (Exception e) { Msg($"[TopBar] IconURL error: {e}"); }
+        urlCopy.Target.Target = imgMux.Values.GetField(1);
+        if (localUser.UserID != null) imgMux.Index.ForceSet(1);
+
+        barUi.Image(avatarTex);
+        barUi.NestOut(); // out of Image Space
+
+        // --- Username ---
+        barUi.Style.FlexibleWidth = -1f;
+        barUi.Style.MinWidth = 60f;
+        barUi.Style.PreferredWidth = 100f;
+        barUi.Style.FlexibleHeight = 1f;
+        barUi.Style.MinHeight = -1f;
+        string userName = localUser?.UserName ?? "Unknown";
+        var nameText = barUi.Text(userName, bestFit: false, alignment: Alignment.MiddleLeft);
+        nameText.Size.Value = 18f;
+        nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
+
+        // Helper: style a toolbar icon button — light gray text, transparent bg with hover
+        void StyleButton(Button btn)
         {
-            var txt = btn.Slot.GetComponentInChildren<TextRenderer>();
-            if (txt != null)
+            // Set text color on both Text (UIX) and TextRenderer to be safe
+            var textComp = btn.Slot.GetComponentInChildren<FrooxEngine.UIX.Text>();
+            if (textComp != null)
             {
-                txt.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
-                txt.Size.Value = 16f;
+                textComp.Size.Value = 18f;
+                textComp.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
             }
-            // Restyle the existing color driver from UIBuilder
+            var txtRenderer = btn.Slot.GetComponentInChildren<TextRenderer>();
+            if (txtRenderer != null)
+            {
+                txtRenderer.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
+            }
+            // ColorDrivers[0] drives Image.Tint (button background), not text
             if (btn.ColorDrivers.Count > 0)
             {
                 var cd = btn.ColorDrivers[0];
-                cd.NormalColor.Value = bgColor;
-                cd.HighlightColor.Value = bgColor * 1.3f;
-                cd.PressColor.Value = bgColor * 0.7f;
+                cd.NormalColor.Value = colorX.Clear;
+                cd.HighlightColor.Value = new colorX(1f, 1f, 1f, 0.15f);
+                cd.PressColor.Value = new colorX(1f, 1f, 1f, 0.08f);
             }
         }
 
-        var darkBtn = new colorX(0.2f, 0.2f, 0.25f, 1f);
+        var darkBtn = new colorX(0.22f, 0.22f, 0.28f, 1f);
         var accentBtn = new colorX(0.25f, 0.35f, 0.55f, 1f);
 
-        var kbBtn = btnBarUi.Button("⌨");
-        StyleButton(kbBtn, darkBtn);
-        var pasteBtn = btnBarUi.Button("📋");
-        StyleButton(pasteBtn, darkBtn);
-        var testStreamBtn = btnBarUi.Button("👁");
-        StyleButton(testStreamBtn, darkBtn);
-        var resyncBtn = btnBarUi.Button("🔄");
-        StyleButton(resyncBtn, darkBtn);
-        var anchorBtn = btnBarUi.Button("⚓");
-        StyleButton(anchorBtn, darkBtn);
-        var privateBtn = btnBarUi.Button("🔒");
-        StyleButton(privateBtn, darkBtn);
-        var githubBtn = btnBarUi.Button("🔗");
-        StyleButton(githubBtn, darkBtn);
+        // --- Toggle button (hamburger) ---
+        barUi.Style.MinWidth = 48f;
+        barUi.Style.PreferredWidth = 48f;
+        barUi.Style.MinHeight = 48f;
+        barUi.Style.PreferredHeight = 48f;
+        barUi.Style.FlexibleWidth = -1f;
+        barUi.Style.FlexibleHeight = -1f;
+        var toggleBtn = barUi.Button("≡");
+        StyleButton(toggleBtn);
+        var toggleText = toggleBtn.Slot.GetComponentInChildren<TextRenderer>();
+        if (toggleText != null) toggleText.Size.Value = 42f;
+
+        // --- Expandable panel ---
+        barUi.Style.FlexibleWidth = 1f;
+        barUi.Style.FlexibleHeight = 1f;
+        barUi.Style.MinWidth = -1f;
+        barUi.Style.MinHeight = -1f;
+        var expandPanel = barUi.Empty("ExpandPanel");
+        var ep = new UIBuilder(expandPanel);
+        ep.HorizontalLayout(6f, childAlignment: Alignment.MiddleLeft);
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = 1f;
+
+        // Tool buttons (compact)
+        ep.Style.MinWidth = 30f;
+        ep.Style.PreferredWidth = 30f;
+        ep.Style.MinHeight = 40f;
+        ep.Style.PreferredHeight = 40f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = -1f;
+
+        var kbBtn = ep.Button("⌨");      StyleButton(kbBtn);
+        var pasteBtn = ep.Button("📋");   StyleButton(pasteBtn);
+        var testStreamBtn = ep.Button("👁"); StyleButton(testStreamBtn);
+        var resyncBtn = ep.Button("🔄");  StyleButton(resyncBtn);
+        var anchorBtn = ep.Button("⚓");   StyleButton(anchorBtn);
+        var privateBtn = ep.Button("🔒"); StyleButton(privateBtn);
+        var githubBtn = ep.Button("🔗");  StyleButton(githubBtn);
         githubBtn.SendSlotEvents.Value = true;
         var hyperlink = githubBtn.Slot.AttachComponent<Hyperlink>();
         hyperlink.URL.Value = new Uri("https://github.com/DevL0rd/DesktopBuddy");
         hyperlink.Reason.Value = "DesktopBuddy GitHub";
 
-        btnBarUi.NestOut(); // exit horizontal layout
+        // Separator
+        ep.Style.MinWidth = 1f;
+        ep.Style.PreferredWidth = 1f;
+        ep.Style.MinHeight = 32f;
+        ep.Style.PreferredHeight = 32f;
+        ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
 
-        // Bottom row: two volume sliders — one for stream (remote users), one for Windows (spawner)
-        btnBarUi.Style.MinHeight = 32f;
-        btnBarUi.Style.PreferredHeight = 32f;
-        btnBarUi.Style.FlexibleHeight = -1f;
+        // Volume icon + slider
+        ep.Style.MinWidth = 24f;
+        ep.Style.PreferredWidth = 24f;
+        ep.Style.MinHeight = 48f;
+        ep.Style.PreferredHeight = 48f;
+        ep.Style.FlexibleWidth = -1f;
+        var volIcon = ep.Text("🔊", bestFit: false, alignment: Alignment.MiddleCenter);
+        volIcon.Size.Value = 16f;
+        volIcon.Color.Value = new colorX(0.6f, 0.6f, 0.6f, 1f);
 
-        // Stream volume row — visible to remote users, hidden from spawner
-        var streamVolRow = btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter).Slot;
-        btnBarUi.Style.FlexibleWidth = 1f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.MinWidth = 80f;
+        ep.Style.PreferredWidth = 100f;
+        ep.Style.MinHeight = 48f;
+        ep.Style.PreferredHeight = 48f;
 
-        btnBarUi.Style.FlexibleWidth = -1f;
-        btnBarUi.Style.MinWidth = 60f;
-        var volLabel = btnBarUi.Text("Vol", bestFit: false, alignment: Alignment.MiddleLeft);
-        volLabel.Size.Value = 18f;
-        volLabel.Color.Value = new colorX(0.7f, 0.7f, 0.7f, 1f);
-
-        btnBarUi.Style.FlexibleWidth = 1f;
-        btnBarUi.Style.MinWidth = -1f;
-        var volSlider = btnBarUi.Slider<float>(28f, 1f, 0f, 1f, false);
-
-        // Per-user slider so each remote user has their own volume
+        var streamVolRow = ep.Empty("StreamVol");
+        var streamVolUi = new UIBuilder(streamVolRow);
+        streamVolUi.Style.FlexibleWidth = 1f;
+        streamVolUi.Style.FlexibleHeight = 1f;
+        var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
         var volSliderOverride = volSlider.Slot.AttachComponent<ValueUserOverride<float>>();
         volSliderOverride.Target.Target = volSlider.Value;
         volSliderOverride.Default.Value = 0f;
         volSliderOverride.CreateOverrideOnWrite.Value = true;
 
-        btnBarUi.NestOut(); // exit stream vol row
+        var winVolRow = ep.Empty("WinVol");
+        var winVolUi = new UIBuilder(winVolRow);
+        winVolUi.Style.FlexibleWidth = 1f;
+        winVolUi.Style.FlexibleHeight = 1f;
+        var winVolSlider = winVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
 
-        // Windows volume row — visible only to spawner, hidden from others
-        var winVolRow = btnBarUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter).Slot;
-        btnBarUi.Style.FlexibleWidth = 1f;
-
-        btnBarUi.Style.FlexibleWidth = -1f;
-        btnBarUi.Style.MinWidth = 60f;
-        var winVolLabel = btnBarUi.Text("Vol", bestFit: false, alignment: Alignment.MiddleLeft);
-        winVolLabel.Size.Value = 18f;
-        winVolLabel.Color.Value = new colorX(0.7f, 0.7f, 0.7f, 1f);
-
-        btnBarUi.Style.FlexibleWidth = 1f;
-        btnBarUi.Style.MinWidth = -1f;
-        var winVolSlider = btnBarUi.Slider<float>(28f, 1f, 0f, 1f, false);
-
-        btnBarUi.NestOut(); // exit win vol row
-
-        // Set visibility AFTER both rows are fully built to avoid deactivating
-        // slots while UIBuilder still has them in its parent stack
         var streamVolVis = streamVolRow.AttachComponent<ValueUserOverride<bool>>();
         streamVolVis.Target.Target = streamVolRow.ActiveSelf_Field;
         streamVolVis.Default.Value = true;
@@ -621,11 +701,34 @@ public class DesktopBuddyMod : ResoniteMod
         winVolVis.CreateOverrideOnWrite.Value = false;
         winVolVis.SetOverride(root.World.LocalUser, true);
 
-        // Child popup windows don't get the button bar
-        if (isChild)
-            btnBarSlot.ActiveSelf = false;
+        // --- Collapse/expand ---
+        expandPanel.ActiveSelf = false;
 
-        Msg($"[StartStreaming] Button bar created at y={btnBarSlot.LocalPosition.y:F4}");
+        void UpdateBarLayout(bool expanded)
+        {
+            float cw = expanded ? barExpandedW : barCollapsedW;
+            barCanvas.Size.Value = new float2(cw, barH);
+            barSlot.LocalPosition = new float3(
+                -worldHalfW + cw / 2f * canvasScale,
+                worldHalfH + barH / 2f * canvasScale + barMarginTop,
+                0f);
+        }
+        UpdateBarLayout(false);
+
+        toggleBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            bool expanding = !expandPanel.ActiveSelf;
+            // Resize and reposition BEFORE toggling panel to prevent flicker
+            UpdateBarLayout(expanding);
+            expandPanel.ActiveSelf = expanding;
+            if (toggleText != null)
+                toggleText.Text.Value = expanding ? "✕" : "≡";
+        };
+
+        if (isChild)
+            barSlot.ActiveSelf = false;
+
+        Msg($"[TopBar] Created, user '{userName}'");
 
         Slot keyboardSlot = null;
         kbBtn.LocalPressed += (IButton b, ButtonEventData d) =>
@@ -639,7 +742,7 @@ public class DesktopBuddyMod : ResoniteMod
                 if (show)
                 {
                     // Reset to default position/rotation in case user dragged it
-                    keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.15f, -0.08f);
+                    keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
                     keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
                     keyboardSlot.LocalScale = float3.One;
                 }
@@ -648,7 +751,7 @@ public class DesktopBuddyMod : ResoniteMod
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
             keyboardSlot = root.AddSlot("Virtual Keyboard");
             // Position just below the keyboard button, angled up toward user
-            keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - btnBarHeight - 0.15f, -0.08f);
+            keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
             // Do NOT set LocalScale — the cloud keyboard has its own natural size
             // SpawnEntity loads the user's favorited keyboard from cloud, falls back to SimpleVirtualKeyboard
@@ -695,7 +798,7 @@ public class DesktopBuddyMod : ResoniteMod
                 volSliderOverride.SetOverride(root.World.LocalUser, streamTestMode ? 1f : 0f);
                 // Update button color to show active state
                 var img = testStreamBtn.Slot.GetComponent<Image>();
-                if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : darkBtn;
+                if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
             }
             else
@@ -754,7 +857,7 @@ public class DesktopBuddyMod : ResoniteMod
                 isAnchored = false;
             }
             var img = anchorBtn.Slot.GetComponent<Image>();
-            if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : darkBtn;
+            if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
         // Paste button — sends Ctrl+V to Resonite window
@@ -804,7 +907,7 @@ public class DesktopBuddyMod : ResoniteMod
 
             // Update button visual
             var img = privateBtn.Slot.GetComponent<Image>();
-            if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : darkBtn;
+            if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : colorX.Clear;
         };
 
         // Volume slider — per-user via ValueUserOverride
@@ -1117,104 +1220,7 @@ public class DesktopBuddyMod : ResoniteMod
             Msg($"[RemoteStream] Skipped: StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
-        // --- User profile panel: profile picture + name at top left ---
-        {
-            var userProfileSlot = root.AddSlot("UserProfile");
-            float profileWidth = 240f * canvasScale;
-            float profileHeight = 64f * canvasScale;
-            float marginTop = 10f * canvasScale;
-            userProfileSlot.LocalPosition = new float3(-worldHalfW + profileWidth / 2f, worldHalfH + profileHeight / 2f + marginTop, 0f);
-            userProfileSlot.LocalScale = new float3(canvasScale, canvasScale, canvasScale);
-
-            var profileCanvas = userProfileSlot.AttachComponent<Canvas>();
-            profileCanvas.Size.Value = new float2(240, 64);
-
-            var profileUi = new UIBuilder(profileCanvas);
-            var profileBg = profileUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
-
-            var profileMat = userProfileSlot.AttachComponent<UI_UnlitMaterial>();
-            profileMat.BlendMode.Value = BlendMode.Alpha;
-            profileMat.ZWrite.Value = ZWrite.On;
-            profileMat.OffsetUnits.Value = 100f;
-            profileBg.Material.Target = profileMat;
-
-            profileUi.NestInto(profileBg.RectTransform);
-            profileUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter);
-            profileUi.Style.FlexibleWidth = 1f;
-            profileUi.Style.FlexibleHeight = 1f;
-
-            var localUser = root.World.LocalUser;
-
-            // Profile picture (avatar) — square with parent slot for masking
-            profileUi.Style.MinWidth = 64f;
-            profileUi.Style.PreferredWidth = 64f;
-            profileUi.Style.MinHeight = 64f;
-            profileUi.Style.PreferredHeight = 64f;
-            profileUi.Style.FlexibleWidth = -1f;
-            profileUi.Style.FlexibleHeight = -1f;
-            
-            var imageRect = profileUi.Empty("Image Space");
-
-            var imageSpaceSlot = imageRect;
-            
-            var imgMask = imageSpaceSlot.AttachComponent<Mask>();
-            var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
-            var imgMaskTextureProvider = imageSpaceSlot.AttachComponent<StaticTexture2D>();
-            imgMaskTextureProvider.URL.Value = new Uri("resdb:///cb7ba11c8a391d6c8b4b5c5122684888a6a719179996e88c954a49b6b031a845.png");
-
-            var spriteProvider = imageSpaceSlot.AttachComponent<SpriteProvider>();
-            spriteProvider.Texture.Target = imgMaskTextureProvider;
-
-            imgMaskImage.Sprite.Target = spriteProvider;
-
-            profileUi.NestInto(imageSpaceSlot);
-            profileUi.Style.FlexibleWidth = -1f;
-            profileUi.Style.FlexibleHeight = -1f;
-
-            var cloudUserInfo = userProfileSlot.AttachComponent<CloudUserInfo>();
-            var defaultImg = new Uri("resdb:///bb7d7f1414e0c0a44b4684ecd2a5dc2086c18b3f70c9ed53d467fe96af94e9a9.png");
-            
-            var texture = userProfileSlot.AttachComponent<StaticTexture2D>();
-
-            var imgValueMultiplex = userProfileSlot.AttachComponent<ValueMultiplexer<Uri>>();
-
-            cloudUserInfo.UserId.ForceSet(localUser.UserID);
-
-            imgValueMultiplex.Target.Target = texture.URL;
-
-            imgValueMultiplex.Values.Add(defaultImg);
-            imgValueMultiplex.Values.Add();
-
-            var urlProfileCopy = userProfileSlot.AttachComponent<ValueCopy<Uri>>();
-            try
-            {
-                urlProfileCopy.Source.Target = cloudUserInfo.TryGetField<Uri>("IconURL");
-            } catch (Exception e) 
-            {
-                Msg($"[DesktopBuddy] Error trying to set source field of the urlProfileCopy: {e}");
-            }
-            
-            urlProfileCopy.Target.Target = imgValueMultiplex.Values.GetField(1);
-
-            if (localUser.UserID != null) imgValueMultiplex.Index.ForceSet(1);
-
-            var userImg = profileUi.Image(texture);
-            
-            // Nest out of Image Space back to Horizontal Layout
-            profileUi.NestOut();
-            
-            // Username text
-            profileUi.Style.FlexibleWidth = 1f;
-            profileUi.Style.MinWidth = -1f;
-            profileUi.Style.FlexibleHeight = 1f;
-            
-            string userName = localUser?.UserName ?? "Unknown";
-            var nameText = profileUi.Text(userName, bestFit: false, alignment: Alignment.MiddleCenter);
-            nameText.Size.Value = 20f;
-            nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
-
-            Msg($"[UserProfile] Created at pos={userProfileSlot.LocalPosition}, user '{userName}'");
-        }
+        // (User profile is integrated into the unified top bar above)
 
         // Grabbable with scaling enabled — normalizedPressPoint is 0-1 so input is scale-independent
         var grabbable = root.AttachComponent<Grabbable>();
@@ -1429,6 +1435,9 @@ public class DesktopBuddyMod : ResoniteMod
         {
             try
             {
+                // Brief delay to let in-flight GPU frames and encode operations drain
+                // before we start disposing resources they may still be using
+                System.Threading.Thread.Sleep(200);
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
 
                 AudioCapture audioToDispose = null;
