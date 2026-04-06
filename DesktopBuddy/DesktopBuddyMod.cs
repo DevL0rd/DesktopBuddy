@@ -204,6 +204,10 @@ public class DesktopBuddyMod : ResoniteMod
             root.GlobalPosition = headPos + forward * 0.8f;
             root.GlobalRotation = floatQ.LookRotation(forward, float3.Up);
             root.Tag = "Desktop Buddy";
+            var destroyer = root.AttachComponent<DestroyOnUserLeave>();
+
+            destroyer.TargetUser.Target = localUser;
+            
             Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
 
             StartStreaming(root, hwnd, title, monitorHandle: monitorHandle);
@@ -1141,11 +1145,29 @@ public class DesktopBuddyMod : ResoniteMod
 
             var localUser = root.World.LocalUser;
 
-            // Profile picture (avatar) — square
+            // Profile picture (avatar) — square with parent slot for masking
             profileUi.Style.MinWidth = 64f;
             profileUi.Style.PreferredWidth = 64f;
             profileUi.Style.MinHeight = 64f;
             profileUi.Style.PreferredHeight = 64f;
+            profileUi.Style.FlexibleWidth = -1f;
+            profileUi.Style.FlexibleHeight = -1f;
+            
+            var imageRect = profileUi.Empty("Image Space");
+
+            var imageSpaceSlot = imageRect;
+            
+            var imgMask = imageSpaceSlot.AttachComponent<Mask>();
+            var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
+            var imgMaskTextureProvider = imageSpaceSlot.AttachComponent<StaticTexture2D>();
+            imgMaskTextureProvider.URL.Value = new Uri("resdb:///cb7ba11c8a391d6c8b4b5c5122684888a6a719179996e88c954a49b6b031a845.png");
+
+            var spriteProvider = imageSpaceSlot.AttachComponent<SpriteProvider>();
+            spriteProvider.Texture.Target = imgMaskTextureProvider;
+
+            imgMaskImage.Sprite.Target = spriteProvider;
+
+            profileUi.NestInto(imageSpaceSlot);
             profileUi.Style.FlexibleWidth = -1f;
             profileUi.Style.FlexibleHeight = -1f;
 
@@ -1177,6 +1199,9 @@ public class DesktopBuddyMod : ResoniteMod
             if (localUser.UserID != null) imgValueMultiplex.Index.ForceSet(1);
 
             var userImg = profileUi.Image(texture);
+            
+            // Nest out of Image Space back to Horizontal Layout
+            profileUi.NestOut();
             
             // Username text
             profileUi.Style.FlexibleWidth = 1f;
