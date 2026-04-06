@@ -1646,7 +1646,7 @@ public class DesktopBuddyMod : ResoniteMod
             proc.ErrorDataReceived += (s, e) =>
             {
                 if (e.Data == null) return;
-                Msg($"[Tunnel] {e.Data}");
+                Msg($"[Tunnel/stderr] {e.Data}");
                 // Look for the tunnel URL in output
                 if (e.Data.Contains("https://") && e.Data.Contains(".trycloudflare.com"))
                 {
@@ -1660,7 +1660,13 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
                 }
             };
+            proc.OutputDataReceived += (s, e) =>
+            {
+                if (e.Data == null) return;
+                Msg($"[Tunnel/stdout] {e.Data}");
+            };
             proc.BeginErrorReadLine();
+            proc.BeginOutputReadLine();
         }
         catch (Exception ex)
         {
