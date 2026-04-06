@@ -11,6 +11,7 @@ using Elements.Core;
 using Elements.Assets;
 using SkyFrost.Base;
 using Key = Renderite.Shared.Key;
+using FrooxEngine.ProtoFlux;
 
 namespace DesktopBuddy;
 
@@ -236,7 +237,8 @@ public class DesktopBuddyMod : ResoniteMod
 
         // Add collider to root encompassing all canvases
         float canvasScale = 0.0005f;
-        float worldHalfH = (h / 2f) * canvasScale;
+        float worldHalfH = h / 2f * canvasScale;
+        float worldHalfW = w / 2f * canvasScale;
         float btnBarHeight = 80f * canvasScale;
         var collider = root.AttachComponent<BoxCollider>();
         collider.Size.Value = new float3(w * canvasScale, h * canvasScale + btnBarHeight, 0.001f);
@@ -580,7 +582,7 @@ public class DesktopBuddyMod : ResoniteMod
         // Per-user slider so each remote user has their own volume
         var volSliderOverride = volSlider.Slot.AttachComponent<ValueUserOverride<float>>();
         volSliderOverride.Target.Target = volSlider.Value;
-        volSliderOverride.Default.Value = 1f;
+        volSliderOverride.Default.Value = 0f;
         volSliderOverride.CreateOverrideOnWrite.Value = true;
 
         btnBarUi.NestOut(); // exit stream vol row
@@ -1109,6 +1111,84 @@ public class DesktopBuddyMod : ResoniteMod
         else
         {
             Msg($"[RemoteStream] Skipped: StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+        }
+
+        // --- User profile panel: profile picture + name at top left ---
+        {
+            var userProfileSlot = root.AddSlot("UserProfile");
+            float profileWidth = 240f * canvasScale;
+            float profileHeight = 64f * canvasScale;
+            float marginTop = 10f * canvasScale;
+            userProfileSlot.LocalPosition = new float3(-worldHalfW + profileWidth / 2f, worldHalfH + profileHeight / 2f + marginTop, 0f);
+            userProfileSlot.LocalScale = new float3(canvasScale, canvasScale, canvasScale);
+
+            var profileCanvas = userProfileSlot.AttachComponent<Canvas>();
+            profileCanvas.Size.Value = new float2(240, 64);
+
+            var profileUi = new UIBuilder(profileCanvas);
+            var profileBg = profileUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
+
+            var profileMat = userProfileSlot.AttachComponent<UI_UnlitMaterial>();
+            profileMat.BlendMode.Value = BlendMode.Alpha;
+            profileMat.ZWrite.Value = ZWrite.On;
+            profileMat.OffsetUnits.Value = 100f;
+            profileBg.Material.Target = profileMat;
+
+            profileUi.NestInto(profileBg.RectTransform);
+            profileUi.HorizontalLayout(6f, childAlignment: Alignment.MiddleCenter);
+            profileUi.Style.FlexibleWidth = 1f;
+            profileUi.Style.FlexibleHeight = 1f;
+
+            var localUser = root.World.LocalUser;
+
+            // Profile picture (avatar) — square
+            profileUi.Style.MinWidth = 64f;
+            profileUi.Style.PreferredWidth = 64f;
+            profileUi.Style.MinHeight = 64f;
+            profileUi.Style.PreferredHeight = 64f;
+            profileUi.Style.FlexibleWidth = -1f;
+            profileUi.Style.FlexibleHeight = -1f;
+
+            var cloudUserInfo = userProfileSlot.AttachComponent<CloudUserInfo>();
+            var defaultImg = new Uri("resdb:///bb7d7f1414e0c0a44b4684ecd2a5dc2086c18b3f70c9ed53d467fe96af94e9a9.png");
+            
+            var texture = userProfileSlot.AttachComponent<StaticTexture2D>();
+
+            var imgValueMultiplex = userProfileSlot.AttachComponent<ValueMultiplexer<Uri>>();
+
+            cloudUserInfo.UserId.ForceSet(localUser.UserID);
+
+            imgValueMultiplex.Target.Target = texture.URL;
+
+            imgValueMultiplex.Values.Add(defaultImg);
+            imgValueMultiplex.Values.Add();
+
+            var urlProfileCopy = userProfileSlot.AttachComponent<ValueCopy<Uri>>();
+            try
+            {
+                urlProfileCopy.Source.Target = cloudUserInfo.TryGetField<Uri>("IconURL");
+            } catch (Exception e) 
+            {
+                Msg($"[DesktopBuddy] Error trying to set source field of the urlProfileCopy: {e}");
+            }
+            
+            urlProfileCopy.Target.Target = imgValueMultiplex.Values.GetField(1);
+
+            if (localUser.UserID != null) imgValueMultiplex.Index.ForceSet(1);
+
+            var userImg = profileUi.Image(texture);
+            
+            // Username text
+            profileUi.Style.FlexibleWidth = 1f;
+            profileUi.Style.MinWidth = -1f;
+            profileUi.Style.FlexibleHeight = 1f;
+            
+            string userName = localUser?.UserName ?? "Unknown";
+            var nameText = profileUi.Text(userName, bestFit: false, alignment: Alignment.MiddleCenter);
+            nameText.Size.Value = 20f;
+            nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
+
+            Msg($"[UserProfile] Created at pos={userProfileSlot.LocalPosition}, user '{userName}'");
         }
 
         // Grabbable with scaling enabled — normalizedPressPoint is 0-1 so input is scale-independent
