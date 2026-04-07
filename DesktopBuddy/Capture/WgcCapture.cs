@@ -883,7 +883,11 @@ public sealed class WgcCapture : IDisposable
 
     public void StopCapture()
     {
-        if (_disposed) return;
+        lock (_disposeLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
         try { _session?.Dispose(); } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Session dispose error: {ex.Message}"); }
@@ -895,25 +899,31 @@ public sealed class WgcCapture : IDisposable
 
     public void Dispose()
     {
+        // StopCapture sets _disposed under _disposeLock, so if it already ran
+        // this block is skipped. If it didn't, we do the same teardown here.
+        bool alreadyStopped;
         lock (_disposeLock)
         {
-            if (_disposed) return;
+            alreadyStopped = _disposed;
             _disposed = true;
         }
 
-        Log.Msg($"[WgcCapture:Dispose] Unhooking events");
-        try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
-        catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
+        if (!alreadyStopped)
+        {
+            Log.Msg($"[WgcCapture:Dispose] Unhooking events");
+            try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
+            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
-        Log.Msg($"[WgcCapture:Dispose] Disposing WGC session");
-        try { _session?.Dispose(); }
-        catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Session error: {ex.Message}"); }
-        _session = null;
+            Log.Msg($"[WgcCapture:Dispose] Disposing WGC session");
+            try { _session?.Dispose(); }
+            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Session error: {ex.Message}"); }
+            _session = null;
 
-        Log.Msg($"[WgcCapture:Dispose] Disposing FramePool");
-        try { _framePool?.Dispose(); }
-        catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] FramePool error: {ex.Message}"); }
-        _framePool = null;
+            Log.Msg($"[WgcCapture:Dispose] Disposing FramePool");
+            try { _framePool?.Dispose(); }
+            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] FramePool error: {ex.Message}"); }
+            _framePool = null;
+        }
         _item = null;
 
         Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
@@ -925,9 +935,13 @@ public sealed class WgcCapture : IDisposable
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
-        Log.Msg($"[WgcCapture:Dispose] Disposing WinRT device");
-        try { _winrtDevice?.Dispose(); }
-        catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] WinRT device error: {ex.Message}"); }
+        // Do NOT manually dispose _winrtDevice. The WinRT projection layer creates
+        // internal IObjectReference wrappers (from FramePool, CaptureSession, frame surfaces)
+        // that hold AddRef'd COM pointers to the same underlying D3D device. If we dispose
+        // the device here, those orphaned wrappers crash with an access violation in
+        // d3d11!CDeviceChild::Release when the GC finalizer tries to release them later.
+        // Nulling the reference lets the GC finalize all wrappers together via COM ref counting.
+        Log.Msg($"[WgcCapture:Dispose] Releasing WinRT device reference (GC will finalize)");
         _winrtDevice = null;
         _d3dContext = IntPtr.Zero;
         _d3dDevice = IntPtr.Zero;

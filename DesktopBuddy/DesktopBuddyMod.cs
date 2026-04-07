@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using HarmonyLib;
 using ResoniteModLoader;
 using FrooxEngine;
@@ -70,7 +71,7 @@ public class DesktopBuddyMod : ResoniteMod
             Log.Msg($"UNOBSERVED TASK EXCEPTION:\n{e.Exception}");
         };
 
-        CheckEventViewerForCrashes();
+        InstallNativeCrashHandler();
 
         Harmony harmony = new("com.desktopbuddy.mod");
         harmony.PatchAll();
@@ -1865,38 +1866,79 @@ public class DesktopBuddyMod : ResoniteMod
     internal new static void Msg(string msg) => Log.Msg(msg);
     internal new static void Error(string msg) => Log.Error(msg);
 
-    private static void CheckEventViewerForCrashes()
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr SetUnhandledExceptionFilter(IntPtr lpTopLevelExceptionFilter);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int UnhandledExceptionFilterDelegate(IntPtr exceptionPointers);
+
+    private static UnhandledExceptionFilterDelegate _nativeCrashDelegate;
+    private static IntPtr _previousFilter;
+
+    private static void InstallNativeCrashHandler()
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell",
-                Arguments = "-NoProfile -Command \"Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2; StartTime=(Get-Date).AddHours(-2)} -MaxEvents 20 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'Resonite|Renderite|Unity|mono|CLR|\\.NET|d3d11|dxgi|nvenc|amf|Application Error|Faulting' } | ForEach-Object { $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') + ' [EventID ' + $_.Id + ' ' + $_.LevelDisplayName + '] ' + ($_.Message -replace '\\r?\\n', ' | ') } \"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            var proc = Process.Start(psi);
-            if (proc == null) return;
-            string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(10000);
-
-            if (!string.IsNullOrWhiteSpace(output))
-            {
-                var header = "=== Previous session crash info (Windows Event Viewer, last 2h) ===";
-                Log.Msg(header);
-                foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                    Log.Msg($"  {line.Trim()}");
-                Log.Msg("=== End crash info ===");
-            }
+            _nativeCrashDelegate = NativeCrashFilter;
+            IntPtr fp = Marshal.GetFunctionPointerForDelegate(_nativeCrashDelegate);
+            _previousFilter = SetUnhandledExceptionFilter(fp);
+            Log.Msg("[NativeCrash] Handler installed");
         }
         catch (Exception ex)
         {
-            Log.Msg($"EventViewer check failed: {ex.Message}");
+            Log.Msg($"[NativeCrash] Failed to install handler: {ex.Message}");
         }
     }
+
+    private static int NativeCrashFilter(IntPtr exceptionPointersPtr)
+    {
+        try
+        {
+            // EXCEPTION_POINTERS: first field is EXCEPTION_RECORD*, second is CONTEXT*
+            IntPtr recordPtr = Marshal.ReadIntPtr(exceptionPointersPtr, 0);
+            // EXCEPTION_RECORD: first field is ExceptionCode (DWORD), second is ExceptionFlags,
+            // third is nested record, fourth is ExceptionAddress
+            uint code = (uint)Marshal.ReadInt32(recordPtr, 0);
+            IntPtr address = Marshal.ReadIntPtr(recordPtr, IntPtr.Size == 8 ? 24 : 12);
+
+            string msg = $"[NativeCrash] FATAL: code=0x{code:X8} addr=0x{address:X}\n";
+
+            // Walk loaded modules to find which module the crash address is in
+            try
+            {
+                var proc = Process.GetCurrentProcess();
+                foreach (ProcessModule mod in proc.Modules)
+                {
+                    long modBase = mod.BaseAddress.ToInt64();
+                    long modEnd = modBase + mod.ModuleMemorySize;
+                    if (address.ToInt64() >= modBase && address.ToInt64() < modEnd)
+                    {
+                        long offset = address.ToInt64() - modBase;
+                        msg += $"[NativeCrash] Faulting module: {mod.ModuleName}+0x{offset:X} ({mod.FileName})\n";
+                        break;
+                    }
+                }
+            }
+            catch { /* best effort */ }
+
+            // Managed stack trace (may not be accurate for native crashes but worth capturing)
+            try
+            {
+                msg += $"[NativeCrash] Managed stack:\n{Environment.StackTrace}\n";
+            }
+            catch { /* best effort */ }
+
+            Log.Msg(msg);
+        }
+        catch
+        {
+            try { Log.Msg("[NativeCrash] FATAL: crash handler failed to log details"); } catch { }
+        }
+
+        // EXCEPTION_CONTINUE_SEARCH - let Windows handle it (WER, crash dump, etc.)
+        return 0;
+    }
+
 }
 
 [HarmonyPatch(typeof(InteractionHandler), nameof(InteractionHandler.BeforeInputUpdate))]
