@@ -1397,25 +1397,28 @@ public class DesktopBuddyMod : ResoniteMod
                 if (child.Streamer != null) child.Streamer.OnGpuFrame = null;
                 child.ParentSession = null;
                 Msg($"[Cleanup] Child: disconnecting VTP hwnd={child.Hwnd}");
-                if (child.Root != null && !child.Root.IsDestroyed)
                 {
-                    var vtp = child.Root.GetComponentInChildren<VideoTextureProvider>();
+                    var vtp = child.VideoTexture;
                     if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
-                    var childWorld = child.Root.World;
+                    child.VideoTexture = null;
                     var rootToDie = child.Root;
-                    if (childWorld != null && !childWorld.IsDestroyed)
+                    if (rootToDie != null && !rootToDie.IsDestroyed)
                     {
-                        childWorld.RunInUpdates(10, () =>
+                        var childWorld = rootToDie.World;
+                        if (childWorld != null && !childWorld.IsDestroyed)
                         {
-                            Msg($"[Cleanup] Child deferred destroy executing hwnd={child.Hwnd}");
-                            if (rootToDie != null && !rootToDie.IsDestroyed) rootToDie.Destroy();
-                            Msg($"[Cleanup] Child deferred destroy complete hwnd={child.Hwnd}");
-                        });
-                    }
-                    else
-                    {
-                        Msg($"[Cleanup] Child world dead, destroying now hwnd={child.Hwnd}");
-                        rootToDie.Destroy();
+                            childWorld.RunInUpdates(10, () =>
+                            {
+                                Msg($"[Cleanup] Child deferred destroy executing hwnd={child.Hwnd}");
+                                if (rootToDie != null && !rootToDie.IsDestroyed) rootToDie.Destroy();
+                                Msg($"[Cleanup] Child deferred destroy complete hwnd={child.Hwnd}");
+                            });
+                        }
+                        else
+                        {
+                            Msg($"[Cleanup] Child world dead, destroying now hwnd={child.Hwnd}");
+                            rootToDie.Destroy();
+                        }
                     }
                 }
                 Msg($"[Cleanup] Child: calling CleanupSession recursively hwnd={child.Hwnd}");
@@ -1550,12 +1553,12 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[UpdateLoop] Session {i} root/texture destroyed, cleaning up (root={session.Root != null} rootDestroyed={session.Root?.IsDestroyed} tex={session.Texture != null} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId})");
                     Msg("[UpdateLoop] Step 1: Nulling OnGpuFrame");
                     if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
-                    // Stop VLC before cleanup so the encoder survives long enough for VLC to wind down
-                    if (session.Root != null && !session.Root.IsDestroyed)
-                    {
-                        var vtp = session.Root.GetComponentInChildren<VideoTextureProvider>();
-                        if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
-                    }
+                    // Stop VLC before cleanup so the encoder survives long enough for VLC to wind down.
+                    // Use session.VideoTexture directly - when destroyed via context menu,
+                    // session.Root is already destroyed so GetComponentInChildren would fail.
+                    var vtp = session.VideoTexture;
+                    if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
+                    session.VideoTexture = null;
                     Msg("[UpdateLoop] Step 2: Calling CleanupSession");
                     CleanupSession(session);
                     Msg("[UpdateLoop] Step 3: Removing from ActiveSessions");
@@ -1626,10 +1629,10 @@ public class DesktopBuddyMod : ResoniteMod
                                     child.ParentSession = null;
                                     ActiveSessions.Remove(child);
                                     session.ChildSessions.RemoveAt(c);
-                                    if (child.Root != null && !child.Root.IsDestroyed)
                                     {
-                                        var cvtp = child.Root.GetComponentInChildren<VideoTextureProvider>();
+                                        var cvtp = child.VideoTexture;
                                         if (cvtp != null && !cvtp.IsDestroyed) { cvtp.URL.Value = null; cvtp.Stop(); }
+                                        child.VideoTexture = null;
                                         var cRoot = child.Root;
                                         world.RunInUpdates(10, () =>
                                         {

@@ -899,17 +899,20 @@ public sealed class WgcCapture : IDisposable
         _framePool = null;
         _item = null;
 
-        Log.Msg($"[WgcCapture:Dispose] Clearing GPU resource references");
-        ReleaseGpuConvertResources(disposing: true);
-        _computeShader = IntPtr.Zero;
-        _encodeTexture = IntPtr.Zero;
-        _stagingTexture = IntPtr.Zero;
-        Log.Msg($"[WgcCapture:Dispose] GPU resources cleared");
+        Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
+        ReleaseGpuConvertResources(disposing: false);
+        if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
+        if (_encodeTexture != IntPtr.Zero) { Marshal.Release(_encodeTexture); _encodeTexture = IntPtr.Zero; }
+        if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
+        Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
         Log.Msg($"[WgcCapture:Dispose] Disposing WinRT device");
         try { _winrtDevice?.Dispose(); }
         catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] WinRT device error: {ex.Message}"); }
         _winrtDevice = null;
+        // Don't Marshal.Release _d3dDevice/_d3dContext - the WinRT device wrapper
+        // owns the underlying COM object. Releasing here double-frees, causing
+        // the GC finalizer to crash in IObjectReference.Finalize -> Marshal.Release.
         _d3dContext = IntPtr.Zero;
         _d3dDevice = IntPtr.Zero;
 
