@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 using HarmonyLib;
 using FrooxEngine;
@@ -17,7 +16,7 @@ public static class ContextMenuPatch
 {
     private const int PAGE_SIZE = 8;
 
-    private static readonly ConcurrentDictionary<string, Uri> _iconCache = new();
+    private static readonly ConcurrentDictionary<IntPtr, Uri> _iconCache = new();
 
     private static Uri _desktopIconUri;
     private static bool _desktopIconGenerated;
@@ -177,23 +176,21 @@ public static class ContextMenuPatch
     {
         try
         {
-            var iconData = WindowIconExtractor.GetIconRGBA(hwnd, out int w, out int h);
-            if (iconData == null || w <= 0 || h <= 0) return null;
-
-            var hash = Convert.ToHexString(SHA256.HashData(iconData));
-
             var tex = slot.AttachComponent<StaticTexture2D>();
 
-            if (_iconCache.TryGetValue(hash, out var cached))
+            if (_iconCache.TryGetValue(hwnd, out var cached))
             {
                 tex.URL.Value = cached;
                 return tex;
             }
 
+            var iconData = WindowIconExtractor.GetIconRGBA(hwnd, out int w, out int h);
+            if (iconData == null || w <= 0 || h <= 0) return null;
+
             var capturedData = iconData;
             var capturedW = w;
             var capturedH = h;
-            var capturedHash = hash;
+            var capturedHwnd = hwnd;
             var capturedTex = tex;
             Task.Run(async () =>
             {
@@ -204,7 +201,7 @@ public static class ContextMenuPatch
                     var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
                     if (uri != null)
                     {
-                        _iconCache[capturedHash] = uri;
+                        _iconCache[capturedHwnd] = uri;
                         capturedTex.World.RunInUpdates(0, () =>
                         {
                             if (!capturedTex.IsDestroyed)

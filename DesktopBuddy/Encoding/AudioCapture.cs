@@ -253,13 +253,28 @@ public sealed class AudioCapture : IDisposable
 
                 lock (_audioLock)
                 {
-                    float* src = (float*)data;
                     int ringSize = _audioBuffer.Length;
-                    for (int i = 0; i < sampleCount; i++)
+                    int offset = (int)(_writePos % ringSize);
+                    if (silent)
                     {
-                        _audioBuffer[(int)(_writePos % ringSize)] = silent ? 0f : src[i];
-                        _writePos++;
+                        int first = Math.Min(sampleCount, ringSize - offset);
+                        Array.Clear(_audioBuffer, offset, first);
+                        if (first < sampleCount)
+                            Array.Clear(_audioBuffer, 0, sampleCount - first);
                     }
+                    else
+                    {
+                        float* src = (float*)data;
+                        int first = Math.Min(sampleCount, ringSize - offset);
+                        fixed (float* dst = &_audioBuffer[offset])
+                            Buffer.MemoryCopy(src, dst, first * sizeof(float), first * sizeof(float));
+                        if (first < sampleCount)
+                        {
+                            fixed (float* dst = &_audioBuffer[0])
+                                Buffer.MemoryCopy(src + first, dst, (sampleCount - first) * sizeof(float), (sampleCount - first) * sizeof(float));
+                        }
+                    }
+                    _writePos += sampleCount;
                 }
             }
 
@@ -283,10 +298,11 @@ public sealed class AudioCapture : IDisposable
 
             int toRead = (int)Math.Min(available, maxSamples);
             int ringSize = _audioBuffer.Length;
-            for (int i = 0; i < toRead; i++)
-            {
-                output[i] = _audioBuffer[(int)((readPos + i) % ringSize)];
-            }
+            int offset = (int)(readPos % ringSize);
+            int first = Math.Min(toRead, ringSize - offset);
+            Array.Copy(_audioBuffer, offset, output, 0, first);
+            if (first < toRead)
+                Array.Copy(_audioBuffer, 0, output, first, toRead - first);
             readPos += toRead;
             return toRead;
         }

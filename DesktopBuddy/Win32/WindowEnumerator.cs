@@ -54,6 +54,7 @@ public static class WindowEnumerator
     {
         var windows = new List<WindowInfo>();
         var shellWindow = GetShellWindow();
+        _titleBuf ??= new StringBuilder(256);
 
         EnumWindows((hWnd, _) =>
         {
@@ -66,9 +67,9 @@ public static class WindowEnumerator
             int length = GetWindowTextLength(hWnd);
             if (length == 0) return true;
 
-            var sb = new StringBuilder(length + 1);
-            GetWindowTextW(hWnd, sb, sb.Capacity);
-            string title = sb.ToString();
+            _titleBuf.Clear().EnsureCapacity(length + 1);
+            GetWindowTextW(hWnd, _titleBuf, _titleBuf.Capacity);
+            string title = _titleBuf.ToString();
 
             if (string.IsNullOrWhiteSpace(title)) return true;
 
@@ -80,10 +81,15 @@ public static class WindowEnumerator
         return windows;
     }
 
+    [ThreadStatic] private static StringBuilder _classBuf;
+    [ThreadStatic] private static StringBuilder _titleBuf;
+
     public static List<WindowInfo> GetProcessWindows(uint processId)
     {
         var windows = new List<WindowInfo>();
         var shellWindow = GetShellWindow();
+        _classBuf ??= new StringBuilder(64);
+        _titleBuf ??= new StringBuilder(256);
 
         EnumWindows((hWnd, _) =>
         {
@@ -96,17 +102,17 @@ public static class WindowEnumerator
             DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, out bool cloaked, Marshal.SizeOf<bool>());
             if (cloaked) return true;
 
-            var classBuf = new StringBuilder(64);
-            GetClassNameW(hWnd, classBuf, classBuf.Capacity);
-            if (_ignoredClasses.Contains(classBuf.ToString())) return true;
+            _classBuf.Clear();
+            GetClassNameW(hWnd, _classBuf, _classBuf.Capacity);
+            if (_ignoredClasses.Contains(_classBuf.ToString())) return true;
 
             int length = GetWindowTextLength(hWnd);
             string title = "";
             if (length > 0)
             {
-                var sb = new StringBuilder(length + 1);
-                GetWindowTextW(hWnd, sb, sb.Capacity);
-                title = sb.ToString();
+                _titleBuf.Clear().EnsureCapacity(length + 1);
+                GetWindowTextW(hWnd, _titleBuf, _titleBuf.Capacity);
+                title = _titleBuf.ToString();
             }
 
             windows.Add(new WindowInfo(hWnd, title, pid));

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using HarmonyLib;
@@ -28,6 +27,10 @@ public class DesktopBuddyMod : ResoniteMod
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> FrameRate =
         new("frameRate", "Target capture frame rate", () => 30);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> ImmediateGC =
+        new("immediate_gc", "Force garbage collection on dispose", () => false);
 
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
@@ -330,7 +333,7 @@ public class DesktopBuddyMod : ResoniteMod
             return source == session.LastActiveSource;
         }
 
-        void ClaimSource(Component source, string reason)
+        void ClaimSource(Component source)
         {
             if (source != session.LastActiveSource)
             {
@@ -364,7 +367,7 @@ public class DesktopBuddyMod : ResoniteMod
         btn.LocalPressed += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
-            ClaimSource(data.source, "touch");
+            ClaimSource(data.source);
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.FocusWindow(hwnd);
@@ -404,7 +407,7 @@ public class DesktopBuddyMod : ResoniteMod
                 float scrollY = mouse.ScrollWheelDelta.Value.y;
                 if (scrollY != 0)
                 {
-                    ClaimSource(data.source, "mouse-scroll");
+                    ClaimSource(data.source);
                     WindowInput.FocusWindow(hwnd);
                     int wheelDelta = scrollY > 0 ? 120 : -120;
                     WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
@@ -428,7 +431,7 @@ public class DesktopBuddyMod : ResoniteMod
                         {
                             session.LastScrollTick = tick;
                             session.LastScrollSign = Math.Sign(axisY);
-                            ClaimSource(data.source, $"joystick-scroll-{handler.Side.Value}");
+                            ClaimSource(data.source);
                             WindowInput.FocusWindow(hwnd);
                             int wheelDelta = (int)(axisY * 120f);
                             WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
@@ -567,6 +570,17 @@ public class DesktopBuddyMod : ResoniteMod
         barUi.Style.FlexibleHeight = -1f;
         var toggleBtn = barUi.Button("≡");
         StyleButton(toggleBtn);
+        if (toggleBtn.ColorDrivers.Count > 0)
+        {
+            var cd = toggleBtn.ColorDrivers[0];
+            cd.PressColor.Value = new colorX(0.15f, 0.15f, 0.18f, 1f);
+        }
+        var toggleImg = toggleBtn.Slot.GetComponent<Image>();
+        if (toggleImg != null && roundedSprite != null)
+        {
+            toggleImg.Sprite.Target = roundedSprite;
+            toggleImg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
+        }
         var toggleText = toggleBtn.Slot.GetComponentInChildren<TextRenderer>();
         if (toggleText != null) toggleText.Size.Value = 42f;
 
@@ -657,22 +671,29 @@ public class DesktopBuddyMod : ResoniteMod
         widthSmooth.Value.Target = widthField.Value;
         widthSmooth.WriteBack.Value = false;
 
-        bool barExpanded = false;
+        bool barExpanded = true;
         float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
 
+        float _lastBarW = barExpandedW;
+        widthField.Value.Value = barExpandedW;
+        widthSmooth.TargetValue.Value = barExpandedW;
         void BarUpdateLoop()
         {
             if (root.IsDestroyed || barSlot.IsDestroyed) return;
             float cw = widthField.Value.Value;
-            barCanvas.Size.Value = new float2(cw, barH);
-            barSlot.LocalPosition = new float3(
-                -worldHalfW + cw / 2f * canvasScale,
-                barYPos, 0f);
+            if (cw != _lastBarW)
+            {
+                _lastBarW = cw;
+                barCanvas.Size.Value = new float2(cw, barH);
+                barSlot.LocalPosition = new float3(
+                    -worldHalfW + cw / 2f * canvasScale,
+                    barYPos, 0f);
+            }
             root.World.RunInUpdates(1, BarUpdateLoop);
         }
-        barCanvas.Size.Value = new float2(barCollapsedW, barH);
+        barCanvas.Size.Value = new float2(barExpandedW, barH);
         barSlot.LocalPosition = new float3(
-            -worldHalfW + barCollapsedW / 2f * canvasScale,
+            -worldHalfW + barExpandedW / 2f * canvasScale,
             barYPos, 0f);
         root.World.RunInUpdates(1, BarUpdateLoop);
 
@@ -680,8 +701,6 @@ public class DesktopBuddyMod : ResoniteMod
         {
             barExpanded = !barExpanded;
             widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
-            if (toggleText != null)
-                toggleText.Text.Value = barExpanded ? "✕" : "≡";
         };
 
         if (isChild)
@@ -863,6 +882,10 @@ public class DesktopBuddyMod : ResoniteMod
             }
         };
 
+        Canvas backCanvasRef = null;
+        Canvas streamCanvasRef = null;
+        TextRenderer titleTextRef = null;
+
         {
             var backSlot = root.AddSlot("BackPanel");
             backSlot.LocalPosition = new float3(0f, 0f, 0.001f);
@@ -870,6 +893,7 @@ public class DesktopBuddyMod : ResoniteMod
             backSlot.LocalScale = float3.One * canvasScale;
 
             var backCanvas = backSlot.AttachComponent<Canvas>();
+            backCanvasRef = backCanvas;
             backCanvas.Size.Value = new float2(w, h);
             var backUi = new UIBuilder(backCanvas);
 
@@ -942,6 +966,7 @@ public class DesktopBuddyMod : ResoniteMod
             backUi.Style.PreferredHeight = 64f;
             backUi.Style.FlexibleHeight = -1f;
             var text = backUi.Text(title, bestFit: true, alignment: Alignment.MiddleCenter);
+            titleTextRef = text.Slot.GetComponent<TextRenderer>();
             text.Size.Value = 48f;
             text.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
 
@@ -1070,6 +1095,7 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
+                streamCanvasRef = streamCanvas;
                 streamCanvas.Size.Value = new float2(w, h);
                 var streamUi = new UIBuilder(streamCanvas);
 
@@ -1224,7 +1250,7 @@ public class DesktopBuddyMod : ResoniteMod
                     histIdx = 0;
                 }
                 wasGrabbed = isGrabbed;
-                root.World.RunInUpdates(1, ThrowTrackLoop);
+                root.World.RunInUpdates(isGrabbed ? 1 : 10, ThrowTrackLoop);
             }
             root.World.RunInUpdates(1, ThrowTrackLoop);
         }
@@ -1243,25 +1269,19 @@ public class DesktopBuddyMod : ResoniteMod
             worldHalfW = newHalfW;
             worldHalfH = newHalfH;
 
-            var backSlot = root.FindChild("BackPanel");
-            if (backSlot != null)
-            {
-                var backCanvas = backSlot.GetComponent<Canvas>();
-                if (backCanvas != null) backCanvas.Size.Value = new float2(newW, newH);
-            }
+            if (backCanvasRef != null && !backCanvasRef.IsDestroyed)
+                backCanvasRef.Size.Value = new float2(newW, newH);
 
-            var streamSlot = root.FindChild("RemoteStreamVisual");
-            if (streamSlot != null)
-            {
-                var streamCanvas = streamSlot.GetComponent<Canvas>();
-                if (streamCanvas != null) streamCanvas.Size.Value = new float2(newW, newH);
-            }
+            if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
+                streamCanvasRef.Size.Value = new float2(newW, newH);
 
             Msg($"[Resize] UI updated to {newW}x{newH}");
         };
 
         root.PersistentSelf = false;
         root.Name = $"Desktop: {title}";
+        session.TitleText = titleTextRef;
+        session.LastTitle = title;
 
         ScheduleUpdate(root.World);
 
@@ -1270,7 +1290,7 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[StartStreaming] Window focused, streaming started for: {title}");
     }
 
-    private static void SpawnChildWindow(DesktopSession parentSession, IntPtr childHwnd)
+    private static void SpawnChildWindow(DesktopSession parentSession, IntPtr childHwnd, string childTitle = null)
     {
         if (!WindowEnumerator.TryGetWindowRect(parentSession.Hwnd, out int px, out int py, out int pw, out int ph))
         {
@@ -1284,9 +1304,7 @@ public class DesktopBuddyMod : ResoniteMod
         }
         if (cw <= 0 || ch <= 0) return;
 
-        var sb = new System.Text.StringBuilder(256);
-        GetWindowText(childHwnd, sb, sb.Capacity);
-        string title = sb.ToString();
+        string title = childTitle;
         if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
 
         float canvasScale = 0.0005f;
@@ -1567,11 +1585,17 @@ public class DesktopBuddyMod : ResoniteMod
                 if (session.Root.World != world) continue;
                 if (session.UpdateInProgress) continue;
 
-                if (session.Streamer != null && !session.Streamer.IsValid)
+                session.TimeSinceValidCheck += dt;
+                if (session.TimeSinceValidCheck >= 0.5)
+                {
+                    session.TimeSinceValidCheck = 0;
+                    session.LastValidState = session.Streamer == null || session.Streamer.IsValid;
+                }
+                if (session.Streamer != null && !session.LastValidState)
                 {
                     Msg($"[UpdateLoop] Window closed (IsValid=false), destroying viewer");
                     // Stop VLC BEFORE cleanup so the encoder isn't killed while VLC is still reading
-                    var vtp = session.Root?.GetComponentInChildren<VideoTextureProvider>();
+                    var vtp = session.VideoTexture;
                     if (vtp != null && !vtp.IsDestroyed)
                     {
                         Msg("[UpdateLoop] Disconnecting VideoTextureProvider before cleanup");
@@ -1603,6 +1627,24 @@ public class DesktopBuddyMod : ResoniteMod
                         try
                         {
                             var procWindows = WindowEnumerator.GetProcessWindows(session.ProcessId);
+
+                            // Update window title if changed
+                            for (int pw = 0; pw < procWindows.Count; pw++)
+                            {
+                                if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
+                                {
+                                    if (procWindows[pw].Title != session.LastTitle)
+                                    {
+                                        session.LastTitle = procWindows[pw].Title;
+                                        if (session.TitleText != null && !session.TitleText.IsDestroyed)
+                                            session.TitleText.Text.Value = session.LastTitle;
+                                        if (session.Root != null && !session.Root.IsDestroyed)
+                                            session.Root.Name = $"Desktop: {session.LastTitle}";
+                                    }
+                                    break;
+                                }
+                            }
+
                             foreach (var win in procWindows)
                             {
                                 if (win.Handle == session.Hwnd) continue;
@@ -1610,15 +1652,22 @@ public class DesktopBuddyMod : ResoniteMod
                                 if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
                                 {
                                     Msg($"[ChildWindow] Detected new popup: hwnd={win.Handle} title='{win.Title}' size={cw2}x{ch2}");
-                                    SpawnChildWindow(session, win.Handle);
+                                    SpawnChildWindow(session, win.Handle, win.Title);
                                 }
                             }
 
-                            var activeHwnds = new HashSet<IntPtr>(procWindows.Select(pw => pw.Handle));
                             for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
                             {
                                 var child = session.ChildSessions[c];
-                                if (child.Streamer == null || !activeHwnds.Contains(child.Hwnd))
+                                bool childStillActive = false;
+                                if (child.Streamer != null)
+                                {
+                                    for (int pw = 0; pw < procWindows.Count; pw++)
+                                    {
+                                        if (procWindows[pw].Handle == child.Hwnd) { childStillActive = true; break; }
+                                    }
+                                }
+                                if (!childStillActive)
                                 {
                                     Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
                                     session.TrackedChildHwnds.Remove(child.Hwnd);
@@ -1774,7 +1823,11 @@ public class DesktopBuddyMod : ResoniteMod
             Msg($"ERROR in UpdateLoop: {ex}");
         }
 
-        bool hasSessionsInWorld = ActiveSessions.Any(s => s.Root?.World == world);
+        bool hasSessionsInWorld = false;
+        for (int i = 0; i < ActiveSessions.Count; i++)
+        {
+            if (ActiveSessions[i].Root?.World == world) { hasSessionsInWorld = true; break; }
+        }
         if (hasSessionsInWorld)
         {
             world.RunInUpdates(1, () => UpdateLoop(world));
@@ -1946,26 +1999,19 @@ static class LocomotionSuppressionPatch
 {
     private static readonly FieldInfo _inputsField = typeof(InteractionHandler)
         .GetField("_inputs", BindingFlags.NonPublic | BindingFlags.Instance);
-    private static readonly FieldInfo _axisField = typeof(InteractionHandlerInputs)
-        .GetField("Axis");
 
     static void Postfix(InteractionHandler __instance)
     {
         try
         {
+            if (DesktopBuddyMod.DesktopCanvasIds.Count == 0) return;
             var touchable = __instance.Laser?.CurrentTouchable;
             if (touchable == null) return;
 
             if (touchable is Canvas canvas && DesktopBuddyMod.DesktopCanvasIds.Contains(canvas.ReferenceID))
             {
-                if (_inputsField != null && _axisField != null)
-                {
-                    var inputs = _inputsField.GetValue(__instance);
-                    if (inputs is InteractionHandlerInputs typedInputs)
-                    {
-                        typedInputs.Axis.RegisterBlocks = true;
-                    }
-                }
+                if (_inputsField?.GetValue(__instance) is InteractionHandlerInputs inputs)
+                    inputs.Axis.RegisterBlocks = true;
             }
         }
         catch
@@ -2004,8 +2050,12 @@ static class SimulatePressPatch
 {
     static bool Prefix(Key key, World origin)
     {
-        if (DesktopBuddyMod.ActiveSessions.Count == 0 ||
-            !DesktopBuddyMod.ActiveSessions.Any(s => s.Root?.World == origin))
+        bool hasSession = false;
+        for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
+        {
+            if (DesktopBuddyMod.ActiveSessions[i].Root?.World == origin) { hasSession = true; break; }
+        }
+        if (!hasSession)
         {
             return true;
         }
@@ -2035,8 +2085,12 @@ static class TypeAppendPatch
 {
     static bool Prefix(string typeDelta, World origin)
     {
-        if (DesktopBuddyMod.ActiveSessions.Count == 0 ||
-            !DesktopBuddyMod.ActiveSessions.Any(s => s.Root?.World == origin))
+        bool hasSession = false;
+        for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
+        {
+            if (DesktopBuddyMod.ActiveSessions[i].Root?.World == origin) { hasSession = true; break; }
+        }
+        if (!hasSession)
         {
             return true;
         }

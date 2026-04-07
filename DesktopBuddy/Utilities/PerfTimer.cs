@@ -23,6 +23,8 @@ public sealed class PerfTimer : IDisposable
         public long Count;
     }
 
+    private int _recordsSinceCheck;
+
     public void Record(string step, long elapsedTicks)
     {
         lock (_lock)
@@ -37,10 +39,14 @@ public sealed class PerfTimer : IDisposable
             stats.Count++;
         }
 
-        if (_reportSw.ElapsedMilliseconds >= REPORT_INTERVAL_MS)
+        if (++_recordsSinceCheck >= 100)
         {
-            PrintReport();
-            _reportSw.Restart();
+            _recordsSinceCheck = 0;
+            if (_reportSw.ElapsedMilliseconds >= REPORT_INTERVAL_MS)
+            {
+                PrintReport();
+                _reportSw.Restart();
+            }
         }
     }
 

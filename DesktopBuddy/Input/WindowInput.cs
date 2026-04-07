@@ -92,6 +92,7 @@ public static class WindowInput
 
     private static readonly POINT[] _lastPosition = new POINT[MAX_TOUCH_CONTACTS];
     private static readonly bool[] _moveFailLogged = new bool[MAX_TOUCH_CONTACTS];
+    private static readonly POINTER_TOUCH_INFO[] _touchArr = new POINTER_TOUCH_INFO[1];
 
     private static bool EnsureTouchInit()
     {
@@ -176,8 +177,8 @@ public static class WindowInput
         contact.rcContact.Left = pt.X - 2;
         contact.rcContact.Right = pt.X + 2;
 
-        var arr = new POINTER_TOUCH_INFO[] { contact };
-        if (!InjectTouchInput(1, arr))
+        _touchArr[0] = contact;
+        if (!InjectTouchInput(1, _touchArr))
         {
             int err = Marshal.GetLastWin32Error();
             Log.Msg($"[Touch] Down FAILED id={touchId} screen=({pt.X},{pt.Y}) err={err}");
@@ -208,8 +209,8 @@ public static class WindowInput
         contact.rcContact.Left = pt.X - 2;
         contact.rcContact.Right = pt.X + 2;
 
-        var arr = new POINTER_TOUCH_INFO[] { contact };
-        if (!InjectTouchInput(1, arr))
+        _touchArr[0] = contact;
+        if (!InjectTouchInput(1, _touchArr))
         {
             if (touchId < MAX_TOUCH_CONTACTS && !_moveFailLogged[touchId])
             {
@@ -231,8 +232,8 @@ public static class WindowInput
         contact.pointerInfo.ptPixelLocation = pt;
         contact.pointerInfo.pointerFlags = POINTER_FLAG_UP;
 
-        var arr = new POINTER_TOUCH_INFO[] { contact };
-        if (!InjectTouchInput(1, arr))
+        _touchArr[0] = contact;
+        if (!InjectTouchInput(1, _touchArr))
         {
             int err = Marshal.GetLastWin32Error();
             Log.Msg($"[Touch] Up FAILED id={touchId} err={err}");

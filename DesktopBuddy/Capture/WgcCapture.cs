@@ -262,6 +262,10 @@ public sealed class WgcCapture : IDisposable
     private IntPtr _constantBuffer;
     private int _gpuConvertW, _gpuConvertH;
     private bool _gpuConvertReady;
+    private int _lastConstW, _lastConstH;
+
+    private static readonly Guid DxgiAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
+    private static readonly Guid TexGuid = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
 
     public int Width { get; private set; }
     public int Height { get; private set; }
@@ -458,18 +462,17 @@ public sealed class WgcCapture : IDisposable
         frame.Dispose();
         if (surfaceAbi == IntPtr.Zero) return;
 
-        var dxgiAccessGuid = new Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
+        var dxgiAccessGuid = DxgiAccessGuid;
         int qiHr = Marshal.QueryInterface(surfaceAbi, ref dxgiAccessGuid, out IntPtr dxgiAccessPtr);
         Marshal.Release(surfaceAbi);
         if (qiHr < 0 || dxgiAccessPtr == IntPtr.Zero) return;
 
-        var texGuid = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
         IntPtr srcTexture;
         unsafe
         {
             var vtable = *(IntPtr**)dxgiAccessPtr;
             var fn = (delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, int>)vtable[3];
-            Guid localTexGuid = texGuid;
+            Guid localTexGuid = TexGuid;
             IntPtr tex;
             int getHr = fn(dxgiAccessPtr, &localTexGuid, &tex);
             srcTexture = tex;
@@ -738,14 +741,19 @@ public sealed class WgcCapture : IDisposable
         ContextCopyResource(_d3dContext, _convertedSRV, srcTexture);
         if (verbose) { CheckDevice("CopyResource->SRV"); Log.Msg("[GPU] CopyResource to SRV texture OK"); }
 
-        var mapped = new D3D11_MAPPED_SUBRESOURCE();
-        int hr = ContextMap(_d3dContext, _constantBuffer, 0, 4, 0, ref mapped);
-        if (hr < 0) { Log.Msg($"[GPU] ConstantBuffer Map failed hr=0x{hr:X8}"); return; }
-        var constants = (GpuConstants*)mapped.pData;
-        constants->Width = (uint)w;
-        constants->Height = (uint)h;
-        ContextUnmap(_d3dContext, _constantBuffer, 0);
-        if (verbose) Log.Msg("[GPU] Constants updated");
+        if (w != _lastConstW || h != _lastConstH)
+        {
+            var mapped = new D3D11_MAPPED_SUBRESOURCE();
+            int hr = ContextMap(_d3dContext, _constantBuffer, 0, 4, 0, ref mapped);
+            if (hr < 0) { Log.Msg($"[GPU] ConstantBuffer Map failed hr=0x{hr:X8}"); return; }
+            var constants = (GpuConstants*)mapped.pData;
+            constants->Width = (uint)w;
+            constants->Height = (uint)h;
+            ContextUnmap(_d3dContext, _constantBuffer, 0);
+            _lastConstW = w;
+            _lastConstH = h;
+            if (verbose) Log.Msg("[GPU] Constants updated");
+        }
 
         var vtable = *(IntPtr**)_d3dContext;
 
@@ -890,9 +898,13 @@ public sealed class WgcCapture : IDisposable
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
-        try { _session?.Dispose(); } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Session dispose error: {ex.Message}"); }
+        // Do NOT explicitly dispose _session or _framePool. CsWinRT creates internal
+        // IObjectReference wrappers during interop calls that hold AddRef'd COM pointers.
+        // Explicit Dispose releases the underlying COM ref, but orphaned IObjectReference
+        // wrappers still try to Marshal.Release the same pointer during GC finalization,
+        // causing a native double-free crash. Nulling lets the GC finalize everything
+        // together — COM ref counting works correctly when GC is the sole owner.
         _session = null;
-        try { _framePool?.Dispose(); } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] FramePool dispose error: {ex.Message}"); }
         _framePool = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
     }
@@ -914,14 +926,8 @@ public sealed class WgcCapture : IDisposable
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
-            Log.Msg($"[WgcCapture:Dispose] Disposing WGC session");
-            try { _session?.Dispose(); }
-            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Session error: {ex.Message}"); }
+            // Don't explicitly dispose — see StopCapture comment for rationale
             _session = null;
-
-            Log.Msg($"[WgcCapture:Dispose] Disposing FramePool");
-            try { _framePool?.Dispose(); }
-            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] FramePool error: {ex.Message}"); }
             _framePool = null;
         }
         _item = null;
@@ -935,16 +941,32 @@ public sealed class WgcCapture : IDisposable
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
-        // Do NOT manually dispose _winrtDevice. The WinRT projection layer creates
-        // internal IObjectReference wrappers (from FramePool, CaptureSession, frame surfaces)
-        // that hold AddRef'd COM pointers to the same underlying D3D device. If we dispose
-        // the device here, those orphaned wrappers crash with an access violation in
-        // d3d11!CDeviceChild::Release when the GC finalizer tries to release them later.
-        // Nulling the reference lets the GC finalize all wrappers together via COM ref counting.
-        Log.Msg($"[WgcCapture:Dispose] Releasing WinRT device reference (GC will finalize)");
+        // The WinRT projection (CsWinRT) creates internal IObjectReference wrappers
+        // when interacting with FramePool, CaptureSession, and frame surfaces. These
+        // wrappers hold AddRef'd COM pointers to the D3D device. After disposing session
+        // and frame pool above, orphaned wrappers may remain as GC-finalizable objects.
+        // If the GC finalizes them AFTER the D3D device is destroyed, Marshal.Release
+        // hits a dangling pointer and native-crashes the process.
+        //
+        // Fix: null the managed WinRT reference, then force an immediate GC cycle while
+        // _d3dDevice still holds a raw COM ref keeping the device alive. This lets all
+        // orphaned IObjectReference wrappers finalize safely. Then release the raw refs.
         _winrtDevice = null;
-        _d3dContext = IntPtr.Zero;
-        _d3dDevice = IntPtr.Zero;
+        bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
+        if (forceGC)
+        {
+            Log.Msg($"[WgcCapture:Dispose] Forcing GC to finalize orphaned WinRT wrappers");
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        else
+        {
+            Log.Msg($"[WgcCapture:Dispose] Immediate GC disabled, WinRT wrappers will finalize later");
+        }
+
+        if (_d3dContext != IntPtr.Zero) { Marshal.Release(_d3dContext); _d3dContext = IntPtr.Zero; }
+        if (_d3dDevice != IntPtr.Zero) { Marshal.Release(_d3dDevice); _d3dDevice = IntPtr.Zero; }
+        Log.Msg($"[WgcCapture:Dispose] D3D device released");
 
         if (_pinnedBuffer.IsAllocated) _pinnedBuffer.Free();
         _buffer = null;

@@ -27,6 +27,10 @@ public class DesktopSession
 
     public uint ProcessId;
     public double TimeSinceChildCheck;
+    public double TimeSinceValidCheck;
+    public bool LastValidState = true;
+    public TextRenderer TitleText;
+    public string LastTitle;
     public HashSet<IntPtr> TrackedChildHwnds = new();
     public List<DesktopSession> ChildSessions = new();
     public DesktopSession ParentSession;

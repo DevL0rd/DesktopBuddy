@@ -57,6 +57,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private bool _needsVideoProcessor;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
     private IntPtr _vpOutputView, _vpNv12Texture;
+    private IntPtr _vpInputView, _vpInputViewTex;
     private uint _lastWidth, _lastHeight;
     private long _startTicks;
     private long _lastVideoPts = -1;
@@ -485,11 +486,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     {
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
         long frameInterval = System.Diagnostics.Stopwatch.Frequency / _fps;
+        int frameIntervalMs = Math.Max(1, (int)(1000 / _fps));
         long lastEncodeTicks = 0;
 
         while (!_disposed)
         {
-            _frameSignal.WaitOne(5);
+            _frameSignal.WaitOne(frameIntervalMs);
             if (_disposed) break;
 
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -796,25 +798,28 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     private void VideoProcessorConvert(IntPtr bgraTexture)
     {
-        var ivDesc = new VP_INPUT_VIEW_DESC { FourCC = 0, ViewDimension = 1, MipSlice = 0, ArraySlice = 0 };
-        var vpDevVt = *(IntPtr**)_vpDevice;
-        var createIVFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, VP_INPUT_VIEW_DESC*, out IntPtr, int>)vpDevVt[8];
-        int hr = createIVFn(_vpDevice, bgraTexture, _vpEnum, &ivDesc, out IntPtr inputView);
-        if (hr < 0) { Log.Msg($"[FfmpegEnc:{_streamId}] CreateVideoProcessorInputView failed hr=0x{hr:X8}"); return; }
+        if (_vpInputView == IntPtr.Zero || _vpInputViewTex != bgraTexture)
+        {
+            if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; }
+            var ivDesc = new VP_INPUT_VIEW_DESC { FourCC = 0, ViewDimension = 1, MipSlice = 0, ArraySlice = 0 };
+            var vpDevVt = *(IntPtr**)_vpDevice;
+            var createIVFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, VP_INPUT_VIEW_DESC*, out IntPtr, int>)vpDevVt[8];
+            int hr = createIVFn(_vpDevice, bgraTexture, _vpEnum, &ivDesc, out _vpInputView);
+            if (hr < 0) { Log.Msg($"[FfmpegEnc:{_streamId}] CreateVideoProcessorInputView failed hr=0x{hr:X8}"); _vpInputView = IntPtr.Zero; return; }
+            _vpInputViewTex = bgraTexture;
+        }
 
         var stream = new VP_STREAM
         {
             Enable = 1,
             OutputIndex = 0, InputFrameOrField = 0,
             PastFrames = 0, FutureFrames = 0,
-            pInputSurface = inputView
+            pInputSurface = _vpInputView
         };
         var vpCtxVt = *(IntPtr**)_vpContext;
         var bltFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, uint, uint, VP_STREAM*, int>)vpCtxVt[53];
-        hr = bltFn(_vpContext, _vpProcessor, _vpOutputView, 0, 1, &stream);
-        if (hr < 0) Log.Msg($"[FfmpegEnc:{_streamId}] VideoProcessorBlt failed hr=0x{hr:X8}");
-
-        Marshal.Release(inputView);
+        int bltHr = bltFn(_vpContext, _vpProcessor, _vpOutputView, 0, 1, &stream);
+        if (bltHr < 0) Log.Msg($"[FfmpegEnc:{_streamId}] VideoProcessorBlt failed hr=0x{bltHr:X8}");
     }
 
     private static string FfmpegError(int error)
@@ -895,6 +900,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing VP resources");
             try
             {
+                if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; _vpInputViewTex = IntPtr.Zero; }
                 if (_vpOutputView != IntPtr.Zero) { Marshal.Release(_vpOutputView); _vpOutputView = IntPtr.Zero; }
                 if (_vpNv12Texture != IntPtr.Zero) { Marshal.Release(_vpNv12Texture); _vpNv12Texture = IntPtr.Zero; }
                 if (_vpProcessor != IntPtr.Zero) { Marshal.Release(_vpProcessor); _vpProcessor = IntPtr.Zero; }
