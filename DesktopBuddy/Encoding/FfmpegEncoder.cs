@@ -261,8 +261,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 {
                     ffmpeg.av_dict_set(&opts, "usage", "ultralowlatency", 0);
                     ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
-                    ffmpeg.av_dict_set(&opts, "rc", "cbr", 0);
-                    ffmpeg.av_dict_set(&opts, "enforce_hrd", "1", 0);
+                    ffmpeg.av_dict_set(&opts, "rc", "vbr_peak", 0);
+                    ffmpeg.av_dict_set(&opts, "header_insertion_mode", "idr", 0);
+                    ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
                 }
 
                 lock (_d3dContextLock)
@@ -828,6 +829,24 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _streamId = streamId;
     }
 
+    private const int Ctx_ClearState = 110;
+    private const int Ctx_Flush = 111;
+
+    private void FlushAndClearD3DContext()
+    {
+        if (_deviceContext == IntPtr.Zero) return;
+        try
+        {
+            var vtable = *(IntPtr**)_deviceContext;
+            var clearFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[Ctx_ClearState];
+            clearFn(_deviceContext);
+            var flushFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[Ctx_Flush];
+            flushFn(_deviceContext);
+            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: D3D11 ClearState+Flush OK");
+        }
+        catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: D3D11 flush error: {ex.Message}"); }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposeGuard, 1) != 0) return;
@@ -864,17 +883,19 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             try { if (_pkt != null) { var p = _pkt; ffmpeg.av_packet_free(&p); _pkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: pkt free error: {ex.Message}"); _pkt = null; }
             try { if (_hwFrame != null) { var f = _hwFrame; ffmpeg.av_frame_free(&f); _hwFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrame free error: {ex.Message}"); _hwFrame = null; }
             try { if (_audioFrame != null) { var f = _audioFrame; ffmpeg.av_frame_free(&f); _audioFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioFrame free error: {ex.Message}"); _audioFrame = null; }
-            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing codec contexts");
-            try { if (_audioCodecCtx != null) { var c = _audioCodecCtx; ffmpeg.avcodec_free_context(&c); _audioCodecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioCodec free error: {ex.Message}"); _audioCodecCtx = null; }
 
-            try { if (_codecCtx != null) { var c = _codecCtx; ffmpeg.avcodec_free_context(&c); _codecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: codec free error: {ex.Message}"); _codecCtx = null; }
-            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing hw contexts");
-            try { if (_hwFramesCtx != null) { var h = _hwFramesCtx; ffmpeg.av_buffer_unref(&h); _hwFramesCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrames free error: {ex.Message}"); _hwFramesCtx = null; }
-            try { if (_hwDeviceCtx != null) { var h = _hwDeviceCtx; ffmpeg.av_buffer_unref(&h); _hwDeviceCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwDevice free error: {ex.Message}"); _hwDeviceCtx = null; }
+            // Flush D3D context and clear all state BEFORE releasing any resources.
+            // AMD drivers crash (access violation in d3d11.dll) if resources are released
+            // while the context still has pending work or bound references.
+            FlushAndClearD3DContext();
+
+            // Release VP resources FIRST - they hold refs to textures that the codec/hw
+            // contexts also reference. Releasing codec first on AMD leaves dangling
+            // internal refs in the VP that trigger access violations.
+            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing VP resources");
             try
             {
                 if (_vpOutputView != IntPtr.Zero) { Marshal.Release(_vpOutputView); _vpOutputView = IntPtr.Zero; }
-
                 if (_vpNv12Texture != IntPtr.Zero) { Marshal.Release(_vpNv12Texture); _vpNv12Texture = IntPtr.Zero; }
                 if (_vpProcessor != IntPtr.Zero) { Marshal.Release(_vpProcessor); _vpProcessor = IntPtr.Zero; }
                 if (_vpEnum != IntPtr.Zero) { Marshal.Release(_vpEnum); _vpEnum = IntPtr.Zero; }
@@ -882,6 +903,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 if (_vpDevice != IntPtr.Zero) { Marshal.Release(_vpDevice); _vpDevice = IntPtr.Zero; }
             }
             catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: VP cleanup error: {ex.Message}"); }
+
+            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing codec contexts");
+            try { if (_audioCodecCtx != null) { var c = _audioCodecCtx; ffmpeg.avcodec_free_context(&c); _audioCodecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioCodec free error: {ex.Message}"); _audioCodecCtx = null; }
+            try { if (_codecCtx != null) { var c = _codecCtx; ffmpeg.avcodec_free_context(&c); _codecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: codec free error: {ex.Message}"); _codecCtx = null; }
+
+            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing hw contexts");
+            try { if (_hwFramesCtx != null) { var h = _hwFramesCtx; ffmpeg.av_buffer_unref(&h); _hwFramesCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrames free error: {ex.Message}"); _hwFramesCtx = null; }
+            try { if (_hwDeviceCtx != null) { var h = _hwDeviceCtx; ffmpeg.av_buffer_unref(&h); _hwDeviceCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwDevice free error: {ex.Message}"); _hwDeviceCtx = null; }
         }
         finally { if (gotLock) Monitor.Exit(ctxLock); }
         _audioCapture = null;

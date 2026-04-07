@@ -53,7 +53,6 @@ public class DesktopBuddyMod : ResoniteMod
     private static string _latestVersion;
     private static bool _updateShown;
 
-    private static string CrashLogPath => Log.FilePath;
 
     public override void OnEngineInit()
     {
@@ -1874,7 +1873,7 @@ public class DesktopBuddyMod : ResoniteMod
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell",
-                Arguments = "-NoProfile -Command \"Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1026; StartTime=(Get-Date).AddHours(-1)} -MaxEvents 10 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'Renderite.Host' } | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') + ' [EventID ' + $_.Id + '] ' + ($_.Message -replace '\\r?\\n', ' | ') } \"",
+                Arguments = "-NoProfile -Command \"Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2; StartTime=(Get-Date).AddHours(-2)} -MaxEvents 20 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'Resonite|Renderite|Unity|mono|CLR|\\.NET|d3d11|dxgi|nvenc|amf|Application Error|Faulting' } | ForEach-Object { $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') + ' [EventID ' + $_.Id + ' ' + $_.LevelDisplayName + '] ' + ($_.Message -replace '\\r?\\n', ' | ') } \"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -1883,22 +1882,20 @@ public class DesktopBuddyMod : ResoniteMod
             var proc = Process.Start(psi);
             if (proc == null) return;
             string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(5000);
+            proc.WaitForExit(10000);
 
             if (!string.IsNullOrWhiteSpace(output))
             {
-                var header = "=== Previous session crash info (Windows Event Viewer, last 1h) ===";
-                System.IO.File.AppendAllText(CrashLogPath, $"\n[{DateTime.Now:HH:mm:ss.fff}] {header}\n");
+                var header = "=== Previous session crash info (Windows Event Viewer, last 2h) ===";
+                Log.Msg(header);
                 foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}]   {line.Trim()}\n");
-                }
-                System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}] === End crash info ===\n\n");
+                    Log.Msg($"  {line.Trim()}");
+                Log.Msg("=== End crash info ===");
             }
         }
         catch (Exception ex)
         {
-            System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}] EventViewer check failed: {ex.Message}\n");
+            Log.Msg($"EventViewer check failed: {ex.Message}");
         }
     }
 }

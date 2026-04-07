@@ -13,19 +13,21 @@ internal static class Log
         var logsDir = Path.Combine(resoniteDir, "Logs");
         if (!Directory.Exists(logsDir))
             logsDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
-        FilePath = Path.Combine(logsDir, "DesktopBuddy.log");
+        var machineName = Environment.MachineName;
+        var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+        FilePath = Path.Combine(logsDir, $"DesktopBuddy_{machineName}_{timestamp}.log");
     }
 
     internal static void Msg(string msg)
     {
         ResoniteModLoader.ResoniteMod.Msg(msg);
-        try { File.AppendAllText(FilePath, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n"); } catch { }
+        try { File.AppendAllText(FilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {msg}\n"); } catch { }
     }
 
     internal static void Error(string msg)
     {
         ResoniteModLoader.ResoniteMod.Error(msg);
-        try { File.AppendAllText(FilePath, $"[{DateTime.Now:HH:mm:ss.fff}] ERROR: {msg}\n"); } catch { }
+        try { File.AppendAllText(FilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ERROR: {msg}\n"); } catch { }
     }
 
     internal static void StartSession()
