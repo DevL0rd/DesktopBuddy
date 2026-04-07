@@ -1478,10 +1478,6 @@ public class DesktopBuddyMod : ResoniteMod
 
                     if (shouldStopEncoder)
                     {
-                        // Give VLC in the Renderer time to stop after vtp.Stop() before killing the stream source.
-                        // Without this delay, VLC crashes in picture_CopyPixels when the HTTP stream dies mid-decode.
-                        Msg($"[Cleanup:BG] Waiting for VLC to wind down before stopping encoder {streamId}...");
-                        System.Threading.Thread.Sleep(2000);
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
                         StreamServer?.StopEncoder(streamId);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");

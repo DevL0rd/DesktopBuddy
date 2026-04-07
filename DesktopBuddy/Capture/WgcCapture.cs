@@ -304,6 +304,23 @@ public sealed class WgcCapture : IDisposable
                 out _d3dDevice, out _, out _d3dContext);
             if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
             if (hr < 0) { Log.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}"); return false; }
+
+            // Enable multithread protection so D3D11 objects can be safely released
+            // from the threadpool cleanup thread without corrupting shared GPU state.
+            var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
+            if (Marshal.QueryInterface(_d3dDevice, ref mtGuid, out IntPtr mtPtr) >= 0)
+            {
+                unsafe
+                {
+                    var vtable = *(IntPtr**)mtPtr;
+                    // ID3D11Multithread::SetMultithreadProtected is vtable slot 4
+                    var setProtFn = (delegate* unmanaged[Stdcall]<IntPtr, int, int*, int>)vtable[4];
+                    setProtFn(mtPtr, 1, null);
+                }
+                Marshal.Release(mtPtr);
+                Log.Msg("[WgcCapture] D3D11 multithread protection enabled");
+            }
+
             Log.Msg("[WgcCapture] D3D11 device created");
 
             var dxgiGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
@@ -900,6 +917,8 @@ public sealed class WgcCapture : IDisposable
         _item = null;
 
         Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
+        // Multithread protection is enabled on the device, so these releases
+        // are safe from any thread. Release child objects before the device.
         ReleaseGpuConvertResources(disposing: false);
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
         if (_encodeTexture != IntPtr.Zero) { Marshal.Release(_encodeTexture); _encodeTexture = IntPtr.Zero; }
@@ -910,9 +929,6 @@ public sealed class WgcCapture : IDisposable
         try { _winrtDevice?.Dispose(); }
         catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] WinRT device error: {ex.Message}"); }
         _winrtDevice = null;
-        // Don't Marshal.Release _d3dDevice/_d3dContext - the WinRT device wrapper
-        // owns the underlying COM object. Releasing here double-frees, causing
-        // the GC finalizer to crash in IObjectReference.Finalize -> Marshal.Release.
         _d3dContext = IntPtr.Zero;
         _d3dDevice = IntPtr.Zero;
 
