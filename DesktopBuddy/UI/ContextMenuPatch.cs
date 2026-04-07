@@ -17,16 +17,12 @@ public static class ContextMenuPatch
 {
     private const int PAGE_SIZE = 8;
 
-    // Cache: SHA256 of icon pixel data → local:// asset URI
     private static readonly ConcurrentDictionary<string, Uri> _iconCache = new();
 
-    // Cached desktop icon URI (generated once)
     private static Uri _desktopIconUri;
     private static bool _desktopIconGenerated;
 
-    // Exact titles to hide (case-insensitive exact match)
     private static readonly string[] IgnoredExactTitles = { "Resonite" };
-    // Substrings to hide (case-insensitive contains)
     private static readonly string[] IgnoredSubstrings = { "vrmonitor", "SteamVR Status", "rainmeter" };
 
     private static bool ShouldIgnore(string title)
@@ -47,7 +43,6 @@ public static class ContextMenuPatch
         itemsRoot?.Target?.DestroyChildren();
     }
 
-    // Monitor enumeration
     [DllImport("user32.dll")]
     private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
@@ -84,16 +79,12 @@ public static class ContextMenuPatch
         return monitors;
     }
 
-    /// <summary>
-    /// Generate a simple 32x32 monitor icon as RGBA bytes.
-    /// Blue screen with dark border, small stand at bottom.
-    /// </summary>
     private static byte[] GenerateDesktopIcon(int size = 32)
     {
         var pixels = new byte[size * size * 4];
-        var border = new byte[] { 40, 40, 50, 255 };     // dark gray border
-        var screen = new byte[] { 60, 140, 220, 255 };    // blue screen
-        var stand  = new byte[] { 80, 80, 90, 255 };      // stand color
+        var border = new byte[] { 40, 40, 50, 255 };
+        var screen = new byte[] { 60, 140, 220, 255 };
+        var stand  = new byte[] { 80, 80, 90, 255 };
 
         for (int y = 0; y < size; y++)
         {
@@ -102,44 +93,36 @@ public static class ContextMenuPatch
                 int idx = (y * size + x) * 4;
                 byte[] color;
 
-                // Monitor body: rows 2-22, cols 2-29
                 if (y >= 2 && y <= 22 && x >= 2 && x <= 29)
                 {
-                    // Border (outer 2px)
                     if (y <= 3 || y >= 21 || x <= 3 || x >= 28)
                         color = border;
                     else
                         color = screen;
                 }
-                // Stand neck: rows 23-25, cols 13-18
                 else if (y >= 23 && y <= 25 && x >= 13 && x <= 18)
                 {
                     color = stand;
                 }
-                // Stand base: rows 26-27, cols 10-21
                 else if (y >= 26 && y <= 27 && x >= 10 && x <= 21)
                 {
                     color = stand;
                 }
                 else
                 {
-                    // Transparent
                     pixels[idx] = 0; pixels[idx + 1] = 0; pixels[idx + 2] = 0; pixels[idx + 3] = 0;
                     continue;
                 }
 
-                pixels[idx]     = color[0]; // R
-                pixels[idx + 1] = color[1]; // G
-                pixels[idx + 2] = color[2]; // B
-                pixels[idx + 3] = color[3]; // A
+                pixels[idx]     = color[0];
+                pixels[idx + 1] = color[1];
+                pixels[idx + 2] = color[2];
+                pixels[idx + 3] = color[3];
             }
         }
         return pixels;
     }
 
-    /// <summary>
-    /// Get a StaticTexture2D with the desktop icon. Generates and caches on first call.
-    /// </summary>
     private static StaticTexture2D GetDesktopIconTexture(Engine engine, Slot slot)
     {
         try
@@ -190,9 +173,6 @@ public static class ContextMenuPatch
         }
     }
 
-    /// <summary>
-    /// Get or create icon texture for a window.
-    /// </summary>
     private static StaticTexture2D GetIconTexture(IntPtr hwnd, Engine engine, Slot slot)
     {
         try
@@ -252,7 +232,6 @@ public static class ContextMenuPatch
         LocaleString label = "Desktop";
         colorX? color = colorX.Cyan;
 
-        // Add desktop icon to the top-level menu item
         var engine = __instance.World.Engine;
         var iconTex = GetDesktopIconTexture(engine, __instance.Slot);
 
@@ -276,10 +255,8 @@ public static class ContextMenuPatch
         var world = menu.World;
         var engine = world.Engine;
 
-        // Build combined list: monitors first, then windows
         var entries = new List<(string label, colorX color, Action action, IntPtr hwnd)>();
 
-        // Monitors
         var monitors = GetMonitors();
         DesktopBuddyMod.Msg($"[ContextMenu] Found {monitors.Count} monitors");
         for (int i = 0; i < monitors.Count; i++)
@@ -292,7 +269,6 @@ public static class ContextMenuPatch
                 IntPtr.Zero));
         }
 
-        // Windows
         var allWindows = WindowEnumerator.GetOpenWindows();
         DesktopBuddyMod.Msg($"[ContextMenu] Found {allWindows.Count} windows");
         foreach (var win in allWindows)
@@ -332,7 +308,6 @@ public static class ContextMenuPatch
             mi.Button.LocalPressed += (IButton b, ButtonEventData d) => act();
         }
 
-        // Pagination controls
         if (page > 0)
         {
             LocaleString lbl = $"< Prev (Page {page}/{totalPages})";

@@ -8,13 +8,6 @@ using ResoniteModLoader;
 
 namespace DesktopBuddy;
 
-/// <summary>
-/// HTTP server serving MPEG-TS streams from NvEncHlsEncoder (NVENC GPU + FFmpeg muxing).
-/// NVENC encodes on GPU → tiny H.264 piped to FFmpeg → MPEG-TS stdout → HTTP to clients.
-/// Fully async — no thread-per-client, scales to many concurrent viewers.
-///
-/// GET /stream/{streamId} → continuous MPEG-TS stream
-/// </summary>
 public sealed class MjpegServer : IDisposable
 {
     private HttpListener _listener;
@@ -38,12 +31,11 @@ public sealed class MjpegServer : IDisposable
         {
             _listener.Prefixes.Add($"http://+:{_port}/");
             _listener.Start();
-            ResoniteMod.Msg($"[MjpegServer] Listening on http://+:{_port}/");
+            Log.Msg($"[MjpegServer] Listening on http://+:{_port}/");
         }
         catch (Exception ex)
         {
-            ResoniteMod.Msg($"[MjpegServer] http://+ failed ({ex.Message}), requesting admin urlacl...");
-            // Spawn elevated netsh to add urlacl — triggers UAC prompt
+            Log.Msg($"[MjpegServer] http://+ failed ({ex.Message}), requesting admin urlacl...");
             try
             {
                 var psi = new System.Diagnostics.ProcessStartInfo
@@ -55,21 +47,19 @@ public sealed class MjpegServer : IDisposable
                 };
                 var proc = System.Diagnostics.Process.Start(psi);
                 proc?.WaitForExit();
-                ResoniteMod.Msg($"[MjpegServer] urlacl result: {proc?.ExitCode}");
+                Log.Msg($"[MjpegServer] urlacl result: {proc?.ExitCode}");
             }
             catch (Exception urlEx)
             {
-                ResoniteMod.Msg($"[MjpegServer] urlacl failed: {urlEx.Message}");
+                Log.Msg($"[MjpegServer] urlacl failed: {urlEx.Message}");
             }
 
-            // Retry http://+
             _listener.Close();
             _listener = new HttpListener();
             _listener.Prefixes.Add($"http://+:{_port}/");
             _listener.Start();
-            ResoniteMod.Msg($"[MjpegServer] Listening on http://+:{_port}/ (after urlacl)");
+            Log.Msg($"[MjpegServer] Listening on http://+:{_port}/ (after urlacl)");
         }
-        // Fire-and-forget async listen loop (runs on thread pool)
         _ = ListenLoopAsync();
     }
 
@@ -77,7 +67,7 @@ public sealed class MjpegServer : IDisposable
     {
         var enc = new FfmpegEncoder(streamId);
         _encoders[streamId] = enc;
-        ResoniteMod.Msg($"[MjpegServer] Created encoder for stream {streamId}");
+        Log.Msg($"[MjpegServer] Created encoder for stream {streamId}");
         return enc;
     }
 
@@ -89,22 +79,22 @@ public sealed class MjpegServer : IDisposable
 
     private async Task ListenLoopAsync()
     {
-        ResoniteMod.Msg("[MjpegServer] Async listen loop started");
+        Log.Msg("[MjpegServer] Async listen loop started");
         while (_running)
         {
             try
             {
                 var ctx = await _listener.GetContextAsync().ConfigureAwait(false);
-                _ = HandleRequestAsync(ctx); // Fire-and-forget per request
+                _ = HandleRequestAsync(ctx);
             }
-            catch (HttpListenerException) { break; }
-            catch (ObjectDisposedException) { break; }
+            catch (HttpListenerException ex) { Log.Msg($"[MjpegServer] Listener stopped: {ex.Message}"); break; }
+            catch (ObjectDisposedException) { Log.Msg("[MjpegServer] Listener disposed, stopping"); break; }
             catch (Exception ex)
             {
-                ResoniteMod.Msg($"[MjpegServer] Listen error: {ex.Message}");
+                Log.Msg($"[MjpegServer] Listen error: {ex.Message}");
             }
         }
-        ResoniteMod.Msg("[MjpegServer] Async listen loop ended");
+        Log.Msg("[MjpegServer] Async listen loop ended");
     }
 
     private async Task HandleRequestAsync(HttpListenerContext ctx)
@@ -120,7 +110,7 @@ public sealed class MjpegServer : IDisposable
                 ctx.Response.Close();
             }
         }
-        catch { try { ctx.Response.Close(); } catch { } }
+        catch (Exception ex) { Log.Msg($"[MjpegServer] Request error: {ex.Message}"); try { ctx.Response.Close(); } catch (Exception closeEx) { Log.Msg($"[MjpegServer] Response close error: {closeEx.Message}"); } }
     }
 
     private async Task ServeStreamAsync(HttpListenerContext ctx, string urlPath)
@@ -130,13 +120,12 @@ public sealed class MjpegServer : IDisposable
 
         if (!int.TryParse(parts[1], out int streamId) || !_encoders.TryGetValue(streamId, out var encoder))
         {
-            ResoniteMod.Msg($"[MjpegServer] Stream {streamId} not found");
+            Log.Msg($"[MjpegServer] Stream {streamId} not found");
             ctx.Response.StatusCode = 404;
             ctx.Response.Close();
             return;
         }
 
-        // Wait for encoder to be ready (async, no thread blocked)
         int waitCount = 0;
         while (!encoder.IsRunning && waitCount < 50)
         {
@@ -145,20 +134,20 @@ public sealed class MjpegServer : IDisposable
         }
         if (!encoder.IsRunning)
         {
-            ResoniteMod.Msg($"[MjpegServer] Stream {streamId} encoder not ready after {waitCount * 100}ms");
+            Log.Msg($"[MjpegServer] Stream {streamId} encoder not ready after {waitCount * 100}ms");
             ctx.Response.StatusCode = 503;
             ctx.Response.Close();
             return;
         }
 
-        ResoniteMod.Msg($"[MjpegServer] Serving stream {streamId} to {ctx.Request.RemoteEndPoint}");
+        Log.Msg($"[MjpegServer] Serving stream {streamId} to {ctx.Request.RemoteEndPoint}");
         ctx.Response.ContentType = "video/mp2t";
         ctx.Response.SendChunked = true;
         ctx.Response.StatusCode = 200;
 
         long totalBytes = 0;
-        long readPos = 0; // Start from latest data
-        bool aligned = false; // MPEG-TS sync state — only scan once per client
+        long readPos = 0;
+        bool aligned = false;
         try
         {
             var buffer = new byte[65536];
@@ -178,12 +167,12 @@ public sealed class MjpegServer : IDisposable
         }
         catch (Exception ex)
         {
-            ResoniteMod.Msg($"[MjpegServer] Stream {streamId} error: {ex.GetType().Name}: {ex.Message}");
+            Log.Msg($"[MjpegServer] Stream {streamId} error: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
-            try { ctx.Response.Close(); } catch { }
-            ResoniteMod.Msg($"[MjpegServer] Stream {streamId} ended, sent {totalBytes} bytes");
+            try { ctx.Response.Close(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Stream {streamId} response close error: {ex.Message}"); }
+            Log.Msg($"[MjpegServer] Stream {streamId} ended, sent {totalBytes} bytes");
         }
     }
 
@@ -192,8 +181,8 @@ public sealed class MjpegServer : IDisposable
         _running = false;
         foreach (var kvp in _encoders) kvp.Value.Dispose();
         _encoders.Clear();
-        try { _listener.Stop(); } catch { }
-        try { _listener.Close(); } catch { }
+        try { _listener.Stop(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Listener stop error: {ex.Message}"); }
+        try { _listener.Close(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Listener close error: {ex.Message}"); }
     }
 
 }

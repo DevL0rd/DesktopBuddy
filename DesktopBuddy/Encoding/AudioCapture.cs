@@ -6,17 +6,10 @@ namespace DesktopBuddy;
 
 public enum AudioCaptureMode
 {
-    IncludeProcess, // Capture only this process's audio
-    ExcludeProcess  // Capture all audio EXCEPT this process
+    IncludeProcess,
+    ExcludeProcess
 }
 
-/// <summary>
-/// WASAPI process loopback audio capture.
-/// Based on Microsoft's ApplicationLoopback sample:
-/// https://github.com/microsoft/windows-classic-samples/tree/main/Samples/ApplicationLoopback
-/// Requires Windows 10 Build 20348+ / Windows 11.
-/// Requires Windows SDK 10.0.22621.0+.
-/// </summary>
 public sealed class AudioCapture : IDisposable
 {
     internal static Action<string> LogHandler = Console.WriteLine;
@@ -45,25 +38,20 @@ public sealed class AudioCapture : IDisposable
         void ActivateCompleted(IActivateAudioInterfaceAsyncOperation activateOperation);
     }
 
-    // Device path for process loopback — from audioclientactivationparams.h
     private const string VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK = @"VAD\Process_Loopback";
 
-    // IIDs
     private static readonly Guid IID_IAudioClient = new("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2");
     private static readonly Guid IID_IAudioCaptureClient = new("C8ADBD64-E71E-48a0-A4DE-185C395CD317");
 
-    // Stream flags — from the Microsoft sample, all three are needed for process loopback
     private const int AUDCLNT_SHAREMODE_SHARED = 0;
     private const int AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000;
     private const int AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
     private const int AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM = unchecked((int)0x80000000);
 
-    // Activation types
     private const int AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK = 1;
     private const int PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE = 0;
     private const int PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE = 1;
 
-    // Structures matching the Windows SDK exactly
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct WAVEFORMATEX
     {
@@ -90,7 +78,6 @@ public sealed class AudioCapture : IDisposable
         public AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS ProcessLoopbackParams;
     }
 
-    // IAudioClient vtable (IUnknown = 0,1,2)
     private const int AC_Initialize = 3;
     private const int AC_GetBufferSize = 4;
     private const int AC_Start = 10;
@@ -98,16 +85,14 @@ public sealed class AudioCapture : IDisposable
     private const int AC_SetEventHandle = 13;
     private const int AC_GetService = 14;
 
-    // IAudioCaptureClient vtable (IUnknown = 0,1,2)
     private const int ACC_GetBuffer = 3;
     private const int ACC_ReleaseBuffer = 4;
     private const int ACC_GetNextPacketSize = 5;
 
-    // Audio ring buffer — interleaved float32 stereo (optimal for AAC encoding)
     private float[] _audioBuffer;
     private long _writePos;
     private readonly object _audioLock = new();
-    private const int AUDIO_RING_SAMPLES = 48000 * 2 * 2; // 2 seconds stereo 48kHz
+    private const int AUDIO_RING_SAMPLES = 48000 * 2 * 2;
 
     private IntPtr _audioClient;
     private IntPtr _captureClient;
@@ -119,11 +104,6 @@ public sealed class AudioCapture : IDisposable
     public int BitsPerSample => 32;
     public bool IsCapturing => _audioClient != IntPtr.Zero && !_disposed;
 
-    /// <summary>
-    /// Start capturing audio.
-    /// For window capture: pass HWND, mode=IncludeProcess
-    /// For desktop capture: pass IntPtr.Zero, mode=ExcludeProcess (excludes Resonite)
-    /// </summary>
     public bool Start(IntPtr hwnd, AudioCaptureMode mode)
     {
         try
@@ -144,7 +124,6 @@ public sealed class AudioCapture : IDisposable
                 Log($"[AudioCapture] Capturing all audio except PID {targetPid} (Resonite)");
             }
 
-            // Build activation params — exactly as Microsoft sample does it
             var activationParams = new AUDIOCLIENT_ACTIVATION_PARAMS
             {
                 ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
@@ -155,18 +134,16 @@ public sealed class AudioCapture : IDisposable
                 }
             };
 
-            // PROPVARIANT with VT_BLOB pointing to activation params
             int paramsSize = Marshal.SizeOf<AUDIOCLIENT_ACTIVATION_PARAMS>();
             IntPtr paramsPtr = Marshal.AllocCoTaskMem(paramsSize);
             Marshal.StructureToPtr(activationParams, paramsPtr, false);
 
             IntPtr propVariant = Marshal.AllocCoTaskMem(24);
             for (int i = 0; i < 24; i++) Marshal.WriteByte(propVariant, i, 0);
-            Marshal.WriteInt16(propVariant, 0, 0x41); // VT_BLOB
-            Marshal.WriteInt32(propVariant, 8, paramsSize); // blob.cbSize
-            Marshal.WriteIntPtr(propVariant, 16, paramsPtr); // blob.pBlobData
+            Marshal.WriteInt16(propVariant, 0, 0x41);
+            Marshal.WriteInt32(propVariant, 8, paramsSize);
+            Marshal.WriteIntPtr(propVariant, 16, paramsPtr);
 
-            // Activate
             var completionHandler = new ActivationHandler();
             var iid = IID_IAudioClient;
             int hr = ActivateAudioInterfaceAsync(
@@ -178,14 +155,12 @@ public sealed class AudioCapture : IDisposable
 
             if (hr < 0) { Log($"[AudioCapture] ActivateAudioInterfaceAsync failed: 0x{hr:X8}"); return false; }
 
-            // Wait for async completion
             if (!completionHandler.WaitForCompletion(5000))
             {
                 Log("[AudioCapture] Activation timed out");
                 return false;
             }
 
-            // Don't free propVariant until after activation completes
             Marshal.FreeCoTaskMem(propVariant);
             Marshal.FreeCoTaskMem(paramsPtr);
 
@@ -195,19 +170,16 @@ public sealed class AudioCapture : IDisposable
                 return false;
             }
 
-            // Get IAudioClient raw COM pointer
             _audioClient = Marshal.GetIUnknownForObject(completionHandler.Result);
             Log($"[AudioCapture] IAudioClient activated: 0x{_audioClient:X}");
 
-            // 48kHz float32 stereo — optimal for AAC encoding, no resampling needed
-            // AUTOCONVERTPCM flag handles conversion from whatever the device uses
             var captureFormat = new WAVEFORMATEX
             {
-                wFormatTag = 3, // WAVE_FORMAT_IEEE_FLOAT
+                wFormatTag = 3,
                 nChannels = 2,
                 nSamplesPerSec = 48000,
                 wBitsPerSample = 32,
-                nBlockAlign = 8, // 2ch * 32bit / 8
+                nBlockAlign = 8,
                 nAvgBytesPerSec = 48000 * 8,
                 cbSize = 0
             };
@@ -215,7 +187,6 @@ public sealed class AudioCapture : IDisposable
             IntPtr formatPtr = Marshal.AllocCoTaskMem(Marshal.SizeOf<WAVEFORMATEX>());
             Marshal.StructureToPtr(captureFormat, formatPtr, false);
 
-            // Initialize — flags from Microsoft sample: LOOPBACK | EVENTCALLBACK | AUTOCONVERTPCM
             hr = AudioClientInitialize(_audioClient,
                 AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
@@ -225,20 +196,16 @@ public sealed class AudioCapture : IDisposable
             if (hr < 0) { Log($"[AudioCapture] Initialize failed: 0x{hr:X8}"); return false; }
             Log("[AudioCapture] IAudioClient initialized");
 
-            // Get IAudioCaptureClient
             hr = AudioClientGetService(_audioClient, IID_IAudioCaptureClient, out _captureClient);
             if (hr < 0) { Log($"[AudioCapture] GetService failed: 0x{hr:X8}"); return false; }
             Log($"[AudioCapture] IAudioCaptureClient: 0x{_captureClient:X}");
 
-            // Allocate ring buffer
             _audioBuffer = new float[AUDIO_RING_SAMPLES];
             _writePos = 0;
 
-            // Start capture
             hr = AudioClientStart(_audioClient);
             if (hr < 0) { Log($"[AudioCapture] Start failed: 0x{hr:X8}"); return false; }
 
-            // Start polling thread
             _captureThread = new Thread(CaptureLoop) { IsBackground = true, Name = "AudioCapture" };
             _captureThread.Start();
 
@@ -281,7 +248,7 @@ public sealed class AudioCapture : IDisposable
 
             if (numFrames > 0)
             {
-                bool silent = (flags & 0x2) != 0; // AUDCLNT_BUFFERFLAGS_SILENT
+                bool silent = (flags & 0x2) != 0;
                 int sampleCount = (int)numFrames * Channels;
 
                 lock (_audioLock)
@@ -302,10 +269,6 @@ public sealed class AudioCapture : IDisposable
         }
     }
 
-    /// <summary>
-    /// Read interleaved float32 stereo samples from ring buffer.
-    /// Returns number of samples read (L,R pairs × 2).
-    /// </summary>
     public int ReadSamples(float[] output, int maxSamples, ref long readPos)
     {
         lock (_audioLock)
@@ -334,7 +297,7 @@ public sealed class AudioCapture : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_audioClient != IntPtr.Zero) try { AudioClientStop(_audioClient); } catch { }
+        if (_audioClient != IntPtr.Zero) try { AudioClientStop(_audioClient); } catch (Exception ex) { DesktopBuddy.Log.Msg($"[AudioCapture] AudioClientStop error: {ex.Message}"); }
         _captureThread?.Join(1000);
 
         if (_captureClient != IntPtr.Zero) { Marshal.Release(_captureClient); _captureClient = IntPtr.Zero; }
@@ -342,8 +305,6 @@ public sealed class AudioCapture : IDisposable
 
         Log("[AudioCapture] Disposed");
     }
-
-    // --- Raw COM vtable calls ---
 
     private static unsafe int AudioClientInitialize(IntPtr client, int shareMode, int streamFlags, long bufferDuration, long periodicity, IntPtr pFormat, IntPtr sessionGuid)
     {
@@ -404,7 +365,6 @@ public sealed class AudioCapture : IDisposable
         return hr;
     }
 
-    /// <summary>Completion handler for ActivateAudioInterfaceAsync</summary>
     private class ActivationHandler : IActivateAudioInterfaceCompletionHandler
     {
         private readonly ManualResetEventSlim _event = new(false);

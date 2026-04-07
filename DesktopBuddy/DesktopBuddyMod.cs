@@ -31,10 +31,8 @@ public class DesktopBuddyMod : ResoniteMod
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
 
-    // Track our desktop canvases so the locomotion patch can identify them
     internal static readonly HashSet<RefID> DesktopCanvasIds = new();
 
-    // Shared stream registry: multiple panels for the same hwnd share one encoder
     private static readonly Dictionary<IntPtr, SharedStream> _sharedStreams = new();
 
     private class SharedStream
@@ -48,25 +46,38 @@ public class DesktopBuddyMod : ResoniteMod
 
     internal static MjpegServer? StreamServer;
     private const int STREAM_PORT = 48080;
-    internal static string? TunnelUrl; // Set by cloudflared if available
+    internal static string? TunnelUrl;
     private static Process _tunnelProcess;
     internal static readonly PerfTimer Perf = new();
 
-    // Update check
     private static string _latestVersion;
     private static bool _updateShown;
+
+    private static string CrashLogPath => Log.FilePath;
 
     public override void OnEngineInit()
     {
         Config = GetConfiguration();
         Config!.Save(true);
 
+        Log.StartSession();
+
+        AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+        {
+            Log.Msg($"UNHANDLED EXCEPTION (terminating={e.IsTerminating}):\n{e.ExceptionObject}");
+        };
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
+        {
+            Log.Msg($"UNOBSERVED TASK EXCEPTION:\n{e.Exception}");
+        };
+
+        CheckEventViewerForCrashes();
+
         Harmony harmony = new("com.desktopbuddy.mod");
         harmony.PatchAll();
 
         AudioCapture.LogHandler = Msg;
 
-        // Start streaming server for remote user support
         try
         {
             StreamServer = new MjpegServer(STREAM_PORT);
@@ -79,13 +90,11 @@ public class DesktopBuddyMod : ResoniteMod
             StreamServer = null;
         }
 
-        // Start cloudflared tunnel in background (if available)
         if (StreamServer != null)
         {
             System.Threading.Tasks.Task.Run(() => StartTunnel());
         }
 
-        // Kill cloudflared when the process exits
         AppDomain.CurrentDomain.ProcessExit += (s, e) =>
         {
             try { if (_tunnelProcess != null && !_tunnelProcess.HasExited) _tunnelProcess.Kill(); }
@@ -108,7 +117,7 @@ public class DesktopBuddyMod : ResoniteMod
             var match = System.Text.RegularExpressions.Regex.Match(json, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
             if (match.Success)
             {
-                var tag = match.Groups[1].Value; // e.g. "build-aaccf2a"
+                var tag = match.Groups[1].Value;
                 var remoteSha = tag.StartsWith("build-") ? tag.Substring(6) : tag;
                 Msg($"[Update] Latest release: {tag} (sha: {remoteSha})");
                 if (buildSha != "unknown" && remoteSha != buildSha)
@@ -179,7 +188,6 @@ public class DesktopBuddyMod : ResoniteMod
             if (!updateSlot.IsDestroyed) updateSlot.Destroy();
         };
 
-        // Auto-dismiss after 15 seconds
         root.World.RunInUpdates(15 * 60, () =>
         {
             if (!updateSlot.IsDestroyed) updateSlot.Destroy();
@@ -207,7 +215,7 @@ public class DesktopBuddyMod : ResoniteMod
             var destroyer = root.AttachComponent<DestroyOnUserLeave>();
 
             destroyer.TargetUser.Target = localUser;
-            
+
             Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
 
             StartStreaming(root, hwnd, title, monitorHandle: monitorHandle);
@@ -222,7 +230,6 @@ public class DesktopBuddyMod : ResoniteMod
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd})");
 
-        // Restore if minimized before attempting capture
         WindowInput.RestoreIfMinimized(hwnd);
 
         var streamer = new DesktopStreamer(hwnd, monitorHandle);
@@ -236,11 +243,10 @@ public class DesktopBuddyMod : ResoniteMod
         int fps = Config!.GetValue(FrameRate);
         int w = streamer.Width;
         int h = streamer.Height;
-        Grabbable grabbable = null; // forward declaration — assigned after UI setup
+        Grabbable grabbable = null;
 
         Msg($"[StartStreaming] Window size: {w}x{h}, target {fps}fps");
 
-        // Add collider to root encompassing all canvases
         float canvasScale = 0.0005f;
         float worldHalfH = h / 2f * canvasScale;
         float worldHalfW = w / 2f * canvasScale;
@@ -249,19 +255,16 @@ public class DesktopBuddyMod : ResoniteMod
         collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
-        // Display slot holds the Canvas — separate from root so keyboard etc. aren't nested inside Canvas
         var displaySlot = root.AddSlot("Display");
         Msg("[StartStreaming] Display slot created");
 
-        // Per-user visibility: preview only visible to the spawner, hidden from others
         var displayVis = displaySlot.AttachComponent<ValueUserOverride<bool>>();
         displayVis.Target.Target = displaySlot.ActiveSelf_Field;
-        displayVis.Default.Value = false; // Other users: hidden
+        displayVis.Default.Value = false;
         displayVis.CreateOverrideOnWrite.Value = false;
-        displayVis.SetOverride(root.World.LocalUser, true); // Spawner: visible
+        displayVis.SetOverride(root.World.LocalUser, true);
         Msg("[StartStreaming] Per-user visibility set");
 
-        // SolidColorTexture as our procedural texture host
         var texSlot = displaySlot.AddSlot("Texture");
         var procTex = texSlot.AttachComponent<SolidColorTexture>();
         procTex.Size.Value = new int2(w, h);
@@ -270,7 +273,6 @@ public class DesktopBuddyMod : ResoniteMod
         procTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
         Msg("[StartStreaming] Texture component created");
 
-        // Canvas with RawImage pointing at the texture — on displaySlot, NOT root
         var ui = new UIBuilder(displaySlot, w, h, canvasScale);
 
         var displayBg = ui.Image(new colorX(0f, 0f, 0f, 1f));
@@ -285,32 +287,30 @@ public class DesktopBuddyMod : ResoniteMod
         mat.OffsetUnits.Value = 100f;
         rawImage.Material.Target = mat;
 
-        // Attach Button to the RawImage's slot for touch input
         var btn = rawImage.Slot.AttachComponent<Button>();
         btn.PassThroughHorizontalMovement.Value = false;
         btn.PassThroughVerticalMovement.Value = false;
         Msg("[StartStreaming] Button attached");
 
-        // Get process ID for child window tracking
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
         Msg($"[StartStreaming] Process ID: {processId}");
 
-        // Create session early so event handlers can reference it
         var session = new DesktopSession
         {
             Streamer = streamer,
             Texture = procTex,
+            TextureImage = rawImage,
             Canvas = ui.Canvas,
             Root = root,
             TargetInterval = 1.0 / fps,
             Hwnd = hwnd,
             ProcessId = processId,
+            Collider = collider,
         };
         ActiveSessions.Add(session);
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
 
-        // Snapshot existing child windows so we only track NEW popups, not pre-existing ones
         if (!isChild && processId != 0)
         {
             foreach (var existing in WindowEnumerator.GetProcessWindows(processId))
@@ -322,9 +322,7 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg($"[StartStreaming] Pre-existing child windows ignored: {session.TrackedChildHwnds.Count}");
         }
 
-        // --- Input event handlers ---
 
-        // Helper: check if this source should control the mouse hover
         bool IsActiveSource(Component source)
         {
             if (session.LastActiveSource == null || session.LastActiveSource.IsDestroyed)
@@ -336,33 +334,25 @@ public class DesktopBuddyMod : ResoniteMod
         {
             if (source != session.LastActiveSource)
             {
-                // Source claimed
                 session.LastActiveSource = source;
             }
         }
 
-        // Find the InteractionHandler from a button event source.
-        // The source is a RelayTouchSource on the "Laser" slot. InteractionLaser._handler
-        // points to InteractionHandler but is protected. Instead, get the InteractionLaser
-        // on the same slot, then read _handler via reflection.
         var _handlerField = typeof(InteractionLaser)
             .GetField("_handler", BindingFlags.NonPublic | BindingFlags.Instance);
 
         InteractionHandler FindHandler(Component source)
         {
             if (source == null) return null;
-            // The source (RelayTouchSource) is on the Laser slot alongside InteractionLaser
             var laser = source.Slot?.GetComponent<InteractionLaser>();
             if (laser != null && _handlerField != null)
             {
                 var handlerRef = _handlerField.GetValue(laser) as SyncRef<InteractionHandler>;
                 return handlerRef?.Target;
             }
-            // Fallback: walk parents (works for non-laser sources)
             return source.Slot?.GetComponentInParents<InteractionHandler>();
         }
 
-        // Get touch ID from source: left hand=0, right hand=1, fallback=0
         uint GetTouchId(Component source)
         {
             var handler = FindHandler(source);
@@ -371,59 +361,43 @@ public class DesktopBuddyMod : ResoniteMod
             return 0;
         }
 
-        // Hover enter: focus window only if this is the active source
-        btn.LocalHoverEnter += (IButton b, ButtonEventData data) =>
-        {
-            // HoverEnter
-        };
-
-        // Touch down — replaces mouse click for drag-to-scroll, hold-to-right-click, multi-touch
         btn.LocalPressed += (IButton b, ButtonEventData data) =>
         {
-            if (grabbable.IsGrabbed) return; // no input while grabbed
+            if (grabbable != null && grabbable.IsGrabbed) return;
             ClaimSource(data.source, "touch");
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            uint touchId = GetTouchId(data.source);
-            // Touch down
             WindowInput.FocusWindow(hwnd);
-            WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, touchId);
+            WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
         };
 
-        // Touch move (drag)
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
         {
-            if (grabbable.IsGrabbed) return;
+            if (grabbable != null && grabbable.IsGrabbed) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            uint touchId = GetTouchId(data.source);
-            WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, touchId);
+            WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
         };
 
-        // Touch up (release)
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
         {
-            if (grabbable.IsGrabbed) return;
+            if (grabbable != null && grabbable.IsGrabbed) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            uint touchId = GetTouchId(data.source);
-            // Touch up
-            WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, touchId);
+            WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
         };
 
-        // Hover: move cursor + handle scroll (mouse wheel + VR joystick)
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
         {
+            if (grabbable != null && grabbable.IsGrabbed) return;
             float hu = data.normalizedPressPoint.x;
             float hv = 1f - data.normalizedPressPoint.y;
 
-            // Only move mouse for the active source (prevents two VR hands fighting)
             if (IsActiveSource(data.source))
             {
                 WindowInput.SendHover(hwnd, hu, hv, streamer.Width, streamer.Height);
             }
 
-            // --- Mouse wheel scroll (desktop mode) ---
             var mouse = root.World.InputInterface.Mouse;
             if (mouse != null)
             {
@@ -437,73 +411,44 @@ public class DesktopBuddyMod : ResoniteMod
                 }
             }
 
-            // --- VR joystick scroll (all controllers) ---
             try
             {
                 var handler = FindHandler(data.source);
-                if (handler == null && !session.JoystickDiagLogged)
+                var controller = handler != null
+                    ? root.World.InputInterface.GetControllerNode(handler.Side.Value)
+                    : null;
+                if (controller != null)
                 {
-                    session.JoystickDiagLogged = true;
-                    // Scroll diag: handler null
-                }
-                if (handler != null)
-                {
-                    var side = handler.Side.Value;
-                    var controller = root.World.InputInterface.GetControllerNode(side);
-                    if (controller == null && !session.JoystickDiagLogged)
+                    float axisY = controller.Axis.Value.y;
+                    if (Math.Abs(axisY) > 0.15f)
                     {
-                        session.JoystickDiagLogged = true;
-                        // Scroll diag: controller null
+                        double tick = root.World.Time.WorldTime;
+                        bool sameDir = session.LastScrollSign == 0 || Math.Sign(axisY) == session.LastScrollSign;
+                        if (tick != session.LastScrollTick && sameDir)
+                        {
+                            session.LastScrollTick = tick;
+                            session.LastScrollSign = Math.Sign(axisY);
+                            ClaimSource(data.source, $"joystick-scroll-{handler.Side.Value}");
+                            WindowInput.FocusWindow(hwnd);
+                            int wheelDelta = (int)(axisY * 120f);
+                            WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
+                        }
                     }
-                    if (controller != null)
+                    else
                     {
-                        float axisY = controller.Axis.Value.y;
-                        if (!session.JoystickDiagLogged)
-                        {
-                            session.JoystickDiagLogged = true;
-                            // Scroll diag: first read
-                        }
-                        if (Math.Abs(axisY) > 0.15f)
-                        {
-                            double tick = root.World.Time.WorldTime;
-                            bool sameDir = session.LastScrollSign == 0 || Math.Sign(axisY) == session.LastScrollSign;
-                            // Only scroll once per engine tick + suppress jitter direction reversals
-                            if (tick != session.LastScrollTick && sameDir)
-                            {
-                                session.LastScrollTick = tick;
-                                session.LastScrollSign = Math.Sign(axisY);
-                                ClaimSource(data.source, $"joystick-scroll-{side}");
-                                WindowInput.FocusWindow(hwnd);
-                                int wheelDelta = (int)(axisY * 120f);
-                                WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
-                            }
-                        }
-                        else
-                        {
-                            session.LastScrollSign = 0;
-                        }
+                        session.LastScrollSign = 0;
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                if (!session.JoystickDiagLogged)
-                {
-                    session.JoystickDiagLogged = true;
-                    Msg($"[Scroll] Joystick EXCEPTION: {ex}");
-                }
-            }
+            catch { }
         };
 
-        // --- Unified top bar: avatar + name + toggle + collapsible tools ---
-        // Explicit sizing with SmoothValue-animated width transition.
         float barH = 64f;
         float barMarginTop = 10f * canvasScale;
         float barPad = 8f;
         float barGap = 8f;
         float avatarW = 48f;
         float toggleW = 36f;
-        // Collapsed/expanded widths computed after username is known (see below)
 
         var barSlot = root.AddSlot("TopBar");
         barSlot.LocalScale = float3.One * canvasScale;
@@ -518,7 +463,6 @@ public class DesktopBuddyMod : ResoniteMod
         var barUi = new UIBuilder(barCanvas);
         var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
         barBg.Material.Target = barMat;
-        // Rounded corners via nine-sliced disc texture
         var roundedSprite = barSlot.AttachComponent<SpriteProvider>();
         roundedSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         roundedSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
@@ -527,18 +471,16 @@ public class DesktopBuddyMod : ResoniteMod
         barBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
         barBg.Tint.Value = new colorX(0.1f, 0.1f, 0.12f, 1f);
 
-        // Mask clips children to the bar bounds — icons reveal as width animates
         var barMask = barBg.Slot.AttachComponent<Mask>();
         barMask.ShowMaskGraphic.Value = true;
         barUi.NestInto(barBg.RectTransform);
         var barLayout = barUi.HorizontalLayout(8f, padding: 8f, childAlignment: Alignment.MiddleLeft);
-        barLayout.ForceExpandWidth.Value = false; // don't stretch children to fill canvas
+        barLayout.ForceExpandWidth.Value = false;
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
 
         var localUser = root.World.LocalUser;
 
-        // --- Avatar ---
         barUi.Style.MinWidth = 48f;
         barUi.Style.PreferredWidth = 48f;
         barUi.Style.MinHeight = 48f;
@@ -549,7 +491,6 @@ public class DesktopBuddyMod : ResoniteMod
         var imageSpaceSlot = barUi.Empty("Image Space");
         var imgMask = imageSpaceSlot.AttachComponent<Mask>();
         var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
-        // Rounded square mask using nine-sliced circle (same technique as the bar bg)
         var avatarMaskSprite = imageSpaceSlot.AttachComponent<SpriteProvider>();
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         avatarMaskSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
@@ -576,9 +517,8 @@ public class DesktopBuddyMod : ResoniteMod
         if (localUser.UserID != null) imgMux.Index.ForceSet(1);
 
         barUi.Image(avatarTex);
-        barUi.NestOut(); // out of Image Space
+        barUi.NestOut();
 
-        // --- Username (fixed width based on name length) ---
         string userName = localUser?.UserName ?? "Unknown";
         float nameW = MathX.Max(60f, userName.Length * 12f);
         barUi.Style.FlexibleWidth = -1f;
@@ -590,16 +530,12 @@ public class DesktopBuddyMod : ResoniteMod
         nameText.Size.Value = 18f;
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
 
-        // Compute bar widths
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        // 7 buttons(30ea) + 6 gaps(6ea) + separator(1+6+6) + volIcon(24+6) + slider(100)
         float expandContentW = 7f * 30f + 6f * 6f + 13f + 30f + 100f;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
-        // Helper: style a toolbar icon button — light gray text, transparent bg with hover
         void StyleButton(Button btn)
         {
-            // Set text color on both Text (UIX) and TextRenderer to be safe
             var textComp = btn.Slot.GetComponentInChildren<FrooxEngine.UIX.Text>();
             if (textComp != null)
             {
@@ -611,7 +547,6 @@ public class DesktopBuddyMod : ResoniteMod
             {
                 txtRenderer.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
             }
-            // ColorDrivers[0] drives Image.Tint (button background), not text
             if (btn.ColorDrivers.Count > 0)
             {
                 var cd = btn.ColorDrivers[0];
@@ -624,7 +559,6 @@ public class DesktopBuddyMod : ResoniteMod
         var darkBtn = new colorX(0.22f, 0.22f, 0.28f, 1f);
         var accentBtn = new colorX(0.25f, 0.35f, 0.55f, 1f);
 
-        // --- Toggle button (hamburger) ---
         barUi.Style.MinWidth = 36f;
         barUi.Style.PreferredWidth = 36f;
         barUi.Style.MinHeight = 48f;
@@ -636,7 +570,6 @@ public class DesktopBuddyMod : ResoniteMod
         var toggleText = toggleBtn.Slot.GetComponentInChildren<TextRenderer>();
         if (toggleText != null) toggleText.Size.Value = 42f;
 
-        // --- Expandable panel ---
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
         barUi.Style.MinWidth = -1f;
@@ -648,7 +581,6 @@ public class DesktopBuddyMod : ResoniteMod
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
 
-        // Tool buttons (compact)
         ep.Style.MinWidth = 30f;
         ep.Style.PreferredWidth = 30f;
         ep.Style.MinHeight = 40f;
@@ -668,14 +600,12 @@ public class DesktopBuddyMod : ResoniteMod
         hyperlink.URL.Value = new Uri("https://github.com/DevL0rd/DesktopBuddy");
         hyperlink.Reason.Value = "DesktopBuddy GitHub";
 
-        // Separator
         ep.Style.MinWidth = 1f;
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
         ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
 
-        // Volume icon + slider
         ep.Style.MinWidth = 24f;
         ep.Style.PreferredWidth = 24f;
         ep.Style.MinHeight = 48f;
@@ -719,9 +649,6 @@ public class DesktopBuddyMod : ResoniteMod
         winVolVis.CreateOverrideOnWrite.Value = false;
         winVolVis.SetOverride(root.World.LocalUser, true);
 
-        // --- Animated collapse/expand ---
-        // SmoothValue<float> drives the canvas width smoothly (synced to all users).
-        // A per-frame loop reads the driven width and repositions to keep left edge pinned.
         var widthField = barSlot.AttachComponent<ValueField<float>>();
         widthField.Value.Value = barCollapsedW;
         var widthSmooth = barSlot.AttachComponent<SmoothValue<float>>();
@@ -731,10 +658,8 @@ public class DesktopBuddyMod : ResoniteMod
         widthSmooth.WriteBack.Value = false;
 
         bool barExpanded = false;
-        // Panel always active — Mask on barBg clips overflow so icons reveal with width animation
         float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
 
-        // Per-frame: apply driven width to canvas and reposition so left edge stays pinned
         void BarUpdateLoop()
         {
             if (root.IsDestroyed || barSlot.IsDestroyed) return;
@@ -745,7 +670,6 @@ public class DesktopBuddyMod : ResoniteMod
                 barYPos, 0f);
             root.World.RunInUpdates(1, BarUpdateLoop);
         }
-        // Set initial position
         barCanvas.Size.Value = new float2(barCollapsedW, barH);
         barSlot.LocalPosition = new float3(
             -worldHalfW + barCollapsedW / 2f * canvasScale,
@@ -776,7 +700,6 @@ public class DesktopBuddyMod : ResoniteMod
                 keyboardSlot.ActiveSelf = show;
                 if (show)
                 {
-                    // Reset to default position/rotation in case user dragged it
                     keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
                     keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
                     keyboardSlot.LocalScale = float3.One;
@@ -785,11 +708,8 @@ public class DesktopBuddyMod : ResoniteMod
             }
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
             keyboardSlot = root.AddSlot("Virtual Keyboard");
-            // Position just below the keyboard button, angled up toward user
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
-            // Do NOT set LocalScale — the cloud keyboard has its own natural size
-            // SpawnEntity loads the user's favorited keyboard from cloud, falls back to SimpleVirtualKeyboard
             keyboardSlot.StartTask(async () =>
             {
                 try
@@ -811,27 +731,22 @@ public class DesktopBuddyMod : ResoniteMod
             });
         };
 
-        // Test Stream button — toggles the stream overlay visibility for the local user
-        Slot streamSlotRef = null; // Will be set when stream is created below
+        Slot streamSlotRef = null;
         bool streamTestMode = false;
-        ValueUserOverride<bool> streamVisRef = null; // Set when stream is created
-        VideoTextureProvider videoTexRef = null; // Set when stream is created
-        // volOverrideRef removed — stream volume driven by ValueDriver from volSlider
-        var testActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f); // Green when active
+        ValueUserOverride<bool> streamVisRef = null;
+        VideoTextureProvider videoTexRef = null;
+        var testActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f);
         testStreamBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[TestStream] Button pressed");
             if (streamVisRef != null && !streamVisRef.IsDestroyed)
             {
                 streamTestMode = !streamTestMode;
-                // Toggle: show stream to spawner (and hide preview), or restore normal
                 streamVisRef.SetOverride(root.World.LocalUser, streamTestMode);
                 var displayVisComp = displaySlot.GetComponent<ValueUserOverride<bool>>();
                 if (displayVisComp != null)
                     displayVisComp.SetOverride(root.World.LocalUser, !streamTestMode);
-                // Mute/unmute spawner's stream audio when previewing
                 volSliderOverride.SetOverride(root.World.LocalUser, streamTestMode ? 1f : 0f);
-                // Update button color to show active state
                 var img = testStreamBtn.Slot.GetComponent<Image>();
                 if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
@@ -842,7 +757,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
         };
 
-        // Resync button — forces libVLC to fully disconnect and reconnect
         resyncBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Resync] Button pressed");
@@ -851,7 +765,6 @@ public class DesktopBuddyMod : ResoniteMod
                 var savedUrl = videoTexRef.URL.Value;
                 Msg($"[Resync] Forcing full reload: {savedUrl}");
                 videoTexRef.URL.Value = null;
-                // Wait several frames so FreeAsset fully tears down the player
                 root.World.RunInUpdates(10, () =>
                 {
                     if (videoTexRef != null && !videoTexRef.IsDestroyed)
@@ -867,9 +780,8 @@ public class DesktopBuddyMod : ResoniteMod
             }
         };
 
-        // Anchor button — parents/unparents the viewer to the local user
         bool isAnchored = false;
-        var anchorActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f); // Green when active
+        var anchorActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f);
         anchorBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Anchor] Button pressed");
@@ -877,16 +789,12 @@ public class DesktopBuddyMod : ResoniteMod
             if (localUser?.Root == null) return;
             if (!isAnchored)
             {
-                var pos = root.GlobalPosition;
-                var rot = root.GlobalRotation;
                 root.SetParent(localUser.Root.Slot, keepGlobalTransform: true);
                 Msg($"[Anchor] Anchored to user");
                 isAnchored = true;
             }
             else
             {
-                var pos = root.GlobalPosition;
-                var rot = root.GlobalRotation;
                 root.SetParent(root.World.RootSlot, keepGlobalTransform: true);
                 Msg($"[Anchor] Unanchored to world");
                 isAnchored = false;
@@ -895,19 +803,16 @@ public class DesktopBuddyMod : ResoniteMod
             if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
-        // Paste button — sends Ctrl+V to Resonite window
         pasteBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Paste] Button pressed");
             WindowInput.SendPaste();
         };
 
-        // Private mode — hides entire desktop buddy from others, stops stream
         bool isPrivate = false;
-        ValueUserOverride<bool> streamVisForPrivate = null; // set when stream is created
-        string savedStreamUrl = null; // saved URL to restore when ungoing private
+        ValueUserOverride<bool> streamVisForPrivate = null;
+        string savedStreamUrl = null;
 
-        // Per-user visibility on the root slot: others see/collide, host always sees
         var rootVis = root.AttachComponent<ValueUserOverride<bool>>();
         rootVis.Target.Target = root.ActiveSelf_Field;
         rootVis.Default.Value = true;
@@ -918,12 +823,9 @@ public class DesktopBuddyMod : ResoniteMod
             isPrivate = !isPrivate;
             Msg($"[Private] Mode: {isPrivate}");
 
-            // Hide/show entire desktop buddy for everyone except host
             rootVis.Default.Value = !isPrivate;
-            // Ensure host always sees it
             rootVis.SetOverride(root.World.LocalUser, true);
 
-            // Disconnect/reconnect the stream
             if (videoTexRef != null && !videoTexRef.IsDestroyed)
             {
                 if (isPrivate)
@@ -940,22 +842,16 @@ public class DesktopBuddyMod : ResoniteMod
                 }
             }
 
-            // Update button visual
             var img = privateBtn.Slot.GetComponent<Image>();
             if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : colorX.Clear;
         };
 
-        // Volume slider — per-user via ValueUserOverride
-        // Spawner: controls Windows system/process volume via WASAPI
-        // All users: controls their own Resonite stream playback volume
         bool isDesktopCapture = hwnd == IntPtr.Zero;
         uint capturedPid = processId;
 
-        // Store spawner identity so we can gate Windows volume to the correct user
         var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
         ownerRef.Reference.Target = root.World.LocalUser;
 
-        // Windows volume slider — only the spawner sees this, drives Windows API directly
         winVolSlider.Value.OnValueChange += (SyncField<float> field) =>
         {
             if (ownerRef.Reference.Target == root.World.LocalUser)
@@ -967,7 +863,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
         };
 
-        // --- Back panel: dark opaque background with centered icon + title ---
         {
             var backSlot = root.AddSlot("BackPanel");
             backSlot.LocalPosition = new float3(0f, 0f, 0.001f);
@@ -984,20 +879,16 @@ public class DesktopBuddyMod : ResoniteMod
             backMat.ZWrite.Value = ZWrite.On;
             backMat.OffsetUnits.Value = 100f;
 
-            // Dark background filling the whole canvas
             var bg = backUi.Image(new colorX(0.08f, 0.08f, 0.1f, 1f));
             bg.Material.Target = backMat;
 
-            // Vertical layout centered in the background
             backUi.NestInto(bg.RectTransform);
             backUi.VerticalLayout(16f);
             backUi.Style.FlexibleWidth = 1f;
             backUi.Style.FlexibleHeight = 1f;
 
-            // Spacer top
             backUi.Spacer(1f);
 
-            // Icon — fixed size square, centered, high-res from exe
             float iconSize = Math.Min(w, h) * 0.25f;
             if (hwnd != IntPtr.Zero)
             {
@@ -1006,18 +897,14 @@ public class DesktopBuddyMod : ResoniteMod
                     var iconData = WindowIconExtractor.GetLargeIconRGBA(hwnd, out int iw, out int ih, 128);
                     if (iconData != null && iw > 0 && ih > 0)
                     {
-                        // Fixed height row for the icon
                         backUi.Style.MinHeight = iconSize;
                         backUi.Style.PreferredHeight = iconSize;
                         backUi.Style.FlexibleHeight = -1f;
 
-                        // Icon as RawImage with PreserveAspect — let the layout give it full row width,
-                        // PreserveAspect will letterbox it within the fixed-height row
                         var iconTex = backSlot.AttachComponent<StaticTexture2D>();
                         var iconMat = backSlot.AttachComponent<UI_UnlitMaterial>();
                         iconMat.Texture.Target = iconTex;
                         iconMat.OffsetFactor.Value = -1f;
-                        // Set texture on BOTH RawImage (for PreserveAspect) and material (for rendering)
                         var iconImg = backUi.RawImage(iconTex);
                         iconImg.PreserveAspect.Value = true;
                         iconImg.Material.Target = iconMat;
@@ -1051,7 +938,6 @@ public class DesktopBuddyMod : ResoniteMod
                 catch (Exception ex) { Msg($"[BackPanel] Icon error: {ex.Message}"); }
             }
 
-            // Title text
             backUi.Style.MinHeight = 64f;
             backUi.Style.PreferredHeight = 64f;
             backUi.Style.FlexibleHeight = -1f;
@@ -1059,7 +945,6 @@ public class DesktopBuddyMod : ResoniteMod
             text.Size.Value = 48f;
             text.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
 
-            // Fix text z-fighting: find the Canvas's auto-created text material and set OffsetFactor
             root.World.RunInUpdates(2, () =>
             {
                 try
@@ -1078,14 +963,12 @@ public class DesktopBuddyMod : ResoniteMod
                 catch (Exception ex) { Msg($"[BackPanel] Text material fix error: {ex.Message}"); }
             });
 
-            // Spacer bottom
             backUi.Style.FlexibleHeight = 1f;
             backUi.Spacer(1f);
 
             Msg($"[BackPanel] Created with title '{title}'");
         }
 
-        // --- Update check (once per session, non-child panels only, async) ---
         if (!_updateShown && !isChild)
         {
             _updateShown = true;
@@ -1105,14 +988,10 @@ public class DesktopBuddyMod : ResoniteMod
             });
         }
 
-        // --- Remote stream: WGC frames → FFmpeg → MPEG-TS → CloudFlare tunnel → VideoTextureProvider ---
-        // Multiple panels for the same hwnd share one encoder (saves GPU/CPU).
         if (StreamServer != null && TunnelUrl != null)
         {
             try
             {
-                // Look up or create shared stream for this hwnd
-                // Monitors have hwnd=0 — never share those, each is a different capture
                 SharedStream shared;
                 lock (_sharedStreams)
                 {
@@ -1121,7 +1000,6 @@ public class DesktopBuddyMod : ResoniteMod
                         int streamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
                         var encoder = StreamServer.CreateEncoder(streamId);
 
-                        // Start audio capture — per-window or desktop-minus-Resonite
                         var audio = new AudioCapture();
                         if (hwnd != IntPtr.Zero)
                             audio.Start(hwnd, AudioCaptureMode.IncludeProcess);
@@ -1143,9 +1021,6 @@ public class DesktopBuddyMod : ResoniteMod
                 session.StreamId = shared.StreamId;
                 var nvEncoder = shared.Encoder;
 
-                // Hook NVENC directly into WGC — encodes on GPU, tiny bitstream piped to FFmpeg for HLS muxing
-                // Only the first panel's WGC drives the encoder; additional panels skip encoding
-                // (all WGC captures for the same hwnd produce identical frames)
                 bool isFirstForHwnd = shared.RefCount == 1;
                 if (isFirstForHwnd)
                 {
@@ -1164,41 +1039,32 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[RemoteStream] This panel shares encoder from stream {shared.StreamId}, no encoding hook");
                 }
 
-                // VideoTextureProvider on its own always-active slot (must stay active to load the stream)
                 var videoSlot = root.AddSlot("StreamProvider");
                 var videoTex = videoSlot.AttachComponent<VideoTextureProvider>();
                 videoTex.URL.Value = shared.StreamUrl;
                 videoTex.Stream.Value = true;
-                videoTex.Volume.Value = 0f; // Start muted — test stream button enables audio
+                videoTex.Volume.Value = 0f;
                 videoTexRef = videoTex;
+                session.VideoTexture = videoTex;
 
-                // AudioOutput required for VideoTextureProvider to actually play audio
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
 
-                // Drive audio volume from the per-user slider value.
-                // The slider has ValueUserOverride so each user has their own position.
-                // ValueDriver propagates the per-user value → each user controls their own volume.
                 var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
                 volDriver.DriveTarget.Target = audioOutput.Volume;
                 volDriver.ValueSource.Target = volSlider.Value;
-                // Spawner starts muted (they hear from Windows, not the stream).
-                // The slider's ValueUserOverride default is 1.0 for others.
                 volSliderOverride.SetOverride(root.World.LocalUser, 0f);
-                // Volume driven by ValueDriver from volSlider — no separate override needed
 
-                // Visual display on a separate slot with per-user visibility
                 var streamSlot = root.AddSlot("RemoteStreamVisual");
                 streamSlot.LocalScale = float3.One * canvasScale;
                 streamSlotRef = streamSlot;
 
-                // Per-user visibility on the VISUAL only — VideoTextureProvider stays active
                 var streamVis = streamSlot.AttachComponent<ValueUserOverride<bool>>();
                 streamVis.Target.Target = streamSlot.ActiveSelf_Field;
-                streamVis.Default.Value = true; // Other users: visible
+                streamVis.Default.Value = true;
                 streamVis.CreateOverrideOnWrite.Value = false;
-                streamVis.SetOverride(root.World.LocalUser, false); // Spawner: hidden
+                streamVis.SetOverride(root.World.LocalUser, false);
                 streamVisRef = streamVis;
                 streamVisForPrivate = streamVis;
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
@@ -1219,7 +1085,6 @@ public class DesktopBuddyMod : ResoniteMod
 
                 Msg($"[RemoteStream] Created, URL={shared.StreamUrl}, streamId={shared.StreamId}, refs={shared.RefCount}");
 
-                // Monitor state
                 int checkCount = 0;
                 root.World.RunInUpdates(30, () => CheckVideoState());
                 void CheckVideoState()
@@ -1232,7 +1097,6 @@ public class DesktopBuddyMod : ResoniteMod
                     float clockErr = videoTex.CurrentClockError?.Value ?? -1f;
                     Msg($"[RemoteStream] Check #{checkCount}: avail={assetAvail} engine={playbackEngine} playing={isPlaying} clockErr={clockErr:F2}");
 
-                    // Start playback once asset is available — required for audio to work
                     if (assetAvail && !isPlaying)
                     {
                         videoTex.Play();
@@ -1255,16 +1119,13 @@ public class DesktopBuddyMod : ResoniteMod
             Msg($"[RemoteStream] Skipped: StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
-        // (User profile is integrated into the unified top bar above)
 
-        // Grabbable — scaling enabled, restricted to spawner only
         grabbable = root.AttachComponent<Grabbable>();
         grabbable.Scalable.Value = true;
         grabbable.OnlyUsers.Add().Target = localUser;
         grabbable.AllowSteal.Value = false;
         Msg("[StartStreaming] Grabbable attached (spawner-only)");
 
-        // --- Throwable: track velocity during grab, apply physics on release ---
         {
             const int HISTORY_SIZE = 5;
             float3[] posHistory = new float3[HISTORY_SIZE];
@@ -1281,7 +1142,6 @@ public class DesktopBuddyMod : ResoniteMod
 
                 if (isGrabbed)
                 {
-                    // Record position + rotation history for velocity calculation
                     int idx = histIdx % HISTORY_SIZE;
                     posHistory[idx] = root.GlobalPosition;
                     rotHistory[idx] = root.GlobalRotation;
@@ -1290,7 +1150,6 @@ public class DesktopBuddyMod : ResoniteMod
                 }
                 else if (wasGrabbed && histIdx >= 2)
                 {
-                    // Just released — compute throw velocity from position history
                     int newest = (histIdx - 1) % HISTORY_SIZE;
                     int oldest = (histIdx >= HISTORY_SIZE) ? (histIdx % HISTORY_SIZE) : 0;
                     double dt = timeHistory[newest] - timeHistory[oldest];
@@ -1300,78 +1159,69 @@ public class DesktopBuddyMod : ResoniteMod
                         float speed = velocity.Magnitude;
                         Msg($"[Throw] Release velocity: {speed:F2} m/s");
 
-                        if (speed > 3f) // threshold: 3 m/s minimum throw speed
+                        if (speed > 3f)
                         {
                             thrown = true;
                             Msg($"[Throw] Thrown! velocity={speed:F2} m/s");
 
-                            // CharacterController for engine-side physics (syncs to all users)
                             var cc = root.AttachComponent<CharacterController>();
                             cc.SimulatingUser.Target = localUser;
                             cc.Gravity.Value = new float3(0f, -9.81f, 0f);
                             cc.LinearDamping.Value = 0.3f;
                             cc.LinearVelocity = velocity;
 
-                            // Compute per-frame rotation delta from grab history
-                            // Use the last two frames for responsive rotation
                             int prev = (histIdx - 2 + HISTORY_SIZE) % HISTORY_SIZE;
                             double frameDt = timeHistory[newest] - timeHistory[prev];
                             floatQ perFrameRot = floatQ.Identity;
                             if (frameDt > 0.001)
                             {
                                 floatQ rotDelta = rotHistory[newest] * rotHistory[prev].Conjugated;
-                                // Scale to per-update rotation (assume ~60fps)
                                 float dtRatio = (1f / 60f) / (float)frameDt;
                                 var identity = floatQ.Identity;
                                 perFrameRot = MathX.Slerp(in identity, rotDelta, dtRatio);
                             }
 
-                            // Fade out over 3 seconds then destroy
-                            float fadeSeconds = 3f;
-                            int fadeFrames = (int)(fadeSeconds * 60f);
-                            int frame = 0;
+                            float fadeSeconds = 1f;
+                            double startTime = root.World.Time.WorldTime;
                             float3 lastPos = root.GlobalPosition;
+                            int frameCount = 0;
 
                             void FadeAndCollisionLoop()
                             {
                                 if (root.IsDestroyed) return;
-                                frame++;
-                                float t = (float)frame / fadeFrames;
+                                frameCount++;
+                                double elapsed = root.World.Time.WorldTime - startTime;
+                                float t = MathX.Clamp01((float)(elapsed / fadeSeconds));
 
-                                // Fade: scale down smoothly
-                                float scale = MathX.Lerp(1f, 0f, t * t); // ease-in
+                                float scale = MathX.Lerp(1f, 0f, t * t);
                                 root.LocalScale = float3.One * MathX.Max(0.01f, scale);
 
-                                // Apply rotation (full quaternion delta from grab)
                                 root.LocalRotation = root.LocalRotation * perFrameRot;
 
-                                // Collision check: if position barely changed, we hit something
                                 float3 curPos = root.GlobalPosition;
-                                if (frame > 5) // skip first few frames
+                                if (frameCount > 5)
                                 {
                                     float delta = (curPos - lastPos).Magnitude;
                                     if (delta < 0.001f)
                                     {
-                                        Msg("[Throw] Collision detected, destroying");
                                         root.Destroy();
                                         return;
                                     }
                                 }
                                 lastPos = curPos;
 
-                                if (frame >= fadeFrames)
+                                if (t >= 1f)
                                 {
-                                    Msg("[Throw] Fade complete, destroying");
                                     root.Destroy();
                                     return;
                                 }
                                 root.World.RunInUpdates(1, FadeAndCollisionLoop);
                             }
                             root.World.RunInUpdates(1, FadeAndCollisionLoop);
-                            return; // stop tracking
+                            return;
                         }
                     }
-                    histIdx = 0; // reset if below threshold
+                    histIdx = 0;
                 }
                 wasGrabbed = isGrabbed;
                 root.World.RunInUpdates(1, ThrowTrackLoop);
@@ -1379,21 +1229,47 @@ public class DesktopBuddyMod : ResoniteMod
             root.World.RunInUpdates(1, ThrowTrackLoop);
         }
 
+        session.OnResize = (int newW, int newH) =>
+        {
+            float newHalfW = newW / 2f * canvasScale;
+            float newHalfH = newH / 2f * canvasScale;
+
+            barYPos = newHalfH + barH / 2f * canvasScale + barMarginTop;
+
+
+            if (session.Collider != null && !session.Collider.IsDestroyed)
+                session.Collider.Size.Value = new float3(newW * canvasScale, newH * canvasScale, 0.001f);
+
+            worldHalfW = newHalfW;
+            worldHalfH = newHalfH;
+
+            var backSlot = root.FindChild("BackPanel");
+            if (backSlot != null)
+            {
+                var backCanvas = backSlot.GetComponent<Canvas>();
+                if (backCanvas != null) backCanvas.Size.Value = new float2(newW, newH);
+            }
+
+            var streamSlot = root.FindChild("RemoteStreamVisual");
+            if (streamSlot != null)
+            {
+                var streamCanvas = streamSlot.GetComponent<Canvas>();
+                if (streamCanvas != null) streamCanvas.Size.Value = new float2(newW, newH);
+            }
+
+            Msg($"[Resize] UI updated to {newW}x{newH}");
+        };
+
         root.PersistentSelf = false;
         root.Name = $"Desktop: {title}";
 
-        // Start update loop in this world
         ScheduleUpdate(root.World);
 
-        // Focus the window in Windows — but only for user-initiated panels, not child popups
         if (!isChild)
             WindowInput.FocusWindow(hwnd);
         Msg($"[StartStreaming] Window focused, streaming started for: {title}");
     }
 
-    /// <summary>
-    /// Spawn a full DesktopBuddy for a child/popup window, positioned relative to the parent.
-    /// </summary>
     private static void SpawnChildWindow(DesktopSession parentSession, IntPtr childHwnd)
     {
         if (!WindowEnumerator.TryGetWindowRect(parentSession.Hwnd, out int px, out int py, out int pw, out int ph))
@@ -1408,26 +1284,22 @@ public class DesktopBuddyMod : ResoniteMod
         }
         if (cw <= 0 || ch <= 0) return;
 
-        // Get window title
         var sb = new System.Text.StringBuilder(256);
         GetWindowText(childHwnd, sb, sb.Capacity);
         string title = sb.ToString();
         if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
 
-        // Position relative to parent: map screen pixel offset to world space
         float canvasScale = 0.0005f;
         float offsetX, offsetY;
-        float offsetZ = -0.01f; // 1cm in front of parent
+        float offsetZ = -0.01f;
 
-        // Explorer children (file dialogs, properties, etc.) go to center of parent
-        // because explorer's child windows have unpredictable screen positions
         bool isExplorer = false;
         try
         {
             var proc = System.Diagnostics.Process.GetProcessById((int)parentSession.ProcessId);
             isExplorer = proc.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase);
         }
-        catch { }
+        catch (Exception ex) { Msg($"[ChildWindow] Process check error: {ex.Message}"); }
 
         if (isExplorer)
         {
@@ -1445,14 +1317,12 @@ public class DesktopBuddyMod : ResoniteMod
         root.LocalPosition = new float3(offsetX, offsetY, offsetZ);
         Msg($"[ChildWindow] Spawning full DesktopBuddy for hwnd={childHwnd} title='{title}' size={cw}x{ch} offset=({offsetX:F4},{offsetY:F4})");
 
-        // Track BEFORE StartStreaming so the session can be found
         parentSession.TrackedChildHwnds.Add(childHwnd);
 
         try
         {
             StartStreaming(root, childHwnd, title, isChild: true);
 
-            // Find the session that was just created and set up parent-child relationship
             var childSession = ActiveSessions.Find(s => s.Hwnd == childHwnd && s.Root == root);
             if (childSession != null)
             {
@@ -1487,7 +1357,6 @@ public class DesktopBuddyMod : ResoniteMod
 
     private static int _updateCount;
 
-    // Cached reflection — looked up once, compiled to delegates for zero-overhead per-frame calls
     private static readonly Func<ProceduralTextureBase, Bitmap2D> _getTex2D;
     private static readonly Action<ProceduralTextureBase, Renderite.Shared.TextureUploadHint, FrooxEngine.AssetIntegrated> _setFromBitmap;
 
@@ -1514,15 +1383,12 @@ public class DesktopBuddyMod : ResoniteMod
             $"getTex2D={_getTex2D != null}, setFromBitmap={_setFromBitmap != null}");
     }
 
-    private static readonly Stopwatch _perfSw = new();
-
     private static void CleanupSession(DesktopSession session)
     {
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
 
-        // Clean up child popup sessions first
         if (session.ChildSessions.Count > 0)
         {
             Msg($"[Cleanup] Destroying {session.ChildSessions.Count} child popup panels");
@@ -1531,9 +1397,6 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg($"[Cleanup] Child: nulling OnGpuFrame hwnd={child.Hwnd}");
                 if (child.Streamer != null) child.Streamer.OnGpuFrame = null;
                 child.ParentSession = null;
-                // Don't remove from ActiveSessions here — it corrupts indices if the
-                // caller is iterating ActiveSessions. The Cleaned flag ensures the main
-                // loop skips re-cleanup, and it will remove them via RemoveAt(i) safely.
                 Msg($"[Cleanup] Child: disconnecting VTP hwnd={child.Hwnd}");
                 if (child.Root != null && !child.Root.IsDestroyed)
                 {
@@ -1564,7 +1427,6 @@ public class DesktopBuddyMod : ResoniteMod
             session.TrackedChildHwnds.Clear();
         }
 
-        // If this is a child panel, remove from parent's tracking
         if (session.ParentSession != null)
         {
             Msg($"[Cleanup] Removing from parent tracking");
@@ -1587,19 +1449,14 @@ public class DesktopBuddyMod : ResoniteMod
         {
             try
             {
-                // Brief delay to let in-flight GPU frames and encode operations drain
-                // before we start disposing resources they may still be using
-                System.Threading.Thread.Sleep(200);
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
 
                 AudioCapture audioToDispose = null;
                 bool shouldStopEncoder = false;
                 if (streamId > 0)
                 {
-                    Msg($"[Cleanup:BG] Taking _sharedStreams lock");
                     lock (_sharedStreams)
                     {
-                        Msg($"[Cleanup:BG] Lock acquired");
                         if (_sharedStreams.TryGetValue(hwnd, out var shared) && shared.StreamId == streamId)
                         {
                             shared.RefCount--;
@@ -1614,10 +1471,8 @@ public class DesktopBuddyMod : ResoniteMod
                         else
                         {
                             shouldStopEncoder = true;
-                            Msg($"[Cleanup:BG] Orphaned stream");
                         }
                     }
-                    Msg($"[Cleanup:BG] Lock released, shouldStop={shouldStopEncoder}");
 
                     if (shouldStopEncoder)
                     {
@@ -1626,6 +1481,10 @@ public class DesktopBuddyMod : ResoniteMod
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
                 }
+
+                Msg($"[Cleanup:BG] Stopping capture...");
+                streamer?.StopCapture();
+                Msg($"[Cleanup:BG] Capture stopped");
 
                 Msg($"[Cleanup:BG] Disposing streamer...");
                 streamer?.Dispose();
@@ -1676,7 +1535,6 @@ public class DesktopBuddyMod : ResoniteMod
             {
                 var session = ActiveSessions[i];
 
-                // Session already cleaned (e.g. child cleaned during parent cleanup) — just remove
                 if (session.Cleaned)
                 {
                     ActiveSessions.RemoveAt(i);
@@ -1700,15 +1558,12 @@ public class DesktopBuddyMod : ResoniteMod
                 if (session.Root.World != world) continue;
                 if (session.UpdateInProgress) continue;
 
-                // Window closed — disconnect libVLC first, then destroy after a delay
-                // libVLC's stop can block the engine thread if destroyed synchronously
                 if (session.Streamer != null && !session.Streamer.IsValid)
                 {
                     Msg($"[UpdateLoop] Window closed (IsValid=false), destroying viewer");
                     CleanupSession(session);
                     ActiveSessions.RemoveAt(i);
 
-                    // Disconnect VideoTextureProvider before destroying so libVLC doesn't block
                     var vtp = session.Root.GetComponentInChildren<VideoTextureProvider>();
                     if (vtp != null && !vtp.IsDestroyed)
                     {
@@ -1716,7 +1571,6 @@ public class DesktopBuddyMod : ResoniteMod
                         vtp.URL.Value = null;
                         vtp.Stop();
                     }
-                    // Defer actual slot destruction to give libVLC time to release
                     var rootToDestroy = session.Root;
                     world.RunInUpdates(10, () =>
                     {
@@ -1731,11 +1585,10 @@ public class DesktopBuddyMod : ResoniteMod
                     continue;
                 }
 
-                // --- Child window polling — runs every tick, independent of frame capture ---
                 if (!session.IsChildPanel && session.ProcessId != 0)
                 {
                     session.TimeSinceChildCheck += dt;
-                    if (session.TimeSinceChildCheck >= 0.1) // 100ms poll
+                    if (session.TimeSinceChildCheck >= 0.1)
                     {
                         session.TimeSinceChildCheck = 0;
                         try
@@ -1785,55 +1638,122 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
 
-                // Throttle to target FPS using engine time
                 session.TimeSinceLastCapture += dt;
                 if (session.TimeSinceLastCapture < session.TargetInterval)
                     continue;
                 session.TimeSinceLastCapture = 0;
 
-                // Wait for the asset to be created by the first normal update
                 if (!session.Texture.IsAssetAvailable)
                 {
                     if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
                     continue;
                 }
 
-                // Switch to manual mode after first update so we control the data
                 if (!session.ManualModeSet)
                 {
                     session.Texture.LocalManualUpdate = true;
                     session.ManualModeSet = true;
-                    Msg("[UpdateLoop] Set LocalManualUpdate = true");
+                    var texSize = session.Texture.Size.Value;
+                    Msg($"[UpdateLoop] Set LocalManualUpdate=true, texSize={texSize.x}x{texSize.y}");
+                    if (session.Canvas != null && !session.Canvas.IsDestroyed &&
+                        (session.Canvas.Size.Value.x != texSize.x || session.Canvas.Size.Value.y != texSize.y))
+                    {
+                        Msg($"[UpdateLoop] Syncing canvas {session.Canvas.Size.Value.x}x{session.Canvas.Size.Value.y} -> {texSize.x}x{texSize.y}");
+                        session.Canvas.Size.Value = new float2(texSize.x, texSize.y);
+                    }
                 }
 
-                // Get frame
                 var frame = session.Streamer.CaptureFrame(out int w, out int h);
                 if (frame == null) continue;
 
-                // Window resized — update texture + canvas size, reset manual mode so bitmap gets recreated
                 if (session.Texture.Size.Value.x != w || session.Texture.Size.Value.y != h)
                 {
                     Msg($"[UpdateLoop] Window resize {session.Texture.Size.Value.x}x{session.Texture.Size.Value.y} -> {w}x{h}");
-                    session.Texture.Size.Value = new int2(w, h);
-                    if (session.Canvas != null)
-                        session.Canvas.Size.Value = new float2(w, h);
-                    session.Texture.LocalManualUpdate = false;
+
+                    var texSlot = session.Texture.Slot;
+                    session.Texture.Destroy();
+                    var newTex = texSlot.AttachComponent<SolidColorTexture>();
+                    newTex.Size.Value = new int2(w, h);
+                    newTex.Format.Value = Renderite.Shared.TextureFormat.RGBA32;
+                    newTex.Mipmaps.Value = false;
+                    newTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
+                    session.Texture = newTex;
                     session.ManualModeSet = false;
-                    continue; // Skip this frame, let texture recreate
+
+                    if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
+                        session.TextureImage.Texture.Target = newTex;
+
+                    if (session.Canvas != null && !session.Canvas.IsDestroyed)
+                        session.Canvas.Size.Value = new float2(w, h);
+
+                    session.OnResize?.Invoke(w, h);
+                    session.PendingResizeW = w;
+                    session.PendingResizeH = h;
+                    session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
+                    Msg($"[UpdateLoop] Texture recreated at {w}x{h}");
+                    continue;
+                }
+
+                if (session.ResizeDebounceUntil > 0 && world.Time.WorldTime >= session.ResizeDebounceUntil)
+                {
+                    session.ResizeDebounceUntil = 0;
+                    int rw = session.PendingResizeW;
+                    int rh = session.PendingResizeH;
+                    Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
+                    if (session.Streamer != null)
+                        session.Streamer.OnGpuFrame = null;
+                    if (session.StreamId > 0)
+                    {
+                        StreamServer?.StopEncoder(session.StreamId);
+                    }
+                    int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
+                    var newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                    session.StreamId = newStreamId;
+
+                    lock (_sharedStreams)
+                    {
+                        if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
+                        {
+                            shared.StreamId = newStreamId;
+                            shared.Encoder = newEncoder;
+                        }
+                    }
+
+                    if (newEncoder != null && session.Streamer != null)
+                    {
+                        var contextLock = session.Streamer.D3dContextLock;
+                        AudioCapture audioForEncoder = null;
+                        lock (_sharedStreams)
+                        {
+                            if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
+                                audioForEncoder = shared.Audio;
+                        }
+                        var enc = newEncoder;
+                        session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
+                        {
+                            if (!enc.IsInitialized)
+                                enc.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
+                            enc.EncodeFrame(texture, (uint)fw, (uint)fh);
+                        };
+                    }
+
+                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && TunnelUrl != null)
+                    {
+                        var newUrl = new Uri($"{TunnelUrl}/stream/{newStreamId}");
+                        Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
+                        session.VideoTexture.URL.Value = newUrl;
+                    }
+
+                    Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
                 }
 
                 var bitmap = _getTex2D?.Invoke(session.Texture);
                 if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
-                {
-                    if (_updateCount <= 10) Msg($"[UpdateLoop] Bitmap null or size mismatch, waiting...");
                     continue;
-                }
 
-                // Copy frame into bitmap
                 using (Perf.Time("bitmap_copy"))
                     frame.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
 
-                // Upload to GPU
                 using (Perf.Time("texture_upload"))
                     _setFromBitmap?.Invoke(session.Texture, default, null);
 
@@ -1845,7 +1765,6 @@ public class DesktopBuddyMod : ResoniteMod
             Msg($"ERROR in UpdateLoop: {ex}");
         }
 
-        // Check if any sessions left for this world
         bool hasSessionsInWorld = ActiveSessions.Any(s => s.Root?.World == world);
         if (hasSessionsInWorld)
         {
@@ -1862,7 +1781,6 @@ public class DesktopBuddyMod : ResoniteMod
     {
         try
         {
-            // Check if cloudflared is available
             var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
             string[] candidates = {
                 System.IO.Path.Combine(modDir, "..", "cloudflared", "cloudflared.exe"),
@@ -1884,7 +1802,7 @@ public class DesktopBuddyMod : ResoniteMod
                     p?.WaitForExit(3000);
                     if (p?.ExitCode == 0) { cfPath = c; Msg($"[Tunnel] Found cloudflared: {c}"); break; }
                 }
-                catch { }
+                catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {c}: {ex.Message}"); }
             }
 
             if (cfPath == null)
@@ -1897,7 +1815,6 @@ public class DesktopBuddyMod : ResoniteMod
             var psi = new ProcessStartInfo
             {
                 FileName = cfPath,
-                // --config NUL bypasses any existing named tunnel config in .cloudflared/config.yml
                 Arguments = $"tunnel --config NUL --url http://localhost:{STREAM_PORT}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -1908,20 +1825,17 @@ public class DesktopBuddyMod : ResoniteMod
             if (_tunnelProcess == null) { Msg("[Tunnel] Failed to start cloudflared"); return; }
             var proc = _tunnelProcess;
 
-            // cloudflared prints the tunnel URL to stderr
             proc.ErrorDataReceived += (s, e) =>
             {
                 if (e.Data == null) return;
                 Msg($"[Tunnel/stderr] {e.Data}");
-                // Look for the tunnel URL in output
                 if (e.Data.Contains("https://") && e.Data.Contains(".trycloudflare.com"))
                 {
                     int idx = e.Data.IndexOf("https://");
                     string url = e.Data.Substring(idx).Trim();
                     int space = url.IndexOf(' ');
                     if (space > 0) url = url.Substring(0, space);
-                    // Always strip to origin — cloudflared logs proxied request URLs with paths
-                    try { url = new Uri(url).GetLeftPart(UriPartial.Authority); } catch { }
+                    try { url = new Uri(url).GetLeftPart(UriPartial.Authority); } catch (Exception ex) { Msg($"[Tunnel] URL parse error: {ex.Message}"); }
                     TunnelUrl = url;
                     Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
                 }
@@ -1940,85 +1854,50 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    // Max frame size for pipe throughput: ~4MB/frame works at realtime
-    // 1280x720x4 = 3.6MB — tested at 1.8x realtime
-    private const int STREAM_MAX_W = 1280;
-    private const int STREAM_MAX_H = 720;
+    internal new static void Msg(string msg) => Log.Msg(msg);
+    internal new static void Error(string msg) => Log.Error(msg);
 
-    private static void DownscaleAndShareFrame(DesktopSession session, byte[] frame, int w, int h)
+    private static void CheckEventViewerForCrashes()
     {
-        int dstW = w, dstH = h;
-        bool needsScale = w > STREAM_MAX_W || h > STREAM_MAX_H;
-        if (needsScale)
+        try
         {
-            float scale = Math.Min((float)STREAM_MAX_W / w, (float)STREAM_MAX_H / h);
-            dstW = ((int)(w * scale)) & ~1;
-            dstH = ((int)(h * scale)) & ~1;
-        }
-
-        lock (session.StreamLock)
-        {
-            if (!needsScale)
+            var psi = new ProcessStartInfo
             {
-                // Pass through — no copy, FFmpeg handles vflip
-                session.StreamFrame = frame;
-            }
-            else
-            {
-                // Bilinear-ish downscale (2x2 box average for better quality than nearest-neighbor)
-                if (session.ScaledBuffer == null || session.ScaledBuffer.Length != dstW * dstH * 4)
-                    session.ScaledBuffer = new byte[dstW * dstH * 4];
+                FileName = "powershell",
+                Arguments = "-NoProfile -Command \"Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1026; StartTime=(Get-Date).AddHours(-1)} -MaxEvents 10 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'Renderite.Host' } | ForEach-Object { $_.TimeCreated.ToString('HH:mm:ss') + ' [EventID ' + $_.Id + '] ' + ($_.Message -replace '\\r?\\n', ' | ') } \"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return;
+            string output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(5000);
 
-                unsafe
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                var header = "=== Previous session crash info (Windows Event Viewer, last 1h) ===";
+                System.IO.File.AppendAllText(CrashLogPath, $"\n[{DateTime.Now:HH:mm:ss.fff}] {header}\n");
+                foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
                 {
-                    fixed (byte* srcPtr = frame, dstPtr = session.ScaledBuffer)
-                    {
-                        uint* src = (uint*)srcPtr;
-                        uint* dst = (uint*)dstPtr;
-                        for (int y = 0; y < dstH; y++)
-                        {
-                            int srcY = y * h / dstH;
-                            for (int x = 0; x < dstW; x++)
-                            {
-                                int srcX = x * w / dstW;
-                                dst[y * dstW + x] = src[srcY * w + srcX];
-                            }
-                        }
-                    }
+                    System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}]   {line.Trim()}\n");
                 }
-                session.StreamFrame = session.ScaledBuffer;
+                System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}] === End crash info ===\n\n");
             }
-            session.StreamWidth = dstW;
-            session.StreamHeight = dstH;
-            session.StreamFrameReady = true;
-            System.Threading.Monitor.PulseAll(session.StreamLock);
+        }
+        catch (Exception ex)
+        {
+            System.IO.File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}] EventViewer check failed: {ex.Message}\n");
         }
     }
-
-    internal new static void Msg(string msg) => ResoniteMod.Msg(msg);
-    internal new static void Error(string msg) => ResoniteMod.Error(msg);
 }
 
-/// <summary>
-/// Suppress locomotion for the specific hand pointing at a desktop viewer canvas.
-/// Patches BeforeInputUpdate (which runs before the input system evaluates bindings).
-/// Sets _inputs.Axis.RegisterBlocks = true so the input system blocks the locomotion
-/// module from reading this hand's joystick. Only the pointing hand is affected.
-///
-/// Verified from decompiled source:
-/// - InteractionHandler._inputs is private InteractionHandlerInputs (line 206707)
-/// - InteractionHandlerInputs.Axis is public readonly Analog2DAction (line 205096)
-/// - InputAction.RegisterBlocks is public bool (line 350410)
-/// - BeforeInputUpdate normally sets: _inputs.Axis.RegisterBlocks = ActiveTool?.UsesSecondary ?? false (line 207475)
-/// - Our postfix overrides that to true when laser touches our canvas
-/// </summary>
 [HarmonyPatch(typeof(InteractionHandler), nameof(InteractionHandler.BeforeInputUpdate))]
 static class LocomotionSuppressionPatch
 {
-    // InteractionHandler._inputs (private)
     private static readonly FieldInfo _inputsField = typeof(InteractionHandler)
         .GetField("_inputs", BindingFlags.NonPublic | BindingFlags.Instance);
-    // InteractionHandlerInputs.Axis (public)
     private static readonly FieldInfo _axisField = typeof(InteractionHandlerInputs)
         .GetField("Axis");
 
@@ -2031,9 +1910,6 @@ static class LocomotionSuppressionPatch
 
             if (touchable is Canvas canvas && DesktopBuddyMod.DesktopCanvasIds.Contains(canvas.ReferenceID))
             {
-                // Set RegisterBlocks = true on this hand's Axis action.
-                // This tells the input system that this action is consuming the physical joystick,
-                // preventing SmoothLocomotionInputs.Move from reading it.
                 if (_inputsField != null && _axisField != null)
                 {
                     var inputs = _inputsField.GetValue(__instance);
@@ -2046,15 +1922,10 @@ static class LocomotionSuppressionPatch
         }
         catch
         {
-            // Silent — runs every frame
         }
     }
 }
 
-/// <summary>
-/// Map Resonite Key enum to Windows Virtual Key codes.
-/// Verified: Key enum in Renderite.Shared (line 1650)
-/// </summary>
 static class KeyMapper
 {
     public static readonly Dictionary<Key, ushort> KeyToVK = new()
@@ -2080,14 +1951,6 @@ static class KeyMapper
         key == Key.LeftAlt || key == Key.RightAlt;
 }
 
-/// <summary>
-/// Intercept InputInterface.SimulatePress to forward keys to Windows AND block Resonite.
-/// SimulatePress is called for every key press from the virtual keyboard.
-/// Modifiers (Shift/Ctrl/Alt) are held down until released by ShiftActive changing.
-/// Non-modifier keys get a press+release.
-///
-/// Verified: SimulatePress(Key key, World origin) at line 359293
-/// </summary>
 [HarmonyPatch(typeof(InputInterface), nameof(InputInterface.SimulatePress))]
 static class SimulatePressPatch
 {
@@ -2096,42 +1959,29 @@ static class SimulatePressPatch
         if (DesktopBuddyMod.ActiveSessions.Count == 0 ||
             !DesktopBuddyMod.ActiveSessions.Any(s => s.Root?.World == origin))
         {
-            return true; // Not our world, let Resonite handle it
+            return true;
         }
 
-        // Forward to Windows
         if (KeyMapper.KeyToVK.TryGetValue(key, out ushort vk))
         {
             if (KeyMapper.IsModifier(key))
             {
-                // Modifier: hold down (don't release — will be released when shift state changes)
                 WindowInput.SendVirtualKeyDown(vk);
-                // Modifier down
             }
             else
             {
-                // Regular key: press and release
                 WindowInput.SendVirtualKey(vk);
-                // Key press
-                // Release any held modifiers after the key press
                 WindowInput.ReleaseAllModifiers();
             }
         }
         else
         {
-            // Unmapped key ignored
         }
 
-        return false; // Block Resonite
+        return false;
     }
 }
 
-/// <summary>
-/// Intercept InputInterface.TypeAppend to forward text to Windows AND block Resonite.
-/// TypeAppend is called for character input from the virtual keyboard.
-///
-/// Verified: TypeAppend(string typeDelta, World origin) at line 359277
-/// </summary>
 [HarmonyPatch(typeof(InputInterface), nameof(InputInterface.TypeAppend))]
 static class TypeAppendPatch
 {
@@ -2146,7 +1996,6 @@ static class TypeAppendPatch
         if (!string.IsNullOrEmpty(typeDelta))
         {
             WindowInput.SendString(typeDelta);
-            // Release modifiers after text input
             WindowInput.ReleaseAllModifiers();
         }
 
