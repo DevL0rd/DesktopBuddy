@@ -236,6 +236,7 @@ public class DesktopBuddyMod : ResoniteMod
         int fps = Config!.GetValue(FrameRate);
         int w = streamer.Width;
         int h = streamer.Height;
+        Grabbable grabbable = null; // forward declaration — assigned after UI setup
 
         Msg($"[StartStreaming] Window size: {w}x{h}, target {fps}fps");
 
@@ -379,6 +380,7 @@ public class DesktopBuddyMod : ResoniteMod
         // Touch down — replaces mouse click for drag-to-scroll, hold-to-right-click, multi-touch
         btn.LocalPressed += (IButton b, ButtonEventData data) =>
         {
+            if (grabbable.IsGrabbed) return; // no input while grabbed
             ClaimSource(data.source, "touch");
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
@@ -391,6 +393,7 @@ public class DesktopBuddyMod : ResoniteMod
         // Touch move (drag)
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
         {
+            if (grabbable.IsGrabbed) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             uint touchId = GetTouchId(data.source);
@@ -400,6 +403,7 @@ public class DesktopBuddyMod : ResoniteMod
         // Touch up (release)
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
         {
+            if (grabbable.IsGrabbed) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             uint touchId = GetTouchId(data.source);
@@ -492,11 +496,14 @@ public class DesktopBuddyMod : ResoniteMod
         };
 
         // --- Unified top bar: avatar + name + toggle + collapsible tools ---
-        // One single slot, one background, one canvas. Left-anchored above the desktop.
-        float barCollapsedW = 290f;  // avatar(48) + pad + name(~160) + pad + toggle(40)
-        float barExpandedW = 660f;   // + buttons + vol
+        // Explicit sizing with SmoothValue-animated width transition.
         float barH = 64f;
         float barMarginTop = 10f * canvasScale;
+        float barPad = 8f;
+        float barGap = 8f;
+        float avatarW = 48f;
+        float toggleW = 36f;
+        // Collapsed/expanded widths computed after username is known (see below)
 
         var barSlot = root.AddSlot("TopBar");
         barSlot.LocalScale = float3.One * canvasScale;
@@ -511,8 +518,7 @@ public class DesktopBuddyMod : ResoniteMod
         var barUi = new UIBuilder(barCanvas);
         var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
         barBg.Material.Target = barMat;
-        // Rounded corners — nine-slice the disc texture with ~0.49 borders so each corner
-        // gets a full circle quadrant, and the tiny center strip stretches flat
+        // Rounded corners via nine-sliced disc texture
         var roundedSprite = barSlot.AttachComponent<SpriteProvider>();
         roundedSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         roundedSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
@@ -521,8 +527,12 @@ public class DesktopBuddyMod : ResoniteMod
         barBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
         barBg.Tint.Value = new colorX(0.1f, 0.1f, 0.12f, 1f);
 
+        // Mask clips children to the bar bounds — icons reveal as width animates
+        var barMask = barBg.Slot.AttachComponent<Mask>();
+        barMask.ShowMaskGraphic.Value = true;
         barUi.NestInto(barBg.RectTransform);
-        barUi.HorizontalLayout(8f, padding: 8f, childAlignment: Alignment.MiddleLeft);
+        var barLayout = barUi.HorizontalLayout(8f, padding: 8f, childAlignment: Alignment.MiddleLeft);
+        barLayout.ForceExpandWidth.Value = false; // don't stretch children to fill canvas
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
 
@@ -543,7 +553,7 @@ public class DesktopBuddyMod : ResoniteMod
         var avatarMaskSprite = imageSpaceSlot.AttachComponent<SpriteProvider>();
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         avatarMaskSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
-        avatarMaskSprite.FixedSize.Value = 10f;
+        avatarMaskSprite.FixedSize.Value = 18f;
         imgMaskImage.Sprite.Target = avatarMaskSprite;
         imgMaskImage.NineSliceSizing.Value = NineSliceSizing.FixedSize;
 
@@ -568,16 +578,23 @@ public class DesktopBuddyMod : ResoniteMod
         barUi.Image(avatarTex);
         barUi.NestOut(); // out of Image Space
 
-        // --- Username ---
+        // --- Username (fixed width based on name length) ---
+        string userName = localUser?.UserName ?? "Unknown";
+        float nameW = MathX.Max(60f, userName.Length * 12f);
         barUi.Style.FlexibleWidth = -1f;
-        barUi.Style.MinWidth = 60f;
-        barUi.Style.PreferredWidth = 100f;
+        barUi.Style.MinWidth = nameW;
+        barUi.Style.PreferredWidth = nameW;
         barUi.Style.FlexibleHeight = 1f;
         barUi.Style.MinHeight = -1f;
-        string userName = localUser?.UserName ?? "Unknown";
         var nameText = barUi.Text(userName, bestFit: false, alignment: Alignment.MiddleLeft);
         nameText.Size.Value = 18f;
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
+
+        // Compute bar widths
+        float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
+        // 7 buttons(30ea) + 6 gaps(6ea) + separator(1+6+6) + volIcon(24+6) + slider(100)
+        float expandContentW = 7f * 30f + 6f * 6f + 13f + 30f + 100f;
+        float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         // Helper: style a toolbar icon button — light gray text, transparent bg with hover
         void StyleButton(Button btn)
@@ -608,8 +625,8 @@ public class DesktopBuddyMod : ResoniteMod
         var accentBtn = new colorX(0.25f, 0.35f, 0.55f, 1f);
 
         // --- Toggle button (hamburger) ---
-        barUi.Style.MinWidth = 48f;
-        barUi.Style.PreferredWidth = 48f;
+        barUi.Style.MinWidth = 36f;
+        barUi.Style.PreferredWidth = 36f;
         barUi.Style.MinHeight = 48f;
         barUi.Style.PreferredHeight = 48f;
         barUi.Style.FlexibleWidth = -1f;
@@ -620,13 +637,14 @@ public class DesktopBuddyMod : ResoniteMod
         if (toggleText != null) toggleText.Size.Value = 42f;
 
         // --- Expandable panel ---
-        barUi.Style.FlexibleWidth = 1f;
+        barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
         barUi.Style.MinWidth = -1f;
         barUi.Style.MinHeight = -1f;
         var expandPanel = barUi.Empty("ExpandPanel");
         var ep = new UIBuilder(expandPanel);
-        ep.HorizontalLayout(6f, childAlignment: Alignment.MiddleLeft);
+        var epLayout = ep.HorizontalLayout(6f, childAlignment: Alignment.MiddleLeft);
+        epLayout.ForceExpandWidth.Value = false;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
 
@@ -701,28 +719,45 @@ public class DesktopBuddyMod : ResoniteMod
         winVolVis.CreateOverrideOnWrite.Value = false;
         winVolVis.SetOverride(root.World.LocalUser, true);
 
-        // --- Collapse/expand ---
-        expandPanel.ActiveSelf = false;
+        // --- Animated collapse/expand ---
+        // SmoothValue<float> drives the canvas width smoothly (synced to all users).
+        // A per-frame loop reads the driven width and repositions to keep left edge pinned.
+        var widthField = barSlot.AttachComponent<ValueField<float>>();
+        widthField.Value.Value = barCollapsedW;
+        var widthSmooth = barSlot.AttachComponent<SmoothValue<float>>();
+        widthSmooth.Speed.Value = 10f;
+        widthSmooth.TargetValue.Value = barCollapsedW;
+        widthSmooth.Value.Target = widthField.Value;
+        widthSmooth.WriteBack.Value = false;
 
-        void UpdateBarLayout(bool expanded)
+        bool barExpanded = false;
+        // Panel always active — Mask on barBg clips overflow so icons reveal with width animation
+        float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
+
+        // Per-frame: apply driven width to canvas and reposition so left edge stays pinned
+        void BarUpdateLoop()
         {
-            float cw = expanded ? barExpandedW : barCollapsedW;
+            if (root.IsDestroyed || barSlot.IsDestroyed) return;
+            float cw = widthField.Value.Value;
             barCanvas.Size.Value = new float2(cw, barH);
             barSlot.LocalPosition = new float3(
                 -worldHalfW + cw / 2f * canvasScale,
-                worldHalfH + barH / 2f * canvasScale + barMarginTop,
-                0f);
+                barYPos, 0f);
+            root.World.RunInUpdates(1, BarUpdateLoop);
         }
-        UpdateBarLayout(false);
+        // Set initial position
+        barCanvas.Size.Value = new float2(barCollapsedW, barH);
+        barSlot.LocalPosition = new float3(
+            -worldHalfW + barCollapsedW / 2f * canvasScale,
+            barYPos, 0f);
+        root.World.RunInUpdates(1, BarUpdateLoop);
 
         toggleBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
-            bool expanding = !expandPanel.ActiveSelf;
-            // Resize and reposition BEFORE toggling panel to prevent flicker
-            UpdateBarLayout(expanding);
-            expandPanel.ActiveSelf = expanding;
+            barExpanded = !barExpanded;
+            widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
             if (toggleText != null)
-                toggleText.Text.Value = expanding ? "✕" : "≡";
+                toggleText.Text.Value = barExpanded ? "✕" : "≡";
         };
 
         if (isChild)
@@ -1222,10 +1257,127 @@ public class DesktopBuddyMod : ResoniteMod
 
         // (User profile is integrated into the unified top bar above)
 
-        // Grabbable with scaling enabled — normalizedPressPoint is 0-1 so input is scale-independent
-        var grabbable = root.AttachComponent<Grabbable>();
+        // Grabbable — scaling enabled, restricted to spawner only
+        grabbable = root.AttachComponent<Grabbable>();
         grabbable.Scalable.Value = true;
-        Msg("[StartStreaming] Grabbable attached");
+        grabbable.OnlyUsers.Add().Target = localUser;
+        grabbable.AllowSteal.Value = false;
+        Msg("[StartStreaming] Grabbable attached (spawner-only)");
+
+        // --- Throwable: track velocity during grab, apply physics on release ---
+        {
+            const int HISTORY_SIZE = 5;
+            float3[] posHistory = new float3[HISTORY_SIZE];
+            floatQ[] rotHistory = new floatQ[HISTORY_SIZE];
+            double[] timeHistory = new double[HISTORY_SIZE];
+            int histIdx = 0;
+            bool wasGrabbed = false;
+            bool thrown = false;
+
+            void ThrowTrackLoop()
+            {
+                if (root.IsDestroyed || thrown) return;
+                bool isGrabbed = grabbable.IsGrabbed;
+
+                if (isGrabbed)
+                {
+                    // Record position + rotation history for velocity calculation
+                    int idx = histIdx % HISTORY_SIZE;
+                    posHistory[idx] = root.GlobalPosition;
+                    rotHistory[idx] = root.GlobalRotation;
+                    timeHistory[idx] = root.World.Time.WorldTime;
+                    histIdx++;
+                }
+                else if (wasGrabbed && histIdx >= 2)
+                {
+                    // Just released — compute throw velocity from position history
+                    int newest = (histIdx - 1) % HISTORY_SIZE;
+                    int oldest = (histIdx >= HISTORY_SIZE) ? (histIdx % HISTORY_SIZE) : 0;
+                    double dt = timeHistory[newest] - timeHistory[oldest];
+                    if (dt > 0.001)
+                    {
+                        float3 velocity = (posHistory[newest] - posHistory[oldest]) / (float)dt;
+                        float speed = velocity.Magnitude;
+                        Msg($"[Throw] Release velocity: {speed:F2} m/s");
+
+                        if (speed > 3f) // threshold: 3 m/s minimum throw speed
+                        {
+                            thrown = true;
+                            Msg($"[Throw] Thrown! velocity={speed:F2} m/s");
+
+                            // CharacterController for engine-side physics (syncs to all users)
+                            var cc = root.AttachComponent<CharacterController>();
+                            cc.SimulatingUser.Target = localUser;
+                            cc.Gravity.Value = new float3(0f, -9.81f, 0f);
+                            cc.LinearDamping.Value = 0.3f;
+                            cc.LinearVelocity = velocity;
+
+                            // Compute per-frame rotation delta from grab history
+                            // Use the last two frames for responsive rotation
+                            int prev = (histIdx - 2 + HISTORY_SIZE) % HISTORY_SIZE;
+                            double frameDt = timeHistory[newest] - timeHistory[prev];
+                            floatQ perFrameRot = floatQ.Identity;
+                            if (frameDt > 0.001)
+                            {
+                                floatQ rotDelta = rotHistory[newest] * rotHistory[prev].Conjugated;
+                                // Scale to per-update rotation (assume ~60fps)
+                                float dtRatio = (1f / 60f) / (float)frameDt;
+                                var identity = floatQ.Identity;
+                                perFrameRot = MathX.Slerp(in identity, rotDelta, dtRatio);
+                            }
+
+                            // Fade out over 3 seconds then destroy
+                            float fadeSeconds = 3f;
+                            int fadeFrames = (int)(fadeSeconds * 60f);
+                            int frame = 0;
+                            float3 lastPos = root.GlobalPosition;
+
+                            void FadeAndCollisionLoop()
+                            {
+                                if (root.IsDestroyed) return;
+                                frame++;
+                                float t = (float)frame / fadeFrames;
+
+                                // Fade: scale down smoothly
+                                float scale = MathX.Lerp(1f, 0f, t * t); // ease-in
+                                root.LocalScale = float3.One * MathX.Max(0.01f, scale);
+
+                                // Apply rotation (full quaternion delta from grab)
+                                root.LocalRotation = root.LocalRotation * perFrameRot;
+
+                                // Collision check: if position barely changed, we hit something
+                                float3 curPos = root.GlobalPosition;
+                                if (frame > 5) // skip first few frames
+                                {
+                                    float delta = (curPos - lastPos).Magnitude;
+                                    if (delta < 0.001f)
+                                    {
+                                        Msg("[Throw] Collision detected, destroying");
+                                        root.Destroy();
+                                        return;
+                                    }
+                                }
+                                lastPos = curPos;
+
+                                if (frame >= fadeFrames)
+                                {
+                                    Msg("[Throw] Fade complete, destroying");
+                                    root.Destroy();
+                                    return;
+                                }
+                                root.World.RunInUpdates(1, FadeAndCollisionLoop);
+                            }
+                            root.World.RunInUpdates(1, FadeAndCollisionLoop);
+                            return; // stop tracking
+                        }
+                    }
+                    histIdx = 0; // reset if below threshold
+                }
+                wasGrabbed = isGrabbed;
+                root.World.RunInUpdates(1, ThrowTrackLoop);
+            }
+            root.World.RunInUpdates(1, ThrowTrackLoop);
+        }
 
         root.PersistentSelf = false;
         root.Name = $"Desktop: {title}";

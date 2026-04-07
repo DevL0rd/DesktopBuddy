@@ -12,7 +12,10 @@
       "Bash(dotnet build:*)",
       "Bash(npm run:*)",
       "Bash(scripts/build.sh)",
-      "Bash(ilspycmd lib/FrooxEngine.dll)"
+      "Bash(ilspycmd lib/FrooxEngine.dll)",
+      "Bash(ilspycmd lib/FrooxEngine.dll -t \"FrooxEngine.SmoothValue\\\\`1\")",
+      "Bash(ilspycmd lib/FrooxEngine.dll -t FrooxEngine.UIX.ContentSizeFitter)",
+      "WebSearch"
     ]
   }
 }

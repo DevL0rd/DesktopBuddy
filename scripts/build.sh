@@ -26,6 +26,12 @@ if [[ $RESTART -eq 1 ]]; then
 fi
 
 dotnet build "$SCRIPT_DIR/../DesktopBuddy/DesktopBuddy.csproj"
+BUILD_RESULT=$?
+
+if [[ $BUILD_RESULT -ne 0 ]]; then
+    echo "BUILD FAILED — not launching Resonite"
+    exit $BUILD_RESULT
+fi
 
 if [[ $RESTART -eq 1 ]]; then
     if [[ $DESKTOP -eq 1 ]]; then

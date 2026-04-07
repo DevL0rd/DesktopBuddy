@@ -28,6 +28,10 @@ if !RESTART! equ 1 (
 
 REM Build the project
 dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj"
+if !ERRORLEVEL! neq 0 (
+    echo BUILD FAILED — not launching Resonite
+    exit /b !ERRORLEVEL!
+)
 
 REM Start Resonite if restart flag is set
 if !RESTART! equ 1 (
