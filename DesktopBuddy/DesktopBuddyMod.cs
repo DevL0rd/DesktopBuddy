@@ -1476,6 +1476,10 @@ public class DesktopBuddyMod : ResoniteMod
 
                     if (shouldStopEncoder)
                     {
+                        // Give VLC in the Renderer time to stop after vtp.Stop() before killing the stream source.
+                        // Without this delay, VLC crashes in picture_CopyPixels when the HTTP stream dies mid-decode.
+                        Msg($"[Cleanup:BG] Waiting for VLC to wind down before stopping encoder {streamId}...");
+                        System.Threading.Thread.Sleep(2000);
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
                         StreamServer?.StopEncoder(streamId);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
@@ -1547,6 +1551,12 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[UpdateLoop] Session {i} root/texture destroyed, cleaning up (root={session.Root != null} rootDestroyed={session.Root?.IsDestroyed} tex={session.Texture != null} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId})");
                     Msg("[UpdateLoop] Step 1: Nulling OnGpuFrame");
                     if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
+                    // Stop VLC before cleanup so the encoder survives long enough for VLC to wind down
+                    if (session.Root != null && !session.Root.IsDestroyed)
+                    {
+                        var vtp = session.Root.GetComponentInChildren<VideoTextureProvider>();
+                        if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
+                    }
                     Msg("[UpdateLoop] Step 2: Calling CleanupSession");
                     CleanupSession(session);
                     Msg("[UpdateLoop] Step 3: Removing from ActiveSessions");
@@ -1561,16 +1571,16 @@ public class DesktopBuddyMod : ResoniteMod
                 if (session.Streamer != null && !session.Streamer.IsValid)
                 {
                     Msg($"[UpdateLoop] Window closed (IsValid=false), destroying viewer");
-                    CleanupSession(session);
-                    ActiveSessions.RemoveAt(i);
-
-                    var vtp = session.Root.GetComponentInChildren<VideoTextureProvider>();
+                    // Stop VLC BEFORE cleanup so the encoder isn't killed while VLC is still reading
+                    var vtp = session.Root?.GetComponentInChildren<VideoTextureProvider>();
                     if (vtp != null && !vtp.IsDestroyed)
                     {
-                        Msg("[UpdateLoop] Disconnecting VideoTextureProvider before destroy");
+                        Msg("[UpdateLoop] Disconnecting VideoTextureProvider before cleanup");
                         vtp.URL.Value = null;
                         vtp.Stop();
                     }
+                    CleanupSession(session);
+                    ActiveSessions.RemoveAt(i);
                     var rootToDestroy = session.Root;
                     world.RunInUpdates(10, () =>
                     {
