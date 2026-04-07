@@ -47,7 +47,85 @@ public sealed class WgcCapture : IDisposable
         IntPtr pFeatureLevels, uint FeatureLevels, uint SDKVersion,
         out IntPtr ppDevice, out int pFeatureLevel, out IntPtr ppImmediateContext);
 
+    [DllImport("dxgi.dll", EntryPoint = "CreateDXGIFactory1")]
+    private static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);
 
+    // IDXGIFactory vtable index
+    private const int IDXGIFactory_EnumAdapters = 7;
+    // IDXGIAdapter vtable index
+    private const int IDXGIAdapter_GetDesc = 8;
+
+    // FIX: Description must be a fixed char buffer, NOT a managed string.
+    // With a managed string, the field in memory is just an 8-byte object reference.
+    // The native GetDesc call writes 128 WCHARs (256 bytes) into that location,
+    // causing a massive stack buffer overflow that corrupts the stack frame and kills
+    // the process before any managed exception handler can fire. This is why clicking
+    // ANY Desktop Buddy item crashes instantly with no log output.
+    // The compiler even warned about this with CS8500 but it was easy to miss.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private unsafe struct DXGI_ADAPTER_DESC
+    {
+        public fixed char Description[128];
+        public uint VendorId;
+        public uint DeviceId;
+        public uint SubSysId;
+        public uint Revision;
+        public nuint DedicatedVideoMemory;
+        public nuint DedicatedSystemMemory;
+        public nuint SharedSystemMemory;
+        public long AdapterLuid;
+    }
+
+    private const int D3D_DRIVER_TYPE_UNKNOWN = 0;
+
+    /// <summary>
+    /// Enumerate DXGI adapters and prefer a discrete GPU (NVIDIA/AMD) over integrated (Intel/Microsoft).
+    /// On hybrid GPU laptops, the default adapter may be the iGPU which lacks NVENC/AMF.
+    /// </summary>
+    private static unsafe IntPtr FindPreferredAdapter()
+    {
+        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387"); // IDXGIFactory1
+        int hr = CreateDXGIFactory1(ref factoryGuid, out IntPtr factory);
+        if (hr < 0 || factory == IntPtr.Zero) return IntPtr.Zero;
+
+        var vtable = *(IntPtr**)factory;
+        var enumAdapters = (delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, int>)vtable[IDXGIFactory_EnumAdapters];
+
+        IntPtr bestAdapter = IntPtr.Zero;
+        bool bestIsDiscrete = false;
+
+        for (uint i = 0; ; i++)
+        {
+            IntPtr adapter;
+            hr = enumAdapters(factory, i, &adapter);
+            if (hr < 0) break;
+
+            var adapterVtable = *(IntPtr**)adapter;
+            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, DXGI_ADAPTER_DESC*, int>)adapterVtable[IDXGIAdapter_GetDesc];
+            DXGI_ADAPTER_DESC desc;
+            getDesc(adapter, &desc);
+
+            // 0x10DE = NVIDIA, 0x1002 = AMD
+            bool isDiscrete = desc.VendorId == 0x10DE || desc.VendorId == 0x1002;
+            string descStr = new string((char*)desc.Description);
+            ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] Adapter {i}: '{descStr}' VendorId=0x{desc.VendorId:X4} VRAM={desc.DedicatedVideoMemory / 1048576}MB{(isDiscrete ? " [discrete]" : "")}");
+
+            if (isDiscrete && !bestIsDiscrete)
+            {
+                if (bestAdapter != IntPtr.Zero) Marshal.Release(bestAdapter);
+                bestAdapter = adapter;
+                bestIsDiscrete = true;
+            }
+            else
+            {
+                if (bestAdapter == IntPtr.Zero) bestAdapter = adapter;
+                else Marshal.Release(adapter);
+            }
+        }
+
+        Marshal.Release(factory);
+        return bestAdapter;
+    }
 
     [DllImport("d3dcompiler_47.dll", EntryPoint = "D3DCompile")]
     private static extern int D3DCompile(
@@ -232,9 +310,15 @@ public sealed class WgcCapture : IDisposable
             // BGRA support required for WGC frame surfaces. Debug layer disabled — it causes
             // assertion crashes when D3D context is used from multiple threads during disposal.
             uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-            int hr = D3D11CreateDevice(IntPtr.Zero, D3D_DRIVER_TYPE_HARDWARE, IntPtr.Zero,
+
+            // On hybrid GPU laptops (e.g. Intel iGPU + NVIDIA dGPU), the default adapter may
+            // be the iGPU which lacks NVENC/AMF. Enumerate adapters and prefer discrete GPU.
+            IntPtr preferredAdapter = FindPreferredAdapter();
+            int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+            int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
                 deviceFlags, IntPtr.Zero, 0, 7,
                 out _d3dDevice, out _, out _d3dContext);
+            if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
             if (hr < 0) { ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}"); return false; }
             ResoniteModLoader.ResoniteMod.Msg("[WgcCapture] D3D11 device created");
 
@@ -254,8 +338,14 @@ public sealed class WgcCapture : IDisposable
 
             if (hwnd == IntPtr.Zero)
             {
-                var hMon = MonitorFromPoint(0, 0, 1);
-                ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] Creating capture for monitor 0x{hMon:X}");
+                // FIX: Use the monitorHandle passed in from EnumDisplayMonitors (the handle the
+                // context menu actually selected). Previously this always called MonitorFromPoint(0,0,1)
+                // which always returned the primary monitor at screen coordinate (0,0), ignoring the
+                // selected monitor entirely. On hybrid GPU laptops this also caused a cross-adapter
+                // mismatch because the primary monitor may be on the iGPU while the D3D11 device
+                // is on the dGPU, leading to a GPU pipeline failure and subsequent null-pointer crash.
+                IntPtr hMon = monitorHandle != default ? monitorHandle : MonitorFromPoint(0, 0, 1);
+                ResoniteModLoader.ResoniteMod.Msg($"[WgcCapture] Creating capture for monitor 0x{hMon:X} (explicit={monitorHandle != default})");
                 _item = CreateItemForMonitor(hMon);
             }
             else
@@ -409,6 +499,18 @@ public sealed class WgcCapture : IDisposable
             // GPU BGRA→RGBA + Y-flip via compute shader, then copy to staging for CPU readback
             EnsureGpuConvertPipeline(w, h);
             EnsureStagingTexture(w, h);
+
+            // FIX: Guard against null pointers if the GPU pipeline failed to initialize.
+            // EnsureGpuConvertPipeline sets _gpuConvertReady=false and zeros _convertedSRV on any
+            // failure. Calling GpuConvertBgraToRgba with _convertedSRV=IntPtr.Zero passes a null
+            // pointer into a raw D3D11 native vtable call (CopyResource), which dereferences it
+            // and causes an AccessViolationException that cannot be caught by try-catch, killing
+            // the entire FrooxEngine process. Skip this frame instead.
+            if (!_gpuConvertReady)
+            {
+                ResoniteModLoader.ResoniteMod.Msg("[WgcCapture] GPU pipeline not ready, skipping frame");
+                return;
+            }
 
             using (DesktopBuddyMod.Perf.Time("gpu_convert"))
                 GpuConvertBgraToRgba(srcTexture, w, h);
