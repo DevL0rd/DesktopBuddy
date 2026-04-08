@@ -44,15 +44,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private const byte MPEGTS_SYNC = 0x47;
     private const int MPEGTS_PACKET_SIZE = 188;
 
-    private Thread _encodeThread;
     private volatile bool _disposed;
     private int _disposeGuard;
-    private readonly AutoResetEvent _frameSignal = new(false);
-    private volatile IntPtr _pendingTexture;
-    private volatile uint _pendingWidth, _pendingHeight;
     private IntPtr _deviceContext;
     private object _d3dContextLock;
-    private IntPtr _lastTexture;
+    private long _lastEncodeTicks;
 
     private bool _needsVideoProcessor;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
@@ -310,9 +306,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
-            _encodeThread = new Thread(EncodeThreadLoop) { IsBackground = true, Name = $"FfmpegEnc_{_streamId}" };
-            _encodeThread.Start();
-
             Log.Msg($"[FfmpegEnc:{_streamId}] Ready: {_width}x{_height} {codecName}");
             return true;
         }
@@ -469,70 +462,25 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         if (_disposed || _initFailed || !_initialized) return;
         if ((width & ~1u) != _width || (height & ~1u) != _height)
         {
-            _lastTexture = IntPtr.Zero;
-            _pendingTexture = IntPtr.Zero;
             if (_totalFrames == 0)
                 Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch init={_width}x{_height} frame={width}x{height}");
             return;
         }
 
-        _pendingTexture = srcTexture;
-        _pendingWidth = width;
-        _pendingHeight = height;
-        _frameSignal.Set();
-    }
-
-    private void EncodeThreadLoop()
-    {
-        Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
         long frameInterval = System.Diagnostics.Stopwatch.Frequency / _fps;
-        int frameIntervalMs = Math.Max(1, (int)(1000 / _fps));
-        long lastEncodeTicks = 0;
+        if ((now - _lastEncodeTicks) < frameInterval)
+            return;
+        _lastEncodeTicks = now;
 
-        while (!_disposed)
+        try
         {
-            _frameSignal.WaitOne(frameIntervalMs);
-            if (_disposed) break;
-
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if ((now - lastEncodeTicks) < frameInterval)
-                continue;
-
-            var ctxLock = _d3dContextLock;
-            if (ctxLock == null) continue;
-            lock (ctxLock)
-            {
-                if (_disposed) break;
-
-                IntPtr texture = _pendingTexture;
-                if (texture != IntPtr.Zero)
-                {
-                    _pendingTexture = IntPtr.Zero;
-                    _lastTexture = texture;
-                    _lastWidth = _pendingWidth;
-                    _lastHeight = _pendingHeight;
-                }
-                else if (_lastTexture != IntPtr.Zero)
-                {
-                    texture = _lastTexture;
-                }
-                else
-                {
-                    continue;
-                }
-                lastEncodeTicks = now;
-
-                try
-                {
-                    EncodeFrameInternalLocked(texture, _lastWidth, _lastHeight);
-                }
-                catch (Exception ex)
-                {
-                    Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread error (frame {_totalFrames}): {ex}");
-                }
-            }
+            EncodeFrameInternalLocked(srcTexture, width, height);
         }
-        Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread ended");
+        catch (Exception ex)
+        {
+            Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
+        }
     }
 
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height)
@@ -858,11 +806,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === START ===");
         _initialized = false;
         _disposed = true;
-        _frameSignal.Set();
-        Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: joining encode thread...");
-        if (_encodeThread != null && !_encodeThread.Join(5000))
-            Log.Msg($"[FfmpegEnc:{_streamId}] WARNING: encode thread did not exit in 5s");
-        Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: encode thread joined");
 
         var ctxLock = _d3dContextLock;
         bool gotLock = false;
