@@ -147,6 +147,8 @@ public sealed class WgcCapture : IDisposable
     private const int ID3D11DeviceContext_Unmap = 15;
     private const int ID3D11DeviceContext_Dispatch = 41;
     private const int ID3D11DeviceContext_CopyResource = 47;
+    private const int ID3D11DeviceContext_ClearState = 110;
+    private const int ID3D11DeviceContext_Flush = 111;
     private const int ID3D11DeviceContext_CSSetShaderResources = 67;
     private const int ID3D11DeviceContext_CSSetUnorderedAccessViews = 68;
     private const int ID3D11DeviceContext_CSSetShader = 69;
@@ -888,6 +890,29 @@ public sealed class WgcCapture : IDisposable
     private readonly object _disposeLock = new();
 
     public object D3dContextLock => _disposeLock;
+
+    /// <summary>
+    /// Flushes all pending GPU work on this capture's D3D11 context under the dispose lock.
+    /// Must be called before disposing an encoder that shares this device, so the AMD driver
+    /// doesn't access-violate on freed resources while this context still has pending work.
+    /// </summary>
+    public unsafe void FlushD3dContext()
+    {
+        lock (_disposeLock)
+        {
+            if (_disposed || _d3dContext == IntPtr.Zero) return;
+            try
+            {
+                var vtable = *(IntPtr**)_d3dContext;
+                var clearFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[ID3D11DeviceContext_ClearState];
+                clearFn(_d3dContext);
+                var flushFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[ID3D11DeviceContext_Flush];
+                flushFn(_d3dContext);
+                Log.Msg("[WgcCapture] D3D11 ClearState+Flush OK");
+            }
+            catch (Exception ex) { Log.Msg($"[WgcCapture] D3D11 flush error: {ex.Message}"); }
+        }
+    }
 
     public void StopCapture()
     {

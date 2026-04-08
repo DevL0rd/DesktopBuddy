@@ -1049,14 +1049,7 @@ public class DesktopBuddyMod : ResoniteMod
                 bool isFirstForHwnd = shared.RefCount == 1;
                 if (isFirstForHwnd)
                 {
-                    var audioForEncoder = shared.Audio;
-                    var contextLock = session.Streamer.D3dContextLock;
-                    session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
-                    {
-                        if (!nvEncoder.IsInitialized)
-                            nvEncoder.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
-                        nvEncoder.EncodeFrame(texture, (uint)fw, (uint)fh);
-                    };
+                    ConnectEncoder(session, nvEncoder);
                     Msg($"[RemoteStream] This panel drives the encoder for stream {shared.StreamId}");
                 }
                 else
@@ -1255,19 +1248,14 @@ public class DesktopBuddyMod : ResoniteMod
             root.World.RunInUpdates(1, ThrowTrackLoop);
         }
 
-        session.OnResize = (int newW, int newH) =>
+        void UpdateLayout(int newW, int newH)
         {
-            float newHalfW = newW / 2f * canvasScale;
-            float newHalfH = newH / 2f * canvasScale;
-
-            barYPos = newHalfH + barH / 2f * canvasScale + barMarginTop;
-
+            worldHalfW = newW / 2f * canvasScale;
+            worldHalfH = newH / 2f * canvasScale;
+            barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
 
             if (session.Collider != null && !session.Collider.IsDestroyed)
                 session.Collider.Size.Value = new float3(newW * canvasScale, newH * canvasScale, 0.001f);
-
-            worldHalfW = newHalfW;
-            worldHalfH = newHalfH;
 
             if (backCanvasRef != null && !backCanvasRef.IsDestroyed)
                 backCanvasRef.Size.Value = new float2(newW, newH);
@@ -1275,8 +1263,17 @@ public class DesktopBuddyMod : ResoniteMod
             if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
                 streamCanvasRef.Size.Value = new float2(newW, newH);
 
+            if (barSlot != null && !barSlot.IsDestroyed)
+                barSlot.LocalPosition = new float3(
+                    -worldHalfW + _lastBarW / 2f * canvasScale,
+                    barYPos, 0f);
+
+            if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
+                keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
+
             Msg($"[Resize] UI updated to {newW}x{newH}");
-        };
+        }
+        session.OnResize = UpdateLayout;
 
         root.PersistentSelf = false;
         root.Name = $"Desktop: {title}";
@@ -1401,6 +1398,46 @@ public class DesktopBuddyMod : ResoniteMod
             $"getTex2D={_getTex2D != null}, setFromBitmap={_setFromBitmap != null}");
     }
 
+    private static void DisconnectEncoder(DesktopSession session)
+    {
+        var streamer = session.Streamer;
+        if (streamer != null) streamer.OnGpuFrame = null;
+
+        // Flush the capture's D3D context so the AMD driver has no pending work
+        // referencing shared device state before the encoder releases its resources.
+        streamer?.FlushD3dContext();
+
+        if (session.StreamId > 0)
+            StreamServer?.StopEncoder(session.StreamId);
+
+        bool forceGC = Config?.GetValue(ImmediateGC) ?? false;
+        if (forceGC)
+        {
+            Msg("[DisconnectEncoder] Forcing GC after encoder dispose");
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+    }
+
+    private static void ConnectEncoder(DesktopSession session, FfmpegEncoder encoder)
+    {
+        if (encoder == null || session.Streamer == null) return;
+        var contextLock = session.Streamer.D3dContextLock;
+        AudioCapture audioForEncoder = null;
+        lock (_sharedStreams)
+        {
+            if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
+                audioForEncoder = shared.Audio;
+        }
+        var enc = encoder;
+        session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
+        {
+            if (!enc.IsInitialized)
+                enc.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
+            enc.EncodeFrame(texture, (uint)fw, (uint)fh);
+        };
+    }
+
     private static void CleanupSession(DesktopSession session)
     {
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
@@ -1412,8 +1449,6 @@ public class DesktopBuddyMod : ResoniteMod
             Msg($"[Cleanup] Destroying {session.ChildSessions.Count} child popup panels");
             foreach (var child in session.ChildSessions)
             {
-                Msg($"[Cleanup] Child: nulling OnGpuFrame hwnd={child.Hwnd}");
-                if (child.Streamer != null) child.Streamer.OnGpuFrame = null;
                 child.ParentSession = null;
                 Msg($"[Cleanup] Child: disconnecting VTP hwnd={child.Hwnd}");
                 {
@@ -1458,7 +1493,7 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] Removing canvas ID");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);
 
-        Msg($"[Cleanup] Nulling OnGpuFrame callback");
+        Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
         int streamId = session.StreamId;
@@ -1471,6 +1506,10 @@ public class DesktopBuddyMod : ResoniteMod
             try
             {
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
+
+                // Flush the capture's D3D context before any encoder disposal — same
+                // safety step that DisconnectEncoder performs for the resize path.
+                streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
                 bool shouldStopEncoder = false;
@@ -1500,6 +1539,14 @@ public class DesktopBuddyMod : ResoniteMod
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
                         StreamServer?.StopEncoder(streamId);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
+                    }
+
+                    bool forceGC = Config?.GetValue(ImmediateGC) ?? false;
+                    if (forceGC)
+                    {
+                        Msg("[Cleanup:BG] Forcing GC after encoder dispose");
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
                     }
                 }
 
@@ -1566,19 +1613,14 @@ public class DesktopBuddyMod : ResoniteMod
                     session.Texture == null || session.Texture.IsDestroyed)
                 {
                     Msg($"[UpdateLoop] Session {i} root/texture destroyed, cleaning up (root={session.Root != null} rootDestroyed={session.Root?.IsDestroyed} tex={session.Texture != null} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId})");
-                    Msg("[UpdateLoop] Step 1: Nulling OnGpuFrame");
-                    if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
                     // Stop VLC before cleanup so the encoder survives long enough for VLC to wind down.
                     // Use session.VideoTexture directly - when destroyed via context menu,
                     // session.Root is already destroyed so GetComponentInChildren would fail.
                     var vtp = session.VideoTexture;
                     if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
                     session.VideoTexture = null;
-                    Msg("[UpdateLoop] Step 2: Calling CleanupSession");
                     CleanupSession(session);
-                    Msg("[UpdateLoop] Step 3: Removing from ActiveSessions");
                     ActiveSessions.RemoveAt(i);
-                    Msg("[UpdateLoop] Step 4: Session removed, continuing");
                     continue;
                 }
 
@@ -1671,7 +1713,6 @@ public class DesktopBuddyMod : ResoniteMod
                                 {
                                     Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
                                     session.TrackedChildHwnds.Remove(child.Hwnd);
-                                    if (child.Streamer != null) child.Streamer.OnGpuFrame = null;
                                     child.ParentSession = null;
                                     ActiveSessions.Remove(child);
                                     session.ChildSessions.RemoveAt(c);
@@ -1758,12 +1799,8 @@ public class DesktopBuddyMod : ResoniteMod
                     int rw = session.PendingResizeW;
                     int rh = session.PendingResizeH;
                     Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
-                    if (session.Streamer != null)
-                        session.Streamer.OnGpuFrame = null;
-                    if (session.StreamId > 0)
-                    {
-                        StreamServer?.StopEncoder(session.StreamId);
-                    }
+                    DisconnectEncoder(session);
+
                     int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
                     var newEncoder = StreamServer?.CreateEncoder(newStreamId);
                     session.StreamId = newStreamId;
@@ -1777,23 +1814,7 @@ public class DesktopBuddyMod : ResoniteMod
                         }
                     }
 
-                    if (newEncoder != null && session.Streamer != null)
-                    {
-                        var contextLock = session.Streamer.D3dContextLock;
-                        AudioCapture audioForEncoder = null;
-                        lock (_sharedStreams)
-                        {
-                            if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
-                                audioForEncoder = shared.Audio;
-                        }
-                        var enc = newEncoder;
-                        session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
-                        {
-                            if (!enc.IsInitialized)
-                                enc.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
-                            enc.EncodeFrame(texture, (uint)fw, (uint)fh);
-                        };
-                    }
+                    ConnectEncoder(session, newEncoder);
 
                     if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && TunnelUrl != null)
                     {

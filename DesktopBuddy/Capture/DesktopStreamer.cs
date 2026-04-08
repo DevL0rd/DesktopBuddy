@@ -62,6 +62,8 @@ public sealed class DesktopStreamer : IDisposable
         return frame;
     }
 
+    public void FlushD3dContext() => _wgc?.FlushD3dContext();
+
     public void StopCapture()
     {
         _wgc?.StopCapture();
