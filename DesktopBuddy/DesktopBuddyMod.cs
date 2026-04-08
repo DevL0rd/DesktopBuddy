@@ -50,8 +50,14 @@ public class DesktopBuddyMod : ResoniteMod
 
     internal static MjpegServer? StreamServer;
     private const int STREAM_PORT = 48080;
+    // Always use the tunnel URL, never fall back to localhost — even for local testing,
+    // the stream must go through cloudflare so we catch tunnel issues during development.
     internal static string? TunnelUrl;
     private static Process _tunnelProcess;
+    private static string _cfPath;
+    private static int _tunnelErrorCount;
+    private static long _lastTunnelErrorTick;
+    private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
     private static string _latestVersion;
@@ -98,11 +104,7 @@ public class DesktopBuddyMod : ResoniteMod
             System.Threading.Tasks.Task.Run(() => StartTunnel());
         }
 
-        AppDomain.CurrentDomain.ProcessExit += (s, e) =>
-        {
-            try { if (_tunnelProcess != null && !_tunnelProcess.HasExited) _tunnelProcess.Kill(); }
-            catch (Exception ex) { Msg($"[Tunnel] Kill failed: {ex.Message}"); }
-        };
+        AppDomain.CurrentDomain.ProcessExit += (s, e) => KillTunnel();
 
         Msg("DesktopBuddy initialized!");
     }
@@ -1860,45 +1862,114 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
+    private static string FindCloudflared()
+    {
+        var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
+        string[] candidates = {
+            System.IO.Path.Combine(modDir, "..", "cloudflared", "cloudflared.exe"),
+            System.IO.Path.Combine(modDir, "cloudflared", "cloudflared.exe"),
+            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cloudflared", "cloudflared.exe"),
+            "cloudflared"
+        };
+        foreach (var c in candidates)
+        {
+            try
+            {
+                var p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = c, Arguments = "version",
+                    RedirectStandardOutput = true, RedirectStandardError = true,
+                    UseShellExecute = false, CreateNoWindow = true
+                });
+                p?.WaitForExit(3000);
+                if (p?.ExitCode == 0) { Msg($"[Tunnel] Found cloudflared: {c}"); return c; }
+            }
+            catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {c}: {ex.Message}"); }
+        }
+        return null;
+    }
+
+    private static void KillTunnel()
+    {
+        try { if (_tunnelProcess != null && !_tunnelProcess.HasExited) _tunnelProcess.Kill(); }
+        catch (Exception ex) { Msg($"[Tunnel] Kill failed: {ex.Message}"); }
+        _tunnelProcess = null;
+    }
+
+    private static void OnTunnelError(string data)
+    {
+        // Track consecutive "canceled by remote" errors — cloudflare dropping connections
+        if (data.Contains("canceled by remote"))
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            long elapsed = (now - _lastTunnelErrorTick) * 1000 / System.Diagnostics.Stopwatch.Frequency;
+            if (elapsed > 60_000)
+                _tunnelErrorCount = 0; // reset if last error was >60s ago
+            _lastTunnelErrorTick = now;
+            _tunnelErrorCount++;
+
+            if (_tunnelErrorCount >= 5)
+            {
+                Msg($"[Tunnel] {_tunnelErrorCount} stream cancellations in <60s, restarting tunnel");
+                _tunnelErrorCount = 0;
+                RestartTunnel();
+            }
+        }
+    }
+
+    private static void UpdateSessionTunnelUrls()
+    {
+        if (TunnelUrl == null) return;
+        foreach (var session in ActiveSessions)
+        {
+            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId > 0)
+            {
+                var newUrl = new Uri($"{TunnelUrl}/stream/{session.StreamId}");
+                Msg($"[Tunnel] Updating session VTP: {session.VideoTexture.URL.Value} -> {newUrl}");
+                session.VideoTexture.URL.Value = newUrl;
+            }
+        }
+    }
+
+    private static void RestartTunnel()
+    {
+        if (_tunnelRestarting) return;
+        _tunnelRestarting = true;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                Msg("[Tunnel] === RESTART ===");
+                KillTunnel();
+                TunnelUrl = null;
+                System.Threading.Thread.Sleep(2000);
+                StartTunnel();
+            }
+            finally { _tunnelRestarting = false; }
+        });
+    }
+
     private static void StartTunnel()
     {
         try
         {
-            var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-            string[] candidates = {
-                System.IO.Path.Combine(modDir, "..", "cloudflared", "cloudflared.exe"),
-                System.IO.Path.Combine(modDir, "cloudflared", "cloudflared.exe"),
-                System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cloudflared", "cloudflared.exe"),
-                "cloudflared"
-            };
-            string cfPath = null;
-            foreach (var c in candidates)
+            if (_cfPath == null)
             {
-                try
+                _cfPath = FindCloudflared();
+                if (_cfPath == null)
                 {
-                    var p = Process.Start(new ProcessStartInfo
-                    {
-                        FileName = c, Arguments = "version",
-                        RedirectStandardOutput = true, RedirectStandardError = true,
-                        UseShellExecute = false, CreateNoWindow = true
-                    });
-                    p?.WaitForExit(3000);
-                    if (p?.ExitCode == 0) { cfPath = c; Msg($"[Tunnel] Found cloudflared: {c}"); break; }
+                    Msg("[Tunnel] cloudflared not found — tunnel unavailable");
+                    return;
                 }
-                catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {c}: {ex.Message}"); }
             }
 
-            if (cfPath == null)
-            {
-                Msg("[Tunnel] cloudflared not found — stream only available on localhost");
-                return;
-            }
-
-            Msg($"[Tunnel] Starting cloudflared tunnel: {cfPath}");
+            Msg($"[Tunnel] Starting cloudflared tunnel: {_cfPath}");
             var psi = new ProcessStartInfo
             {
-                FileName = cfPath,
-                Arguments = $"tunnel --config NUL --url http://localhost:{STREAM_PORT}",
+                FileName = _cfPath,
+                // Force HTTP/2 instead of QUIC — avoids QUIC stream cancellation bug
+                // (cloudflare/cloudflared#1105, #1519) that kills long-lived video streams.
+                Arguments = $"tunnel --config NUL --protocol http2 --url http://localhost:{STREAM_PORT}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -1907,6 +1978,14 @@ public class DesktopBuddyMod : ResoniteMod
             _tunnelProcess = Process.Start(psi);
             if (_tunnelProcess == null) { Msg("[Tunnel] Failed to start cloudflared"); return; }
             var proc = _tunnelProcess;
+            _tunnelErrorCount = 0;
+
+            proc.EnableRaisingEvents = true;
+            proc.Exited += (s, e) =>
+            {
+                Msg($"[Tunnel] cloudflared exited (code={proc.ExitCode}), restarting");
+                RestartTunnel();
+            };
 
             proc.ErrorDataReceived += (s, e) =>
             {
@@ -1919,9 +1998,13 @@ public class DesktopBuddyMod : ResoniteMod
                     int space = url.IndexOf(' ');
                     if (space > 0) url = url.Substring(0, space);
                     try { url = new Uri(url).GetLeftPart(UriPartial.Authority); } catch (Exception ex) { Msg($"[Tunnel] URL parse error: {ex.Message}"); }
+                    string oldUrl = TunnelUrl;
                     TunnelUrl = url;
                     Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
+                    if (oldUrl != null && oldUrl != url)
+                        UpdateSessionTunnelUrls();
                 }
+                OnTunnelError(e.Data);
             };
             proc.OutputDataReceived += (s, e) =>
             {

@@ -49,6 +49,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private IntPtr _deviceContext;
     private object _d3dContextLock;
     private long _lastEncodeTicks;
+    private IntPtr _lastSrcTexture;
+    private Thread _keepAliveThread;
 
     private bool _needsVideoProcessor;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
@@ -306,6 +308,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
+            _keepAliveThread = new Thread(KeepAliveLoop) { Name = $"FfmpegEnc:{_streamId}:KeepAlive", IsBackground = true };
+            _keepAliveThread.Start();
+            Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
+
             Log.Msg($"[FfmpegEnc:{_streamId}] Ready: {_width}x{_height} {codecName}");
             return true;
         }
@@ -472,6 +478,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         if ((now - _lastEncodeTicks) < frameInterval)
             return;
         _lastEncodeTicks = now;
+        _lastSrcTexture = srcTexture;
 
         try
         {
@@ -480,6 +487,52 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         catch (Exception ex)
         {
             Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
+        }
+    }
+
+    private void KeepAliveLoop()
+    {
+        long freq = System.Diagnostics.Stopwatch.Frequency;
+        int sleepMs = (int)(1000 / _fps);
+
+        while (!_disposed)
+        {
+            Thread.Sleep(sleepMs);
+            if (_disposed) break;
+
+            IntPtr tex = _lastSrcTexture;
+            if (tex == IntPtr.Zero) continue;
+
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            long elapsed = now - Interlocked.Read(ref _lastEncodeTicks);
+            long frameInterval = freq / _fps;
+
+            // Only re-encode if no new frame arrived within 2 frame intervals
+            if (elapsed < frameInterval * 2) continue;
+
+            var ctxLock = _d3dContextLock;
+            if (ctxLock == null) continue;
+
+            bool gotLock = false;
+            try
+            {
+                gotLock = Monitor.TryEnter(ctxLock, sleepMs);
+                if (!gotLock || _disposed) continue;
+
+                tex = _lastSrcTexture;
+                if (tex == IntPtr.Zero) continue;
+
+                _lastEncodeTicks = now;
+                EncodeFrameInternalLocked(tex, _width, _height);
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[FfmpegEnc:{_streamId}] KeepAlive error: {ex.Message}");
+            }
+            finally
+            {
+                if (gotLock) Monitor.Exit(ctxLock);
+            }
         }
     }
 
@@ -806,6 +859,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === START ===");
         _initialized = false;
         _disposed = true;
+        _lastSrcTexture = IntPtr.Zero;
+        // No join on _keepAliveThread — it shares _d3dContextLock with dispose,
+        // so joining would deadlock if it's mid-encode. Instead, _disposed + zeroed
+        // _lastSrcTexture guarantee it exits safely: it re-checks both under the lock
+        // before touching any resources, and the lock serializes with dispose below.
 
         var ctxLock = _d3dContextLock;
         bool gotLock = false;
