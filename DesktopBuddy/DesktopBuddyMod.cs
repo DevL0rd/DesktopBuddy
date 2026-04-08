@@ -1898,8 +1898,7 @@ public class DesktopBuddyMod : ResoniteMod
 
     private static void OnTunnelError(string data)
     {
-        // Track consecutive "canceled by remote" errors — cloudflare dropping connections
-        if (data.Contains("canceled by remote"))
+        if (data.Contains("canceled by remote") || data.Contains("context canceled"))
         {
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
             long elapsed = (now - _lastTunnelErrorTick) * 1000 / System.Diagnostics.Stopwatch.Frequency;
@@ -1967,9 +1966,7 @@ public class DesktopBuddyMod : ResoniteMod
             var psi = new ProcessStartInfo
             {
                 FileName = _cfPath,
-                // Force HTTP/2 instead of QUIC — avoids QUIC stream cancellation bug
-                // (cloudflare/cloudflared#1105, #1519) that kills long-lived video streams.
-                Arguments = $"tunnel --config NUL --protocol http2 --url http://localhost:{STREAM_PORT}",
+                Arguments = $"tunnel --config NUL --url http://localhost:{STREAM_PORT}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
