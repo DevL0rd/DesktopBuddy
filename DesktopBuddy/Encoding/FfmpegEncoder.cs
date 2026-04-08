@@ -49,7 +49,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private IntPtr _deviceContext;
     private object _d3dContextLock;
     private long _lastEncodeTicks;
-    private IntPtr _lastSrcTexture;
     private Thread _keepAliveThread;
 
     private bool _needsVideoProcessor;
@@ -66,6 +65,17 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
+
+    /// <summary>
+    /// Stops the keepalive thread and prevents further encoding.
+    /// Must be called before the source texture (owned by WgcCapture) is freed.
+    /// Dispose handles FFmpeg resource cleanup separately.
+    /// </summary>
+    public void Stop()
+    {
+        _disposed = true;
+        _initialized = false;
+    }
 
     private static bool _ffmpegPathSet;
     private static readonly object _ffmpegInitLock = new();
@@ -478,7 +488,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         if ((now - _lastEncodeTicks) < frameInterval)
             return;
         _lastEncodeTicks = now;
-        _lastSrcTexture = srcTexture;
 
         try
         {
@@ -490,49 +499,53 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         }
     }
 
+    // MPEG-TS null packet (PID 0x1FFF) — valid padding that VLC ignores.
+    // Keeps the HTTP stream alive so cloudflare doesn't timeout the connection.
+    private static readonly byte[] TsNullPacket = CreateTsNullPacket();
+
+    private static byte[] CreateTsNullPacket()
+    {
+        var pkt = new byte[188];
+        pkt[0] = 0x47;          // sync byte
+        pkt[1] = 0x1F;          // PID 0x1FFF (null packet) high bits
+        pkt[2] = 0xFF;          // PID low bits
+        pkt[3] = 0x10;          // adaptation field control = payload only
+        for (int i = 4; i < 188; i++) pkt[i] = 0xFF; // stuff bytes
+        return pkt;
+    }
+
     private void KeepAliveLoop()
     {
-        long freq = System.Diagnostics.Stopwatch.Frequency;
-        int sleepMs = (int)(1000 / _fps);
+        // Send MPEG-TS null packets when the encoder is idle to keep
+        // the HTTP connection alive. No D3D11 access, no texture pointers.
+        int sleepMs = 1000; // 1 second between keepalives
 
         while (!_disposed)
         {
             Thread.Sleep(sleepMs);
             if (_disposed) break;
-
-            IntPtr tex = _lastSrcTexture;
-            if (tex == IntPtr.Zero) continue;
+            if (_totalFrames == 0) continue; // not encoding yet
 
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
             long elapsed = now - Interlocked.Read(ref _lastEncodeTicks);
-            long frameInterval = freq / _fps;
 
-            // Only re-encode if no new frame arrived within 2 frame intervals
-            if (elapsed < frameInterval * 2) continue;
+            // Only send keepalive if no frame was encoded in the last 2 seconds
+            if (elapsed < System.Diagnostics.Stopwatch.Frequency * 2) continue;
 
-            var ctxLock = _d3dContextLock;
-            if (ctxLock == null) continue;
-
-            bool gotLock = false;
-            try
+            lock (_ringLock)
             {
-                gotLock = Monitor.TryEnter(ctxLock, sleepMs);
-                if (!gotLock || _disposed) continue;
+                if (_disposed) break;
+                int pos = (int)(_ringWritePos % RING_SIZE);
+                int len = TsNullPacket.Length;
+                int first = Math.Min(len, RING_SIZE - pos);
+                Buffer.BlockCopy(TsNullPacket, 0, _ringBuffer, pos, first);
+                if (first < len)
+                    Buffer.BlockCopy(TsNullPacket, first, _ringBuffer, 0, len - first);
+                _ringWritePos += len;
+            }
 
-                tex = _lastSrcTexture;
-                if (tex == IntPtr.Zero) continue;
-
-                _lastEncodeTicks = now;
-                EncodeFrameInternalLocked(tex, _width, _height);
-            }
-            catch (Exception ex)
-            {
-                Log.Msg($"[FfmpegEnc:{_streamId}] KeepAlive error: {ex.Message}");
-            }
-            finally
-            {
-                if (gotLock) Monitor.Exit(ctxLock);
-            }
+            if (_dataAvailable.CurrentCount == 0)
+                try { _dataAvailable.Release(); } catch { }
         }
     }
 
@@ -859,11 +872,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === START ===");
         _initialized = false;
         _disposed = true;
-        _lastSrcTexture = IntPtr.Zero;
-        // No join on _keepAliveThread — it shares _d3dContextLock with dispose,
-        // so joining would deadlock if it's mid-encode. Instead, _disposed + zeroed
-        // _lastSrcTexture guarantee it exits safely: it re-checks both under the lock
-        // before touching any resources, and the lock serializes with dispose below.
 
         var ctxLock = _d3dContextLock;
         bool gotLock = false;

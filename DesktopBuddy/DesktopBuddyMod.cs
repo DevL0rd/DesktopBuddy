@@ -1405,6 +1405,18 @@ public class DesktopBuddyMod : ResoniteMod
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
 
+        // Stop the encoder's keepalive thread BEFORE flushing or disposing.
+        // The keepalive holds a raw pointer to WgcCapture's encode texture —
+        // if we flush/free first, the keepalive could use a dangling pointer.
+        if (session.StreamId > 0)
+        {
+            lock (_sharedStreams)
+            {
+                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) && shared.Encoder != null)
+                    shared.Encoder.Stop();
+            }
+        }
+
         // Flush the capture's D3D context so the AMD driver has no pending work
         // referencing shared device state before the encoder releases its resources.
         streamer?.FlushD3dContext();
@@ -1498,6 +1510,15 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
+        // Stop keepalive immediately so it doesn't touch WgcCapture's texture
+        if (session.StreamId > 0)
+        {
+            lock (_sharedStreams)
+            {
+                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) && shared.Encoder != null)
+                    shared.Encoder.Stop();
+            }
+        }
         int streamId = session.StreamId;
         IntPtr hwnd = session.Hwnd;
         session.Streamer = null;
