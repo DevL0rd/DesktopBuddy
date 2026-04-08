@@ -26,7 +26,6 @@ internal sealed class VirtualCamera : IDisposable
 
         try
         {
-            // fps=0 means variable rate — we push frames as they arrive, no internal sleep
             _camera = SoftCamInterop.scCreateCamera(width, height, fps);
             if (_camera == IntPtr.Zero)
             {
@@ -47,14 +46,17 @@ internal sealed class VirtualCamera : IDisposable
         }
     }
 
-    internal void SendFrame(byte[] pixelData, int srcWidth, int srcHeight, TextureFormat format = TextureFormat.RGBA32)
+    /// <summary>
+    /// Sends a frame to the virtual camera. Accepts a Span directly from Bitmap2D.RawData
+    /// to avoid an intermediate array copy. Converts to BGR24 in-place using unsafe pointers.
+    /// </summary>
+    internal void SendFrame(Span<byte> pixelData, int srcWidth, int srcHeight, TextureFormat format)
     {
-        if (_disposed || pixelData == null) return;
+        if (_disposed || pixelData.Length == 0) return;
 
         int targetW = srcWidth & ~3;
         int targetH = srcHeight & ~3;
 
-        // Auto-start on first frame, or restart if size changed
         if (_camera == IntPtr.Zero || targetW != _width || targetH != _height)
         {
             if (_camera != IntPtr.Zero)
@@ -63,7 +65,14 @@ internal sealed class VirtualCamera : IDisposable
             if (!Start(targetW, targetH)) return;
         }
 
-        ConvertToBgr24(pixelData, srcWidth, srcHeight, format);
+        unsafe
+        {
+            fixed (byte* srcPtr = pixelData)
+            fixed (byte* dstPtr = _bgrBuffer)
+            {
+                ConvertToBgr24(srcPtr, dstPtr, srcWidth, srcHeight, format);
+            }
+        }
 
         try
         {
@@ -75,55 +84,50 @@ internal sealed class VirtualCamera : IDisposable
         }
     }
 
-    /// <summary>
-    /// Convert pixel data to BGR24 top-down for SoftCam.
-    /// Handles RGBA32, BGRA32, and RGB24 source formats.
-    /// </summary>
-    private void ConvertToBgr24(byte[] src, int w, int h, TextureFormat format)
+    private unsafe void ConvertToBgr24(byte* src, byte* dst, int w, int h, TextureFormat format)
     {
         int dstW = _width;
         int dstH = _height;
         int dstStride = dstW * 3;
-
         int bpp = format == TextureFormat.RGB24 ? 3 : 4;
         int srcStride = w * bpp;
 
-        // Flip vertically — RenderToBitmap produces top-down but SoftCam needs bottom-up from sender
         for (int y = 0; y < dstH; y++)
         {
-            int srcRow = (dstH - 1 - y) * srcStride;
-            int dstRow = y * dstStride;
-            for (int x = 0; x < dstW; x++)
-            {
-                int si = srcRow + x * bpp;
-                int di = dstRow + x * 3;
+            byte* srcRow = src + (dstH - 1 - y) * srcStride;
+            byte* dstRow = dst + y * dstStride;
 
-                switch (format)
+            if (format == TextureFormat.ARGB32)
+            {
+                for (int x = 0; x < dstW; x++)
                 {
-                    case TextureFormat.ARGB32:
-                        // src: A R G B → dst: B G R
-                        _bgrBuffer[di] = src[si + 3];     // B
-                        _bgrBuffer[di + 1] = src[si + 2]; // G
-                        _bgrBuffer[di + 2] = src[si + 1]; // R
-                        break;
-                    case TextureFormat.BGRA32:
-                        // src: B G R A → dst: B G R
-                        _bgrBuffer[di] = src[si];
-                        _bgrBuffer[di + 1] = src[si + 1];
-                        _bgrBuffer[di + 2] = src[si + 2];
-                        break;
-                    case TextureFormat.RGB24:
-                        // src: R G B → dst: B G R
-                        _bgrBuffer[di] = src[si + 2];
-                        _bgrBuffer[di + 1] = src[si + 1];
-                        _bgrBuffer[di + 2] = src[si];
-                        break;
-                    default: // RGBA32 and others
-                        // src: R G B A → dst: B G R
-                        _bgrBuffer[di] = src[si + 2];
-                        _bgrBuffer[di + 1] = src[si + 1];
-                        _bgrBuffer[di + 2] = src[si];
-                        break;
+                    byte* s = srcRow + x * 4;
+                    byte* d = dstRow + x * 3;
+                    d[0] = s[3]; // B
+                    d[1] = s[2]; // G
+                    d[2] = s[1]; // R
+                }
+            }
+            else if (format == TextureFormat.BGRA32)
+            {
+                for (int x = 0; x < dstW; x++)
+                {
+                    byte* s = srcRow + x * 4;
+                    byte* d = dstRow + x * 3;
+                    d[0] = s[0]; // B
+                    d[1] = s[1]; // G
+                    d[2] = s[2]; // R
+                }
+            }
+            else // RGBA32 and others
+            {
+                for (int x = 0; x < dstW; x++)
+                {
+                    byte* s = srcRow + x * bpp;
+                    byte* d = dstRow + x * 3;
+                    d[0] = s[2]; // B
+                    d[1] = s[1]; // G
+                    d[2] = s[0]; // R
                 }
             }
         }
