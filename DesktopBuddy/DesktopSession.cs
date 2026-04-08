@@ -42,6 +42,10 @@ public class DesktopSession
     public BoxCollider Collider;
 
     public VideoTextureProvider VideoTexture;
+    public bool FeedsVirtualCamera;
+    public Slot VCamSlot;
+    public Camera VCamCamera;
+    public bool VCamRenderPending;
 
     public Action<int, int> OnResize;
 }

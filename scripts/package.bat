@@ -17,6 +17,7 @@ REM Stage files
 mkdir "%STAGING%\rml_mods" 2>nul
 mkdir "%STAGING%\ffmpeg" 2>nul
 mkdir "%STAGING%\cloudflared" 2>nul
+mkdir "%STAGING%\softcam" 2>nul
 
 copy "%BUILD_DIR%\DesktopBuddy.dll" "%STAGING%\rml_mods\" >nul
 echo   rml_mods\DesktopBuddy.dll
@@ -24,6 +25,11 @@ echo   rml_mods\DesktopBuddy.dll
 for %%f in ("%ROOT_DIR%\ffmpeg\*.dll") do (
     copy "%%f" "%STAGING%\ffmpeg\" >nul
     echo   ffmpeg\%%~nxf
+)
+
+for %%f in ("%ROOT_DIR%\softcam\*.dll") do (
+    copy "%%f" "%STAGING%\softcam\" >nul
+    echo   softcam\%%~nxf
 )
 
 copy "%ROOT_DIR%\cloudflared\cloudflared.exe" "%STAGING%\cloudflared\" >nul

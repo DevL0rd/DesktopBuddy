@@ -49,6 +49,7 @@ public class DesktopBuddyMod : ResoniteMod
     }
 
     internal static MjpegServer? StreamServer;
+    internal static VirtualCamera VCam;
     private const int STREAM_PORT = 48080;
     // Always use the tunnel URL, never fall back to localhost — even for local testing,
     // the stream must go through cloudflare so we catch tunnel issues during development.
@@ -105,6 +106,30 @@ public class DesktopBuddyMod : ResoniteMod
         }
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) => KillTunnel();
+
+        // Virtual camera setup — register DirectShow filter on first run
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                if (SoftCamInterop.FindDll() == null)
+                {
+                    Msg("[VirtualCamera] softcam64.dll not found, virtual camera unavailable");
+                    return;
+                }
+                if (!SoftCamSetup.IsRegistered())
+                {
+                    Msg("[VirtualCamera] Registering DirectShow filter (one-time setup)...");
+                    SoftCamSetup.Register();
+                }
+                else
+                {
+                    Msg("[VirtualCamera] DirectShow filter already registered");
+                }
+                VCam = new VirtualCamera();
+            }
+            catch (Exception ex) { Msg($"[VirtualCamera] Setup error: {ex.Message}"); }
+        });
 
         Msg("DesktopBuddy initialized!");
     }
@@ -824,6 +849,60 @@ public class DesktopBuddyMod : ResoniteMod
             if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
+        // Virtual camera — flat clickable panel above the desktop, click to toggle recording
+        {
+            var camSlot = root.AddSlot("VirtualCamera");
+            camSlot.LocalPosition = new float3(0f, worldHalfH + 0.02f, -0.001f);
+            camSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
+            camSlot.LocalScale = float3.One;
+
+            // Flat quad visual with button
+            var camVisual = camSlot.AddSlot("Visual");
+            camVisual.LocalScale = new float3(0.04f, 0.02f, 0.001f);
+            var meshRenderer = camVisual.AttachComponent<MeshRenderer>();
+            meshRenderer.Mesh.Target = camVisual.AttachComponent<BoxMesh>();
+            var camMat = camVisual.AttachComponent<PBS_Metallic>();
+            camMat.AlbedoColor.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
+            meshRenderer.Materials.Add(camMat);
+
+            // Collider + PhysicalButton for 3D clicking (Button is UIX-only)
+            var camCollider = camVisual.AttachComponent<BoxCollider>();
+            camCollider.Size.Value = float3.One;
+
+            var camButton = camVisual.AttachComponent<PhysicalButton>();
+            camButton.LocalPressed += (IButton b, ButtonEventData d) =>
+            {
+                Msg("[VirtualCamera] Camera clicked");
+                if (VCam == null) { Msg("[VirtualCamera] Not available"); return; }
+
+                if (session.FeedsVirtualCamera)
+                {
+                    session.FeedsVirtualCamera = false;
+                    VCam.Stop();
+                    camMat.AlbedoColor.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
+                    Msg("[VirtualCamera] Stopped");
+                }
+                else
+                {
+                    foreach (var s in ActiveSessions)
+                        s.FeedsVirtualCamera = false;
+                    session.FeedsVirtualCamera = true;
+                    camMat.AlbedoColor.Value = new colorX(0.8f, 0.1f, 0.1f, 1f);
+                    Msg($"[VirtualCamera] Recording from hwnd={session.Hwnd}");
+                }
+            };
+
+            var cam = camSlot.AttachComponent<Camera>();
+            cam.FieldOfView.Value = 90f;
+            cam.NearClipping.Value = 0.05f;
+            cam.FarClipping.Value = 1000f;
+            cam.Clear.Value = Renderite.Shared.CameraClearMode.Color;
+            cam.ClearColor.Value = new colorX(0.1f, 0.1f, 0.1f, 1f);
+
+            session.VCamSlot = camSlot;
+            session.VCamCamera = cam;
+        }
+
         pasteBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Paste] Button pressed");
@@ -1458,6 +1537,12 @@ public class DesktopBuddyMod : ResoniteMod
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
 
+        if (session.FeedsVirtualCamera)
+        {
+            session.FeedsVirtualCamera = false;
+            VCam?.Stop();
+        }
+
         if (session.ChildSessions.Count > 0)
         {
             Msg($"[Cleanup] Destroying {session.ChildSessions.Count} child popup panels");
@@ -1858,6 +1943,28 @@ public class DesktopBuddyMod : ResoniteMod
 
                 using (Perf.Time("texture_upload"))
                     _setFromBitmap?.Invoke(session.Texture, default, null);
+
+                if (session.FeedsVirtualCamera && VCam != null &&
+                    session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
+                    !session.VCamRenderPending)
+                {
+                    session.VCamRenderPending = true;
+                    var vcam = session.VCamCamera;
+                    var vcamRef = VCam;
+                    vcam.RenderToBitmap(new int2(1280, 720)).ContinueWith(task =>
+                    {
+                        session.VCamRenderPending = false;
+                        if (task.IsFaulted || task.Result == null) return;
+                        var bmp = task.Result;
+                        if (bmp.RawData.Length == 0) return;
+                        if (vcamRef._logNextFrame)
+                        {
+                            vcamRef._logNextFrame = false;
+                            Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
+                        }
+                        vcamRef.SendFrame(bmp.RawData.ToArray(), bmp.Size.x, bmp.Size.y, bmp.Format);
+                    });
+                }
 
                 Perf.IncrementFrames();
             }

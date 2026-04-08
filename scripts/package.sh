@@ -12,7 +12,7 @@ if [ ! -f "$BUILD_DIR/DesktopBuddy.dll" ]; then
 fi
 
 # Stage files
-mkdir -p "$STAGING/rml_mods" "$STAGING/ffmpeg" "$STAGING/cloudflared"
+mkdir -p "$STAGING/rml_mods" "$STAGING/ffmpeg" "$STAGING/cloudflared" "$STAGING/softcam"
 
 cp "$BUILD_DIR/DesktopBuddy.dll" "$STAGING/rml_mods/"
 echo "  rml_mods/DesktopBuddy.dll"
@@ -20,6 +20,11 @@ echo "  rml_mods/DesktopBuddy.dll"
 for dll in "$ROOT_DIR"/ffmpeg/*.dll; do
     cp "$dll" "$STAGING/ffmpeg/"
     echo "  ffmpeg/$(basename "$dll")"
+done
+
+for dll in "$ROOT_DIR"/softcam/*.dll; do
+    cp "$dll" "$STAGING/softcam/"
+    echo "  softcam/$(basename "$dll")"
 done
 
 cp "$ROOT_DIR/cloudflared/cloudflared.exe" "$STAGING/cloudflared/"

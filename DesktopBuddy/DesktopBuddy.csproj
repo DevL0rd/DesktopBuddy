@@ -87,9 +87,11 @@
   <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
       <FfmpegDlls Include="$(MSBuildThisFileDirectory)..\ffmpeg\*.dll" />
+      <SoftcamDlls Include="$(MSBuildThisFileDirectory)..\softcam\*.dll" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
     <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
+    <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" />
   </Target>
 
