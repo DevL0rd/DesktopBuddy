@@ -18,6 +18,7 @@ mkdir "%STAGING%\rml_mods" 2>nul
 mkdir "%STAGING%\ffmpeg" 2>nul
 mkdir "%STAGING%\cloudflared" 2>nul
 mkdir "%STAGING%\softcam" 2>nul
+mkdir "%STAGING%\vbcable" 2>nul
 
 copy "%BUILD_DIR%\DesktopBuddy.dll" "%STAGING%\rml_mods\" >nul
 echo   rml_mods\DesktopBuddy.dll
@@ -30,6 +31,11 @@ for %%f in ("%ROOT_DIR%\ffmpeg\*.dll") do (
 for %%f in ("%ROOT_DIR%\softcam\*.dll") do (
     copy "%%f" "%STAGING%\softcam\" >nul
     echo   softcam\%%~nxf
+)
+
+for %%f in ("%ROOT_DIR%\vbcable\*") do (
+    copy "%%f" "%STAGING%\vbcable\" >nul
+    echo   vbcable\%%~nxf
 )
 
 copy "%ROOT_DIR%\cloudflared\cloudflared.exe" "%STAGING%\cloudflared\" >nul

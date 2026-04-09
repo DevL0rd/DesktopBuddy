@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Renderite.Shared;
 
 namespace DesktopBuddy;
@@ -11,58 +12,87 @@ internal sealed class VirtualCamera : IDisposable
     private byte[] _bgrBuffer;
     private GCHandle _pinnedBgr;
     private volatile bool _disposed;
+    private Thread _connectionThread;
     internal bool _logNextFrame = true;
+
+    // Default idle resolution — consumers see this until a real frame arrives
+    private const int IdleWidth = 1280;
+    private const int IdleHeight = 720;
+
+    /// <summary>True when a consumer app (Discord, Chrome, etc.) is reading from the camera.</summary>
+    internal bool ConsumerConnected { get; private set; }
+
+    /// <summary>Set to true by external code when rendering is active. Set to false to disable.</summary>
+    internal volatile bool ManuallyDisabled;
 
     internal bool IsActive => _camera != IntPtr.Zero;
 
-    internal bool Start(int width, int height, float fps = 0f)
+    /// <summary>
+    /// Creates the SoftCam instance at idle resolution so consumers can discover and connect.
+    /// Call once at startup. Frames are only rendered when a consumer connects.
+    /// </summary>
+    internal bool StartIdle()
     {
-        if (_camera != IntPtr.Zero) Stop();
-
-        // SoftCam requires both dimensions to be multiples of 4
-        width = width & ~3;
-        height = height & ~3;
-        if (width < 4 || height < 4) return false;
+        if (_camera != IntPtr.Zero) return true;
 
         try
         {
-            _camera = SoftCamInterop.scCreateCamera(width, height, fps);
+            _camera = SoftCamInterop.scCreateCamera(IdleWidth, IdleHeight, 0f);
             if (_camera == IntPtr.Zero)
             {
                 Log.Msg("[VirtualCamera] scCreateCamera returned null (another instance running?)");
                 return false;
             }
-            _width = width;
-            _height = height;
-            AllocBuffer(width, height);
-            _logNextFrame = true;
-            Log.Msg($"[VirtualCamera] Started: {width}x{height}");
+            _width = IdleWidth;
+            _height = IdleHeight;
+            AllocBuffer(IdleWidth, IdleHeight);
+            Log.Msg($"[VirtualCamera] Idle camera created: {IdleWidth}x{IdleHeight}");
+
+            _connectionThread = new Thread(ConnectionPollLoop) { Name = "VirtualCamera:Poll", IsBackground = true };
+            _connectionThread.Start();
             return true;
         }
         catch (Exception ex)
         {
-            Log.Msg($"[VirtualCamera] Start failed: {ex.Message}");
+            Log.Msg($"[VirtualCamera] StartIdle failed: {ex.Message}");
             return false;
         }
     }
 
-    /// <summary>
-    /// Sends a frame to the virtual camera. Accepts a Span directly from Bitmap2D.RawData
-    /// to avoid an intermediate array copy. Converts to BGR24 in-place using unsafe pointers.
-    /// </summary>
+    private void ConnectionPollLoop()
+    {
+        while (!_disposed)
+        {
+            Thread.Sleep(500);
+            if (_disposed || _camera == IntPtr.Zero) break;
+
+            try
+            {
+                ConsumerConnected = SoftCamInterop.scIsConnected(_camera);
+            }
+            catch { ConsumerConnected = false; }
+        }
+    }
+
     internal void SendFrame(Span<byte> pixelData, int srcWidth, int srcHeight, TextureFormat format)
     {
-        if (_disposed || pixelData.Length == 0) return;
+        if (_disposed || pixelData.Length == 0 || _camera == IntPtr.Zero) return;
 
         int targetW = srcWidth & ~3;
         int targetH = srcHeight & ~3;
+        if (targetW < 4 || targetH < 4) return;
 
-        if (_camera == IntPtr.Zero || targetW != _width || targetH != _height)
+        // Resize if needed — recreates the SoftCam instance
+        if (targetW != _width || targetH != _height)
         {
-            if (_camera != IntPtr.Zero)
-                Log.Msg($"[VirtualCamera] Resize {_width}x{_height} -> {targetW}x{targetH}");
-            Stop();
-            if (!Start(targetW, targetH)) return;
+            Log.Msg($"[VirtualCamera] Resize {_width}x{_height} -> {targetW}x{targetH}");
+            SoftCamInterop.scDeleteCamera(_camera);
+            _camera = SoftCamInterop.scCreateCamera(targetW, targetH, 0f);
+            if (_camera == IntPtr.Zero) { Log.Msg("[VirtualCamera] Resize failed"); return; }
+            _width = targetW;
+            _height = targetH;
+            AllocBuffer(targetW, targetH);
+            _logNextFrame = true;
         }
 
         unsafe
@@ -142,21 +172,24 @@ internal sealed class VirtualCamera : IDisposable
 
     internal void Stop()
     {
-        if (_camera != IntPtr.Zero)
-        {
-            try { SoftCamInterop.scDeleteCamera(_camera); }
-            catch (Exception ex) { Log.Msg($"[VirtualCamera] scDeleteCamera error: {ex.Message}"); }
-            _camera = IntPtr.Zero;
-            Log.Msg("[VirtualCamera] Stopped");
-        }
+        // Stop only means "stop rendering" — keep the SoftCam instance alive
+        // so consumers stay connected. Just set ManuallyDisabled.
+        ManuallyDisabled = true;
+        Log.Msg("[VirtualCamera] Rendering disabled");
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
+        if (_camera != IntPtr.Zero)
+        {
+            try { SoftCamInterop.scDeleteCamera(_camera); }
+            catch (Exception ex) { Log.Msg($"[VirtualCamera] scDeleteCamera error: {ex.Message}"); }
+            _camera = IntPtr.Zero;
+        }
         if (_pinnedBgr.IsAllocated) _pinnedBgr.Free();
         _bgrBuffer = null;
+        Log.Msg("[VirtualCamera] Disposed");
     }
 }

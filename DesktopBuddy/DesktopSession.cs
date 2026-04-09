@@ -46,6 +46,14 @@ public class DesktopSession
     public Slot VCamSlot;
     public Camera VCamCamera;
     public bool VCamRenderPending;
+    public UI_UnlitMaterial VCamIndicator;
+    public bool VCamLastLitState;
+    public AudioListener VMicListener;
+    public UI_UnlitMaterial VMicIndicator;
+    public bool VMicMuted;
+    public DesktopAudioSource SpatialAudioSource;
+    public AudioOutput SpatialAudioOutput;
+    public bool OwnsAudioRedirect;
 
     public Action<int, int> OnResize;
 }

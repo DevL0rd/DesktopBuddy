@@ -32,6 +32,10 @@ public class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<bool> ImmediateGC =
         new("immediate_gc", "Force garbage collection on dispose", () => false);
 
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
+        new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => true);
+
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
 
@@ -50,6 +54,8 @@ public class DesktopBuddyMod : ResoniteMod
 
     internal static MjpegServer? StreamServer;
     internal static VirtualCamera VCam;
+    internal static VirtualMic VMic;
+    private static bool _firstRunSetupDone;
     private const int STREAM_PORT = 48080;
     // Always use the tunnel URL, never fall back to localhost — even for local testing,
     // the stream must go through cloudflare so we catch tunnel issues during development.
@@ -105,30 +111,77 @@ public class DesktopBuddyMod : ResoniteMod
             System.Threading.Tasks.Task.Run(() => StartTunnel());
         }
 
-        AppDomain.CurrentDomain.ProcessExit += (s, e) => KillTunnel();
+        AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+        {
+            // Restore all redirected processes to default audio device
+            var resetPids = new HashSet<uint>();
+            foreach (var session in ActiveSessions)
+            {
+                if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
+                    AudioRouter.ResetProcessToDefault(session.ProcessId);
+            }
+            KillTunnel();
+        };
 
-        // Virtual camera setup — register DirectShow filter on first run
+        // Virtual devices setup — register camera filter and install VB-Cable on first run
         System.Threading.Tasks.Task.Run(() =>
         {
+            bool needsRestart = false;
             try
             {
-                if (SoftCamInterop.FindDll() == null)
+                // Virtual camera (SoftCam DirectShow filter)
+                if (SoftCamInterop.FindDll() != null)
                 {
-                    Msg("[VirtualCamera] softcam64.dll not found, virtual camera unavailable");
-                    return;
-                }
-                if (!SoftCamSetup.IsRegistered())
-                {
-                    Msg("[VirtualCamera] Registering DirectShow filter (one-time setup)...");
-                    SoftCamSetup.Register();
+                    if (!SoftCamSetup.IsRegistered())
+                    {
+                        Msg("[VirtualCamera] Registering DirectShow filter (one-time setup)...");
+                        SoftCamSetup.Register();
+                        needsRestart = true;
+                    }
+                    else
+                    {
+                        Msg("[VirtualCamera] DirectShow filter already registered");
+                    }
+                    VCam = new VirtualCamera();
+                    VCam.StartIdle();
                 }
                 else
                 {
-                    Msg("[VirtualCamera] DirectShow filter already registered");
+                    Msg("[VirtualCamera] softcam64.dll not found, virtual camera unavailable");
                 }
-                VCam = new VirtualCamera();
             }
             catch (Exception ex) { Msg($"[VirtualCamera] Setup error: {ex.Message}"); }
+
+            try
+            {
+                // Virtual microphone (VB-Cable)
+                if (!VBCableSetup.IsInstalled())
+                {
+                    if (VBCableSetup.FindInstaller() != null)
+                    {
+                        Msg("[VirtualMic] Installing VB-Cable (one-time setup)...");
+                        VBCableSetup.Install();
+                        VBCableSetup.DisableCableLoopback();
+                        needsRestart = true;
+                    }
+                    else
+                    {
+                        Msg("[VirtualMic] VB-Cable installer not found, virtual mic unavailable");
+                    }
+                }
+                else
+                {
+                    Msg("[VirtualMic] VB-Cable already installed");
+                    VBCableSetup.DisableCableLoopback();
+                }
+            }
+            catch (Exception ex) { Msg($"[VirtualMic] Setup error: {ex.Message}"); }
+
+            if (needsRestart && !_firstRunSetupDone)
+            {
+                _firstRunSetupDone = true;
+                Msg("[Setup] First-time setup complete. A PC restart is recommended for all virtual device features to work correctly.");
+            }
         });
 
         Msg("DesktopBuddy initialized!");
@@ -669,26 +722,13 @@ public class DesktopBuddyMod : ResoniteMod
         var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
         var volSliderOverride = volSlider.Slot.AttachComponent<ValueUserOverride<float>>();
         volSliderOverride.Target.Target = volSlider.Value;
-        volSliderOverride.Default.Value = 0f;
+        volSliderOverride.Default.Value = 1f;
         volSliderOverride.CreateOverrideOnWrite.Value = true;
-
-        var winVolRow = ep.Empty("WinVol");
-        var winVolUi = new UIBuilder(winVolRow);
-        winVolUi.Style.FlexibleWidth = 1f;
-        winVolUi.Style.FlexibleHeight = 1f;
-        var winVolSlider = winVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
 
         var streamVolVis = streamVolRow.AttachComponent<ValueUserOverride<bool>>();
         streamVolVis.Target.Target = streamVolRow.ActiveSelf_Field;
         streamVolVis.Default.Value = true;
         streamVolVis.CreateOverrideOnWrite.Value = false;
-        streamVolVis.SetOverride(root.World.LocalUser, false);
-
-        var winVolVis = winVolRow.AttachComponent<ValueUserOverride<bool>>();
-        winVolVis.Target.Target = winVolRow.ActiveSelf_Field;
-        winVolVis.Default.Value = false;
-        winVolVis.CreateOverrideOnWrite.Value = false;
-        winVolVis.SetOverride(root.World.LocalUser, true);
 
         var widthField = barSlot.AttachComponent<ValueField<float>>();
         widthField.Value.Value = barCollapsedW;
@@ -792,7 +832,7 @@ public class DesktopBuddyMod : ResoniteMod
                 var displayVisComp = displaySlot.GetComponent<ValueUserOverride<bool>>();
                 if (displayVisComp != null)
                     displayVisComp.SetOverride(root.World.LocalUser, !streamTestMode);
-                volSliderOverride.SetOverride(root.World.LocalUser, streamTestMode ? 1f : 0f);
+                // Don't change volume when toggling test mode — slider controls spatial audio for local user
                 var img = testStreamBtn.Slot.GetComponent<Image>();
                 if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
@@ -849,7 +889,8 @@ public class DesktopBuddyMod : ResoniteMod
             if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
-        // Virtual camera — flat clickable panel above the desktop, click to toggle recording
+        // Virtual camera, mic indicator, and spatial audio — parent sessions only
+        if (!isChild)
         {
             var camSlot = root.AddSlot("VirtualCamera");
             camSlot.LocalPosition = new float3(0f, worldHalfH + 0.02f, -0.001f);
@@ -861,8 +902,8 @@ public class DesktopBuddyMod : ResoniteMod
             camVisual.LocalScale = new float3(0.04f, 0.02f, 0.001f);
             var meshRenderer = camVisual.AttachComponent<MeshRenderer>();
             meshRenderer.Mesh.Target = camVisual.AttachComponent<BoxMesh>();
-            var camMat = camVisual.AttachComponent<PBS_Metallic>();
-            camMat.AlbedoColor.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
+            var camMat = camVisual.AttachComponent<UI_UnlitMaterial>();
+            camMat.Tint.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
             meshRenderer.Materials.Add(camMat);
 
             // Collider + PhysicalButton for 3D clicking (Button is UIX-only)
@@ -872,24 +913,10 @@ public class DesktopBuddyMod : ResoniteMod
             var camButton = camVisual.AttachComponent<PhysicalButton>();
             camButton.LocalPressed += (IButton b, ButtonEventData d) =>
             {
-                Msg("[VirtualCamera] Camera clicked");
                 if (VCam == null) { Msg("[VirtualCamera] Not available"); return; }
 
-                if (session.FeedsVirtualCamera)
-                {
-                    session.FeedsVirtualCamera = false;
-                    VCam.Stop();
-                    camMat.AlbedoColor.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
-                    Msg("[VirtualCamera] Stopped");
-                }
-                else
-                {
-                    foreach (var s in ActiveSessions)
-                        s.FeedsVirtualCamera = false;
-                    session.FeedsVirtualCamera = true;
-                    camMat.AlbedoColor.Value = new colorX(0.8f, 0.1f, 0.1f, 1f);
-                    Msg($"[VirtualCamera] Recording from hwnd={session.Hwnd}");
-                }
+                VCam.ManuallyDisabled = !VCam.ManuallyDisabled;
+                Msg($"[VirtualCamera] {(VCam.ManuallyDisabled ? "Disabled" : "Enabled")}");
             };
 
             var cam = camSlot.AttachComponent<Camera>();
@@ -901,7 +928,56 @@ public class DesktopBuddyMod : ResoniteMod
 
             session.VCamSlot = camSlot;
             session.VCamCamera = cam;
-        }
+            session.VCamIndicator = camMat;
+
+            bool spatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
+            if (spatialAudio)
+            {
+                // Spatial audio + mic indicator
+                var micSlot = root.AddSlot("SpatialAudio");
+                micSlot.LocalPosition = new float3(0.03f, worldHalfH + 0.02f, -0.001f);
+                micSlot.LocalRotation = floatQ.Identity;
+                micSlot.LocalScale = float3.One;
+
+                var micVisual = micSlot.AddSlot("Visual");
+                micVisual.LocalScale = new float3(0.015f, 0.02f, 0.001f);
+                var micMeshRenderer = micVisual.AttachComponent<MeshRenderer>();
+                micMeshRenderer.Mesh.Target = micVisual.AttachComponent<BoxMesh>();
+                var micMat = micVisual.AttachComponent<UI_UnlitMaterial>();
+                micMat.Tint.Value = new colorX(0.1f, 0.8f, 0.1f, 1f);
+                micMeshRenderer.Materials.Add(micMat);
+
+                var micCollider = micVisual.AttachComponent<BoxCollider>();
+                micCollider.Size.Value = float3.One;
+                session.VMicIndicator = micMat;
+
+                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
+                var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
+                session.SpatialAudioSource = audioSource;
+
+                var spatialOutput = localAudioSlot.AttachComponent<AudioOutput>();
+                spatialOutput.Source.Target = audioSource;
+                spatialOutput.Volume.Value = 1f;
+                spatialOutput.SpatialBlend.Value = 1f;
+                spatialOutput.MinDistance.Value = 0.5f;
+                spatialOutput.MaxDistance.Value = 30f;
+                spatialOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
+                session.SpatialAudioOutput = spatialOutput;
+
+                var listener = micSlot.AttachComponent<AudioListener>();
+                session.VMicListener = listener;
+
+                var micButton = micVisual.AttachComponent<PhysicalButton>();
+                micButton.LocalPressed += (IButton b, ButtonEventData d) =>
+                {
+                    session.VMicMuted = !session.VMicMuted;
+                    micMat.Tint.Value = session.VMicMuted
+                        ? new colorX(0.3f, 0.05f, 0.05f, 1f)
+                        : new colorX(0.1f, 0.8f, 0.1f, 1f);
+                    Msg($"[VirtualMic] {(session.VMicMuted ? "Muted" : "Unmuted")}");
+                };
+            }
+        } // end !isChild camera/mic/audio block
 
         pasteBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
@@ -952,16 +1028,20 @@ public class DesktopBuddyMod : ResoniteMod
         var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
         ownerRef.Reference.Target = root.World.LocalUser;
 
-        winVolSlider.Value.OnValueChange += (SyncField<float> field) =>
+        // When spatial audio is off, the volume slider controls Windows process volume directly
+        if (!(Config?.GetValue(SpatialAudioEnabled) ?? true))
         {
-            if (ownerRef.Reference.Target == root.World.LocalUser)
+            volSlider.Value.OnValueChange += (SyncField<float> field) =>
             {
-                if (isDesktopCapture)
-                    WindowVolume.SetMasterVolume(field.Value);
-                else if (capturedPid != 0)
-                    WindowVolume.SetProcessVolume(capturedPid, field.Value);
-            }
-        };
+                if (ownerRef.Reference.Target == root.World.LocalUser)
+                {
+                    if (isDesktopCapture)
+                        WindowVolume.SetMasterVolume(field.Value);
+                    else if (capturedPid != 0)
+                        WindowVolume.SetProcessVolume(capturedPid, field.Value);
+                }
+            };
+        }
 
         Canvas backCanvasRef = null;
         Canvas streamCanvasRef = null;
@@ -1127,6 +1207,11 @@ public class DesktopBuddyMod : ResoniteMod
                 session.StreamId = shared.StreamId;
                 var nvEncoder = shared.Encoder;
 
+                // Wire desktop audio to spatial audio source
+                // Wire desktop audio to spatial audio source
+                if (session.SpatialAudioSource != null && shared.Audio != null)
+                    session.SpatialAudioSource.SetAudioCapture(shared.Audio);
+
                 bool isFirstForHwnd = shared.RefCount == 1;
                 if (isFirstForHwnd)
                 {
@@ -1148,12 +1233,26 @@ public class DesktopBuddyMod : ResoniteMod
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
+                audioOutput.Volume.Value = 1f;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
+                // Local user never hears stream audio — they hear spatial audio instead
+                audioOutput.ExludeUser(root.World.LocalUser);
 
+                // Slider drives stream volume for remote users only
                 var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
                 volDriver.DriveTarget.Target = audioOutput.Volume;
                 volDriver.ValueSource.Target = volSlider.Value;
-                volSliderOverride.SetOverride(root.World.LocalUser, 0f);
+
+                // Drive spatial audio volume from slider via OnValueChange (can't use ValueDriver across local/synced boundary)
+                if (session.SpatialAudioOutput != null)
+                {
+                    var spatialOut = session.SpatialAudioOutput;
+                    volSlider.Value.OnValueChange += (SyncField<float> field) =>
+                    {
+                        if (spatialOut != null && !spatialOut.IsDestroyed)
+                            spatialOut.Volume.Value = field.Value;
+                    };
+                }
 
                 var streamSlot = root.AddSlot("RemoteStreamVisual");
                 streamSlot.LocalScale = float3.One * canvasScale;
@@ -1365,6 +1464,20 @@ public class DesktopBuddyMod : ResoniteMod
 
         if (!isChild)
             WindowInput.FocusWindow(hwnd);
+
+        // Redirect window's audio to VB-Cable (null sink) so user only hears it spatially in-game.
+        // Only when spatial audio is enabled, and only for parent sessions.
+        bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
+        if (useSpatialAudio && !isChild && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
+        {
+            string cableId = VBCableSetup.FindCableInputDeviceId();
+            if (cableId != null)
+            {
+                AudioRouter.SetProcessOutputDevice(processId, cableId);
+                session.OwnsAudioRedirect = true;
+            }
+        }
+
         Msg($"[StartStreaming] Window focused, streaming started for: {title}");
     }
 
@@ -1537,10 +1650,35 @@ public class DesktopBuddyMod : ResoniteMod
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
 
-        if (session.FeedsVirtualCamera)
+        // Dispose VMic so it can rehook to the next session's AudioListener
+        if (VMic != null && session.VMicListener != null)
         {
-            session.FeedsVirtualCamera = false;
-            VCam?.Stop();
+            Msg("[Cleanup] Disposing VMic (listener destroyed)");
+            VMic.Dispose();
+            VMic = null;
+        }
+
+        // Only restore audio routing if no other active session shares this PID
+        if (session.OwnsAudioRedirect && session.ProcessId != 0)
+        {
+            bool otherSessionUsesSamePid = false;
+            foreach (var s in ActiveSessions)
+            {
+                if (s != session && !s.Cleaned && s.ProcessId == session.ProcessId)
+                {
+                    otherSessionUsesSamePid = true;
+                    break;
+                }
+            }
+            if (!otherSessionUsesSamePid)
+            {
+                AudioRouter.ResetProcessToDefault(session.ProcessId);
+                Msg($"[Cleanup] Reset audio routing for PID {session.ProcessId}");
+            }
+            else
+            {
+                Msg($"[Cleanup] Keeping audio routing for PID {session.ProcessId} (other sessions still active)");
+            }
         }
 
         if (session.ChildSessions.Count > 0)
@@ -1944,27 +2082,104 @@ public class DesktopBuddyMod : ResoniteMod
                 using (Perf.Time("texture_upload"))
                     _setFromBitmap?.Invoke(session.Texture, default, null);
 
-                if (session.FeedsVirtualCamera && VCam != null &&
+                // Virtual camera: auto-render when a consumer is connected and not manually disabled.
+                // Only render from the first session that has a camera to avoid duplicate work.
+                if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
                     !session.VCamRenderPending)
                 {
-                    session.VCamRenderPending = true;
-                    var vcam = session.VCamCamera;
-                    var vcamRef = VCam;
-                    vcam.RenderToBitmap(new int2(1280, 720)).ContinueWith(task =>
+                    // Only let one session render — use the latest (most recently spawned) session
+                    bool isLast = true;
+                    for (int j = i + 1; j < ActiveSessions.Count; j++)
                     {
-                        session.VCamRenderPending = false;
-                        if (task.IsFaulted || task.Result == null) return;
-                        var bmp = task.Result;
-                        if (bmp.RawData.Length == 0) return;
-                        if (vcamRef._logNextFrame)
+                        var later = ActiveSessions[j];
+                        if (later.VCamCamera != null && !later.VCamCamera.IsDestroyed &&
+                            later.Root?.World == world)
+                        { isLast = false; break; }
+                    }
+                    if (isLast)
+                    {
+                        session.VCamRenderPending = true;
+                        var vcam = session.VCamCamera;
+                        var vcamRef = VCam;
+                        vcam.RenderToBitmap(new int2(1280, 720)).ContinueWith(task =>
                         {
-                            vcamRef._logNextFrame = false;
-                            Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
-                        }
-                        vcamRef.SendFrame(bmp.RawData, bmp.Size.x, bmp.Size.y, bmp.Format);
-                    });
+                            session.VCamRenderPending = false;
+                            if (task.IsFaulted || task.Result == null) return;
+                            var bmp = task.Result;
+                            if (bmp.RawData.Length == 0) return;
+                            if (vcamRef._logNextFrame)
+                            {
+                                vcamRef._logNextFrame = false;
+                                Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
+                            }
+                            vcamRef.SendFrame(bmp.RawData, bmp.Size.x, bmp.Size.y, bmp.Format);
+                        });
+
+                    }
                 }
+
+                // Update camera indicator color based on actual state
+                if (session.VCamIndicator != null && !session.VCamIndicator.IsDestroyed && VCam != null)
+                {
+                    bool lit = VCam.ConsumerConnected && !VCam.ManuallyDisabled;
+                    if (lit != session.VCamLastLitState)
+                    {
+                        session.VCamLastLitState = lit;
+                        session.VCamIndicator.Tint.Value = lit
+                            ? new colorX(0.8f, 0.1f, 0.1f, 1f)
+                            : new colorX(0.05f, 0.05f, 0.05f, 1f);
+                    }
+                }
+
+                // Virtual mic: start independently, hook AudioListener from first session
+                if ((VMic == null || !VMic.IsActive) && VBCableSetup.IsInstalled() &&
+                    session.VMicListener != null && !session.VMicListener.IsDestroyed)
+                {
+                    // Use the latest session's listener
+                    bool isLast = true;
+                    for (int j = i + 1; j < ActiveSessions.Count; j++)
+                    {
+                        var later = ActiveSessions[j];
+                        if (later.VMicListener != null && !later.VMicListener.IsDestroyed &&
+                            later.Root?.World == world)
+                        { isLast = false; break; }
+                    }
+                    if (isLast)
+                    {
+                        VMic = new VirtualMic();
+                        if (VMic.Start())
+                        {
+                            var listener = session.VMicListener;
+                            var mic = VMic;
+                            var simulator = session.Root.Engine.AudioSystem.Simulator;
+                            if (listener != null && simulator != null)
+                            {
+                                int frameSize = simulator.FrameSize;
+                                var stereoBuf = new Elements.Assets.StereoSample[frameSize];
+                                var floatBuf = new float[frameSize * 2];
+                                simulator.RenderFinished += (sim) =>
+                                {
+                                    if (mic.Muted || listener.IsDestroyed) return;
+                                    var span = stereoBuf.AsSpan(0, sim.FrameSize);
+                                    span.Clear();
+                                    listener.Read(span, sim);
+                                    for (int s = 0; s < span.Length; s++)
+                                    {
+                                        floatBuf[s * 2] = span[s].left;
+                                        floatBuf[s * 2 + 1] = span[s].right;
+                                    }
+                                    mic.WriteGameAudio(floatBuf.AsSpan(0, span.Length * 2));
+                                };
+                                Msg($"[VirtualMic] Hooked AudioListener (frameSize={frameSize})");
+                            }
+                        }
+                        else
+                        { VMic.Dispose(); VMic = null; }
+                    }
+                }
+                if (VMic != null)
+                    VMic.Muted = session.VMicMuted;
 
                 Perf.IncrementFrames();
             }
@@ -2052,8 +2267,16 @@ public class DesktopBuddyMod : ResoniteMod
             if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId > 0)
             {
                 var newUrl = new Uri($"{TunnelUrl}/stream/{session.StreamId}");
-                Msg($"[Tunnel] Updating session VTP: {session.VideoTexture.URL.Value} -> {newUrl}");
-                session.VideoTexture.URL.Value = newUrl;
+                var vtp = session.VideoTexture;
+                // Must run on the update thread — this is called from cloudflared's stderr handler
+                vtp.World.RunInUpdates(0, () =>
+                {
+                    if (vtp != null && !vtp.IsDestroyed)
+                    {
+                        Msg($"[Tunnel] Updating session VTP: {vtp.URL.Value} -> {newUrl}");
+                        vtp.URL.Value = newUrl;
+                    }
+                });
             }
         }
     }
@@ -2094,7 +2317,18 @@ public class DesktopBuddyMod : ResoniteMod
             var psi = new ProcessStartInfo
             {
                 FileName = _cfPath,
-                Arguments = $"tunnel --config NUL --url http://localhost:{STREAM_PORT}",
+                Arguments = $"tunnel --config NUL" +
+                    $" --url http://localhost:{STREAM_PORT}" +
+                    $" --proxy-keepalive-timeout 5m" +
+                    $" --proxy-keepalive-connections 100" +
+                    $" --proxy-tcp-keepalive 15s" +
+                    $" --proxy-connect-timeout 30s" +
+                    $" --no-chunked-encoding" +
+                    $" --compression-quality 0" +
+                    $" --retries 10" +
+                    $" --grace-period 30s" +
+                    $" --no-autoupdate" +
+                    $" --edge-ip-version 4",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -2126,7 +2360,8 @@ public class DesktopBuddyMod : ResoniteMod
                     string oldUrl = TunnelUrl;
                     TunnelUrl = url;
                     Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
-                    if (oldUrl != null && oldUrl != url)
+                    // Update sessions whenever URL changes (including after restart where oldUrl is null)
+                    if (oldUrl != url)
                         UpdateSessionTunnelUrls();
                 }
                 OnTunnelError(e.Data);
@@ -2333,3 +2568,4 @@ static class TypeAppendPatch
         return false;
     }
 }
+

@@ -36,7 +36,33 @@ jobs:
           tag_name: build-${{ steps.sha.outputs.short }}
           name: Build ${{ steps.sha.outputs.short }}
           body: |
-            Automated build from commit ${{ github.sha }}.
+            ## Installation
 
-            Extract `DesktopBuddy.zip` into your Resonite root folder.
+            1. Download `DesktopBuddy.zip` below
+            2. Extract it into your **Resonite root folder** (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`)
+
+            After extracting, your folder should look like:
+            ```
+            Resonite/
+              rml_mods/
+                DesktopBuddy.dll
+              ffmpeg/
+                avcodec-61.dll
+                ...
+              cloudflared/
+                cloudflared.exe
+              softcam/
+                softcam.dll
+                softcam64.dll
+              vbcable/
+                VBCABLE_Setup_x64.exe
+                ...
+            ```
+
+            3. Launch Resonite — on first run, **accept the two UAC (admin) prompts** to register the virtual camera and microphone drivers
+            4. **Restart your PC** after first run — the virtual microphone driver requires a reboot
+
+            The virtual camera appears as **"DesktopBuddy - Camera"** and the virtual microphone as **"CABLE Output"** in Discord, Zoom, Chrome, OBS, etc.
+
+            > Having issues? See the [troubleshooting guide](https://github.com/DevL0rd/DesktopBuddy#troubleshooting) in the README.
           files: DesktopBuddy.zip

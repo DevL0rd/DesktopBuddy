@@ -91,6 +91,7 @@ public sealed class AudioCapture : IDisposable
 
     private float[] _audioBuffer;
     private long _writePos;
+    public long WritePosition => _writePos;
     private readonly object _audioLock = new();
     private const int AUDIO_RING_SAMPLES = 48000 * 2 * 2;
 
@@ -303,6 +304,30 @@ public sealed class AudioCapture : IDisposable
             Array.Copy(_audioBuffer, offset, output, 0, first);
             if (first < toRead)
                 Array.Copy(_audioBuffer, 0, output, first, toRead - first);
+            readPos += toRead;
+            return toRead;
+        }
+    }
+
+    public int ReadSamples(Span<float> output, ref long readPos)
+    {
+        lock (_audioLock)
+        {
+            long available = _writePos - readPos;
+            if (available <= 0) return 0;
+            if (available > _audioBuffer.Length)
+            {
+                readPos = _writePos - _audioBuffer.Length;
+                available = _audioBuffer.Length;
+            }
+
+            int toRead = (int)Math.Min(available, output.Length);
+            int ringSize = _audioBuffer.Length;
+            int offset = (int)(readPos % ringSize);
+            int first = Math.Min(toRead, ringSize - offset);
+            _audioBuffer.AsSpan(offset, first).CopyTo(output);
+            if (first < toRead)
+                _audioBuffer.AsSpan(0, toRead - first).CopyTo(output.Slice(first));
             readPos += toRead;
             return toRead;
         }

@@ -21,13 +21,11 @@ public static class ContextMenuPatch
     private static Uri _desktopIconUri;
     private static bool _desktopIconGenerated;
 
-    private static readonly string[] IgnoredExactTitles = { "Resonite" };
     private static readonly string[] IgnoredSubstrings = { "vrmonitor", "SteamVR Status", "rainmeter" };
 
     private static bool ShouldIgnore(string title)
     {
-        foreach (var exact in IgnoredExactTitles)
-            if (title.Equals(exact, StringComparison.OrdinalIgnoreCase)) return true;
+        if (WindowEnumerator.IsResoniteWindow(title)) return true;
         foreach (var sub in IgnoredSubstrings)
             if (title.Contains(sub, StringComparison.OrdinalIgnoreCase)) return true;
         return false;

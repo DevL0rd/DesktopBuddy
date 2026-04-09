@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh release:*)",
+      "Bash(gh search:*)",
+      "Bash(scripts/build.bat -r)"
+    ]
+  }
+}

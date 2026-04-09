@@ -1,62 +1,73 @@
 # DesktopBuddy
 
-A Resonite mod that spawns world-space desktop/window viewers with touch input, GPU-accelerated capture, and remote streaming.
+A Resonite mod that spawns world-space desktop/window viewers with touch input, GPU-accelerated capture, remote streaming, and virtual camera/microphone output.
 
-## Note on Development
+## Quick Start
 
-This mod was initially developed with AI assistance (Claude) and has since been mostly humanized through manual review and rewrites. If you're familiar with Resonite's UIX system or the context menu API, contributions to improve those areas are especially welcome — extra eyes on the UI code would be a huge help.
+1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) with [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader)
+2. Download the latest `DesktopBuddy.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases)
+3. Extract into your Resonite root folder (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`)
+4. Launch Resonite
+5. On first launch, you will get **two UAC prompts** (admin permission requests) to register the virtual camera and install the virtual microphone driver. **Accept both.**
+6. **Restart your PC** after the first run — the virtual microphone driver requires a reboot to become active
+7. Launch Resonite again and you're done! Open the context menu and select **Desktop** to get started
 
-We're also looking for help with:
+## First-Run Setup (Automatic)
 
-- **AMD GPU support** — currently NVENC-only, needs AMF/VCE encoder paths
-- **Linux support** — WGC is Windows-only, needs PipeWire/XDG portal capture + VA-API encoding
-- **Code review** — if you spot anything that looks off, please open an issue or PR
+DesktopBuddy automatically sets up virtual devices on the first launch:
+
+| Step | What happens | User action |
+|------|-------------|-------------|
+| Virtual camera registration | Registers "DesktopBuddy - Camera" DirectShow filter via `regsvr32` | Accept UAC prompt |
+| Virtual microphone install | Installs VB-Cable virtual audio driver | Accept UAC prompt |
+
+Both prompts may appear on your desktop monitor (behind VR). If you're in VR, check your desktop.
+
+After accepting both prompts, **restart your PC**. The virtual microphone driver (VB-Cable) requires a reboot to become active. The virtual camera works immediately after a Resonite relaunch, but the mic needs a full restart.
+
+On subsequent launches, no prompts will appear — the setup persists across updates.
+
+## Troubleshooting
+
+**Virtual camera "DesktopBuddy - Camera" not showing in Discord/Zoom/Chrome**
+- Restart Resonite after the first-run setup
+- Restart Discord/Zoom — they cache the device list at startup
+- Check Windows Settings > Bluetooth & devices > Cameras to verify the device appears
+
+**Virtual microphone "CABLE Output" not showing**
+- Restart Resonite after the first-run setup
+- If still missing, try a full PC restart — VB-Cable sometimes needs it
+- Check Windows Settings > System > Sound > Input to verify "CABLE Output" appears
+
+**Virtual camera shows black**
+- Open a desktop window in DesktopBuddy first — the camera renders from the in-game camera on your panel
+- Make sure a consumer app (Discord, etc.) has selected "DesktopBuddy - Camera" as its camera — the camera only renders when something is actively using it
+
+**Virtual mic is silent**
+- Make sure the mic indicator (small panel next to the camera) is **green** (unmuted). Click it to toggle.
+- In Discord/Zoom, select **"CABLE Output"** as your microphone input
+- The mic captures spatial in-game audio — make sure there are audio sources in the world
+
+**Streaming not working for other users?**
+- The mod runs a local HTTP server on port 48080. If streaming isn't working, run this command once as Administrator:
+  ```
+  netsh http add urlacl url=http://+:48080/ sddl="D:(A;;GX;;;S-1-1-0)"
+  ```
+  The mod tries to do this automatically on first run.
 
 ## Features
 
-- **GPU-accelerated capture** via Windows.Graphics.Capture (WGC) — no GDI overhead
+- **GPU-accelerated capture** via Windows.Graphics.Capture (WGC)
 - **GPU BGRA-to-RGBA conversion** via D3D11 compute shader
-- **Hardware H.264 encoding** via NVENC through FFmpeg
+- **Hardware H.264/HEVC encoding** via NVENC (NVIDIA) or AMF (AMD) through FFmpeg
 - **Remote streaming** via MPEG-TS over Cloudflare Tunnel — other users see your desktop in VR
 - **Per-window audio capture** via WASAPI process loopback
-- **Touch/mouse/keyboard input** injection from VR controllers, keeps input secure.
+- **Virtual camera** — in-game camera view exposed as "DesktopBuddy - Camera" in Discord, Zoom, Chrome, OBS
+- **Virtual microphone** — spatial in-game audio captured via AudioListener, routed to VB-Cable virtual mic for Discord/Zoom
+- **Touch/mouse/keyboard input** injection from VR controllers
 - **Child window detection** — popups and dialogs auto-spawn as separate panels
-- **Context menu integration** — use context menu to pick a window or monitor
-
-## Prerequisites
-
-- Windows 10+ with an NVIDIA GPU (NVENC required for streaming)
-- [Resonite](https://store.steampowered.com/app/2519830/Resonite/) with [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) installed
-- .NET 10 SDK
-- Windows SDK 10.0.19041.0+ (for `fxc.exe` shader compiler)
-
-## Building
-
-```
-scripts/build.sh
-```
-
-This will:
-1. Kill any running Resonite/cloudflared processes, sometimes cloudflare keeps resonite open
-2. Build the mod DLL (compiles the HLSL compute shader, ILRepacks dependencies into a single DLL)
-3. Copy `DesktopBuddy.dll` to `Resonite/rml_mods/`
-4. Copy FFmpeg DLLs to `Resonite/ffmpeg/`
-5. Copy `cloudflared.exe` to `Resonite/cloudflared/`
-6. Launch Resonite
-
-The Resonite install path is configured in `DesktopBuddy/DesktopBuddy.csproj` (`ResonitePath` property).
-
-## Packaging
-
-```
-scripts/package.sh
-```
-
-Creates `DesktopBuddy.zip` from the last build. Extract into the Resonite root folder. Contents:
-
-- `rml_mods/DesktopBuddy.dll` — the mod (all managed deps merged in)
-- `ffmpeg/` — FFmpeg shared libraries (for MPEG-TS muxing)
-- `cloudflared/` — Cloudflare Tunnel binary (for remote user streaming)
+- **Context menu integration** — pick a window or monitor from the Resonite context menu
+- **Auto-reconnecting Cloudflare tunnel** with error detection and restart
 
 ## Usage
 
@@ -66,16 +77,68 @@ Creates `DesktopBuddy.zip` from the last build. Extract into the Resonite root f
 4. Interact with the panel using VR controllers (touch, scroll, keyboard)
 5. Other users in the session see the stream via Cloudflare Tunnel
 
-## Troubleshooting
+### Virtual Camera
 
-**Streaming not working for other users?** The mod runs a local HTTP server on port 48080. If streaming isn't working, run this command once as Administrator to allow it through:
+Each desktop panel has a small dark indicator mounted on top. When a consumer app (Discord, Zoom, Chrome, OBS) selects "DesktopBuddy - Camera" as its webcam, the indicator turns **red** and the in-game camera starts rendering automatically. Click the indicator to manually disable/enable the camera.
+
+### Virtual Microphone
+
+Next to the camera indicator is a **green** mic indicator. It captures spatial in-game audio from an AudioListener positioned at the panel. The audio is routed to VB-Cable's "CABLE Output" virtual microphone. Click the indicator to **mute/unmute** — it turns dark red when muted.
+
+In Discord/Zoom, select **"CABLE Output"** as your microphone to share in-game audio.
+
+## Prerequisites
+
+- Windows 10+ with an NVIDIA or AMD GPU
+- [Resonite](https://store.steampowered.com/app/2519830/Resonite/) with [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader)
+
+### For building from source
+
+- .NET 10 SDK
+- Windows SDK 10.0.19041.0+ (for `fxc.exe` shader compiler)
+- Visual Studio 2019+ Build Tools (for SoftCam DLL compilation)
+
+## Building
 
 ```
-netsh http add urlacl url=http://+:48080/ sddl="D:(A;;GX;;;S-1-1-0)"
+scripts/build.bat -r
 ```
 
-The mod tries to do this automatically, but it may fail without admin privileges.
+Builds the mod and restarts Resonite. The build process:
+1. Compiles the HLSL compute shader (if `fxc.exe` available)
+2. Builds the mod DLL with ILRepack (merges all managed dependencies)
+3. Deploys to Resonite: `rml_mods/`, `ffmpeg/`, `cloudflared/`, `softcam/`, `vbcable/`
+
+Add `-d` for desktop mode: `scripts/build.bat -r -d`
+
+## Packaging
+
+```
+scripts/package.bat
+```
+
+Creates `DesktopBuddy.zip` containing:
+
+- `rml_mods/DesktopBuddy.dll` — the mod (all managed deps merged)
+- `ffmpeg/` — FFmpeg shared libraries (MPEG-TS muxing)
+- `cloudflared/` — Cloudflare Tunnel binary (remote streaming)
+- `softcam/` — Virtual camera DirectShow filter (32-bit + 64-bit)
+- `vbcable/` — VB-Cable virtual audio driver and installer
+
+## Third-Party Components
+
+- **[SoftCam](https://github.com/tshino/softcam)** — MIT license — Virtual camera DirectShow filter
+- **[VB-Cable](https://vb-audio.com/Cable/)** — Donationware by VB-Audio — Virtual audio cable driver. If you find it useful, please consider [donating](https://vb-audio.com/Cable/).
+- **[FFmpeg](https://ffmpeg.org/)** — LGPL — Media encoding libraries
+- **[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/)** — Cloudflare — Network tunneling
+
+## Contributing
+
+Contributions welcome! Areas where help is especially needed:
+
+- **Linux support** — WGC is Windows-only, needs PipeWire/XDG portal capture + VA-API encoding
+- **Code review** — if you spot anything, please open an issue or PR
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE). Forks must contribute changes back via pull request.
+AGPL-3.0 — see [LICENSE](LICENSE).

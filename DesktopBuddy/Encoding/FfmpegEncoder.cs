@@ -240,15 +240,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 if (isAmf)
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 10_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->bit_rate = 4_000_000;
+                    _codecCtx->rc_max_rate = 5_000_000;
+                    _codecCtx->rc_buffer_size = 4_000_000;
                 }
                 else
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 12_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->bit_rate = 4_000_000;
+                    _codecCtx->rc_max_rate = 6_000_000;
+                    _codecCtx->rc_buffer_size = 4_000_000;
                 }
 
                 var swFormat = isAmf

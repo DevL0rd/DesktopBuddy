@@ -88,10 +88,12 @@
     <ItemGroup>
       <FfmpegDlls Include="$(MSBuildThisFileDirectory)..\ffmpeg\*.dll" />
       <SoftcamDlls Include="$(MSBuildThisFileDirectory)..\softcam\*.dll" />
+      <VBCableFiles Include="$(MSBuildThisFileDirectory)..\vbcable\*" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
     <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
     <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" />
+    <Copy SourceFiles="@(VBCableFiles)" DestinationFolder="$(ResonitePath)\vbcable" ContinueOnError="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" />
   </Target>
 
