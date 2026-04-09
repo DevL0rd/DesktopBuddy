@@ -17,22 +17,15 @@ internal sealed class VirtualCamera : IDisposable
     private Thread _connectionThread;
     internal bool _logNextFrame = true;
 
-    // Default idle resolution — consumers see this until a real frame arrives
     private const int IdleWidth = 1280;
     private const int IdleHeight = 720;
 
-    /// <summary>True when a consumer app (Discord, Chrome, etc.) is reading from the camera.</summary>
     internal bool ConsumerConnected { get; private set; }
 
-    /// <summary>Set to true by external code when rendering is active. Set to false to disable.</summary>
     internal volatile bool ManuallyDisabled;
 
     internal bool IsActive => _camera != IntPtr.Zero;
 
-    /// <summary>
-    /// Creates the SoftCam instance at idle resolution so consumers can discover and connect.
-    /// Call once at startup. Frames are only rendered when a consumer connects.
-    /// </summary>
     internal bool StartIdle()
     {
         if (_camera != IntPtr.Zero) return true;
@@ -84,7 +77,6 @@ internal sealed class VirtualCamera : IDisposable
         int targetH = srcHeight & ~3;
         if (targetW < 4 || targetH < 4) return;
 
-        // Resize if needed — recreates the SoftCam instance
         if (targetW != _width || targetH != _height)
         {
             Log.Msg($"[VirtualCamera] Resize {_width}x{_height} -> {targetW}x{targetH}");
@@ -135,9 +127,9 @@ internal sealed class VirtualCamera : IDisposable
                 {
                     byte* s = srcRow + x * 4;
                     byte* d = dstRow + x * 3;
-                    d[0] = s[3]; // B
-                    d[1] = s[2]; // G
-                    d[2] = s[1]; // R
+                    d[0] = s[3];
+                    d[1] = s[2];
+                    d[2] = s[1];
                 }
             }
             else if (format == TextureFormat.BGRA32)
@@ -146,19 +138,16 @@ internal sealed class VirtualCamera : IDisposable
                 {
                     byte* s = srcRow + x * 4;
                     byte* d = dstRow + x * 3;
-                    d[0] = s[0]; // B
-                    d[1] = s[1]; // G
-                    d[2] = s[2]; // R
+                    d[0] = s[0];
+                    d[1] = s[1];
+                    d[2] = s[2];
                 }
             }
-            else // RGBA32
+            else
             {
                 int x = 0;
-                // SSSE3 path: process 4 RGBA pixels -> 12 BGR bytes at a time
                 if (Ssse3.IsSupported && bpp == 4)
                 {
-                    // Shuffle mask: RGBA [R0,G0,B0,A0, R1,G1,B1,A1, R2,G2,B2,A2, R3,G3,B3,A3]
-                    //            -> BGR  [B0,G0,R0, B1,G1,R1, B2,G2,R2, B3,G3,R3, xx,xx,xx,xx]
                     var mask = Vector128.Create(
                         (byte)2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, 0x80, 0x80, 0x80, 0x80);
 
@@ -166,19 +155,17 @@ internal sealed class VirtualCamera : IDisposable
                     {
                         var rgba = Sse2.LoadVector128(srcRow + x * 4);
                         var bgr = Ssse3.Shuffle(rgba, mask);
-                        // Write 12 bytes (4 BGR pixels)
                         *(long*)(dstRow + x * 3) = bgr.AsInt64().GetElement(0);
                         *(int*)(dstRow + x * 3 + 8) = bgr.AsInt32().GetElement(2);
                     }
                 }
-                // Scalar remainder
                 for (; x < dstW; x++)
                 {
                     byte* s = srcRow + x * bpp;
                     byte* d = dstRow + x * 3;
-                    d[0] = s[2]; // B
-                    d[1] = s[1]; // G
-                    d[2] = s[0]; // R
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
                 }
             }
         }
@@ -193,8 +180,6 @@ internal sealed class VirtualCamera : IDisposable
 
     internal void Stop()
     {
-        // Stop only means "stop rendering" — keep the SoftCam instance alive
-        // so consumers stay connected. Just set ManuallyDisabled.
         ManuallyDisabled = true;
         Log.Msg("[VirtualCamera] Rendering disabled");
     }

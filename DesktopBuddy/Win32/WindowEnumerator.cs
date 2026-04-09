@@ -50,10 +50,6 @@ public static class WindowEnumerator
 
     public record WindowInfo(IntPtr Handle, string Title, uint ProcessId);
 
-    /// <summary>
-    /// Checks if a window title belongs to Resonite.
-    /// Matches "Resonite" exactly or "Resonite " followed by anything (e.g. "Resonite - MyWorld").
-    /// </summary>
     public static bool IsResoniteWindow(string title)
     {
         if (string.IsNullOrEmpty(title)) return false;

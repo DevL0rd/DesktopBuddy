@@ -106,15 +106,6 @@ public sealed class WgcCapture : IDisposable
         return bestAdapter;
     }
 
-    [DllImport("d3dcompiler_47.dll", EntryPoint = "D3DCompile")]
-    private static extern int D3DCompile(
-        [MarshalAs(UnmanagedType.LPStr)] string pSrcData, int srcDataSize,
-        IntPtr pSourceName, IntPtr pDefines, IntPtr pInclude,
-        [MarshalAs(UnmanagedType.LPStr)] string pEntrypoint,
-        [MarshalAs(UnmanagedType.LPStr)] string pTarget,
-        uint flags1, uint flags2,
-        out IntPtr ppCode, out IntPtr ppErrorMsgs);
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr LoadLibraryW(string lpFileName);
 
@@ -172,16 +163,7 @@ public sealed class WgcCapture : IDisposable
         public uint DepthPitch;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct D3D11_SUBRESOURCE_DATA
-    {
-        public IntPtr pSysMem;
-        public uint SysMemPitch;
-        public uint SysMemSlicePitch;
-    }
-
     private const int DXGI_FORMAT_B8G8R8A8_UNORM = 87;
-    private const int DXGI_FORMAT_R8G8B8A8_UNORM = 28;
     private const int DXGI_FORMAT_R32_UINT = 42;
     private const int D3D11_USAGE_DEFAULT = 0;
     private const int D3D11_USAGE_STAGING = 3;
@@ -244,7 +226,6 @@ public sealed class WgcCapture : IDisposable
 
     private IntPtr _stagingTexture;
     private int _stagingTexW, _stagingTexH;
-    // Double-buffered encode textures (Fix 12: capture writes to one while encoder reads from the other)
     private IntPtr _encodeTexture0, _encodeTexture1;
     private int _encodeTexFlip;
     private int _encodeTexW, _encodeTexH;
@@ -313,15 +294,12 @@ public sealed class WgcCapture : IDisposable
             if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
             if (hr < 0) { Log.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}"); return false; }
 
-            // Enable multithread protection so D3D11 objects can be safely released
-            // from the threadpool cleanup thread without corrupting shared GPU state.
             var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
             if (Marshal.QueryInterface(_d3dDevice, ref mtGuid, out IntPtr mtPtr) >= 0)
             {
                 unsafe
                 {
                     var vtable = *(IntPtr**)mtPtr;
-                    // ID3D11Multithread::SetMultithreadProtected is vtable slot 4
                     var setProtFn = (delegate* unmanaged[Stdcall]<IntPtr, int, int*, int>)vtable[4];
                     setProtFn(mtPtr, 1, null);
                 }
@@ -486,9 +464,7 @@ public sealed class WgcCapture : IDisposable
 
         try
         {
-            Interlocked.Exchange(ref _lastFrameTicks, DateTime.UtcNow.Ticks);
             EnsureEncodeTexture(w, h);
-            // Double-buffer: write to current slot, flip for next frame
             int slot = _encodeTexFlip;
             IntPtr encodeTex = slot == 0 ? _encodeTexture0 : _encodeTexture1;
             _encodeTexFlip = 1 - slot;
@@ -611,8 +587,6 @@ public sealed class WgcCapture : IDisposable
         _encodeTexW = w; _encodeTexH = h;
         _encodeTexFlip = 0;
     }
-
-    private long _lastFrameTicks;
 
     private void EnsureStagingTexture(int w, int h)
     {
@@ -899,11 +873,6 @@ public sealed class WgcCapture : IDisposable
 
     public object D3dContextLock => _disposeLock;
 
-    /// <summary>
-    /// Flushes all pending GPU work on this capture's D3D11 context under the dispose lock.
-    /// Must be called before disposing an encoder that shares this device, so the AMD driver
-    /// doesn't access-violate on freed resources while this context still has pending work.
-    /// </summary>
     public unsafe void FlushD3dContext()
     {
         lock (_disposeLock)
@@ -931,12 +900,6 @@ public sealed class WgcCapture : IDisposable
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
-        // Do NOT explicitly dispose _session or _framePool. CsWinRT creates internal
-        // IObjectReference wrappers during interop calls that hold AddRef'd COM pointers.
-        // Explicit Dispose releases the underlying COM ref, but orphaned IObjectReference
-        // wrappers still try to Marshal.Release the same pointer during GC finalization,
-        // causing a native double-free crash. Nulling lets the GC finalize everything
-        // together — COM ref counting works correctly when GC is the sole owner.
         _session = null;
         _framePool = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
@@ -944,8 +907,6 @@ public sealed class WgcCapture : IDisposable
 
     public void Dispose()
     {
-        // StopCapture sets _disposed under _disposeLock, so if it already ran
-        // this block is skipped. If it didn't, we do the same teardown here.
         bool alreadyStopped;
         lock (_disposeLock)
         {
@@ -959,15 +920,12 @@ public sealed class WgcCapture : IDisposable
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
-            // Don't explicitly dispose — see StopCapture comment for rationale
             _session = null;
             _framePool = null;
         }
         _item = null;
 
         Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
-        // Multithread protection is enabled on the device, so these releases
-        // are safe from any thread. Release child objects before the device.
         ReleaseGpuConvertResources(disposing: false);
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
         if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
@@ -975,16 +933,6 @@ public sealed class WgcCapture : IDisposable
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
-        // The WinRT projection (CsWinRT) creates internal IObjectReference wrappers
-        // when interacting with FramePool, CaptureSession, and frame surfaces. These
-        // wrappers hold AddRef'd COM pointers to the D3D device. After disposing session
-        // and frame pool above, orphaned wrappers may remain as GC-finalizable objects.
-        // If the GC finalizes them AFTER the D3D device is destroyed, Marshal.Release
-        // hits a dangling pointer and native-crashes the process.
-        //
-        // Fix: null the managed WinRT reference, then force an immediate GC cycle while
-        // _d3dDevice still holds a raw COM ref keeping the device alive. This lets all
-        // orphaned IObjectReference wrappers finalize safely. Then release the raw refs.
         _winrtDevice = null;
         bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
         if (forceGC)

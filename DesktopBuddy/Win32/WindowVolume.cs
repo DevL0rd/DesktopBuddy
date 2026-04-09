@@ -10,7 +10,6 @@ internal static class WindowVolume
     private static readonly Guid IID_IAudioSessionManager2 = new("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
     private static readonly Guid IID_IAudioEndpointVolume = new("5CDF2C82-841E-4546-9722-0CF74078229A");
     private static readonly Guid IID_ISimpleAudioVolume = new("87CE5498-68D6-44E5-9215-6DA47EF883D8");
-    private static readonly Guid IID_IAudioSessionControl2 = new("BFB7B636-1D60-4DB6-885B-6B97D88FAB25");
 
     [DllImport("ole32.dll")]
     private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint clsCtx, ref Guid iid, out IntPtr obj);

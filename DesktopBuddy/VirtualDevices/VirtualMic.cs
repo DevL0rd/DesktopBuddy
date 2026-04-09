@@ -4,12 +4,6 @@ using System.Threading;
 
 namespace DesktopBuddy;
 
-/// <summary>
-/// Renders audio to VB-Cable's "CABLE Input" device via WASAPI,
-/// making it available as a virtual microphone on "CABLE Output".
-/// Reads from an AudioListener for spatial in-game audio,
-/// or from an AudioCapture for desktop window audio.
-/// </summary>
 internal sealed class VirtualMic : IDisposable
 {
     [DllImport("kernel32.dll")]
@@ -32,7 +26,6 @@ internal sealed class VirtualMic : IDisposable
     private static readonly Guid IID_IAudioClient = new("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2");
     private static readonly Guid IID_IAudioRenderClient = new("F294ACFC-3146-4483-A7BF-ADDCA7C260E2");
 
-    // Vtable indices — matched to AudioCapture.cs (proven working)
     private const int AudioClient_Initialize = 3;
     private const int AudioClient_GetBufferSize = 4;
     private const int AudioClient_GetCurrentPadding = 6;
@@ -53,15 +46,10 @@ internal sealed class VirtualMic : IDisposable
     private Thread _renderThread;
     private volatile bool _disposed;
 
-    // Audio source — either desktop capture or in-game listener ring buffer
-    private AudioCapture _desktopSource;
-    private long _desktopReadPos;
-
-    // In-game audio ring buffer — written by AudioListener callback, read by render thread
     private float[] _gameAudioRing;
     private long _gameAudioWritePos;
     private long _gameAudioReadPos;
-    private const int GAME_RING_SAMPLES = 48000 * 2 * 2; // 2 seconds stereo
+    private const int GAME_RING_SAMPLES = 48000 * 2 * 2;
 
     private float[] _scratch;
 
@@ -72,8 +60,7 @@ internal sealed class VirtualMic : IDisposable
     {
         try
         {
-        // Ensure COM is initialized on this thread
-        CoInitializeEx(IntPtr.Zero, 0); // COINIT_MULTITHREADED
+        CoInitializeEx(IntPtr.Zero, 0);
 
         string deviceId = VBCableSetup.FindCableInputDeviceId();
         if (deviceId == null)
@@ -112,7 +99,6 @@ internal sealed class VirtualMic : IDisposable
         }
         finally { Marshal.Release(enumerator); }
 
-        // 48kHz, 32-bit float, stereo (WAVEFORMATEXTENSIBLE)
         var wfx = stackalloc byte[40];
         *(short*)(wfx + 0) = unchecked((short)0xFFFE);
         *(short*)(wfx + 2) = 2;
@@ -132,7 +118,6 @@ internal sealed class VirtualMic : IDisposable
             if (hr < 0) { Log.Msg($"[VirtualMic] IAudioClient::Initialize failed: 0x{hr:X8}"); Cleanup(); return false; }
             Log.Msg("[VirtualMic] IAudioClient initialized (event mode)");
 
-            // Create and wire WASAPI event for event-driven render
             _renderEvent = CreateEventW(IntPtr.Zero, false, false, IntPtr.Zero);
             var setEventFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)acVt[AudioClient_SetEventHandle];
             hr = setEventFn(_audioClient, _renderEvent);
@@ -174,15 +159,10 @@ internal sealed class VirtualMic : IDisposable
         }
     }
 
-    /// <summary>
-    /// Called from the audio system to write spatial audio samples into the ring buffer.
-    /// Thread-safe — can be called from the audio render thread.
-    /// </summary>
     internal void WriteGameAudio(Span<float> samples)
     {
         if (_disposed || Muted || samples.Length == 0) return;
 
-        // Lock-free SPSC write: single producer (audio render thread)
         int ringSize = _gameAudioRing.Length;
         long wp = Volatile.Read(ref _gameAudioWritePos);
         int toWrite = Math.Min(samples.Length, ringSize);
@@ -198,7 +178,6 @@ internal sealed class VirtualMic : IDisposable
 
     private int ReadGameAudio(float[] output, int maxSamples)
     {
-        // Lock-free SPSC read: single consumer (render loop thread)
         long writePos = Volatile.Read(ref _gameAudioWritePos);
         long available = writePos - _gameAudioReadPos;
         if (available <= 0) return 0;
@@ -240,13 +219,11 @@ internal sealed class VirtualMic : IDisposable
 
                 if (read <= 0 || Muted)
                 {
-                    // Write silence to keep WASAPI happy
                     var rcVt = *(IntPtr**)_renderClient;
                     var getBufFn = (delegate* unmanaged[Stdcall]<IntPtr, uint, out IntPtr, int>)rcVt[RenderClient_GetBuffer];
                     int hr = getBufFn(_renderClient, available, out IntPtr bufPtr);
                     if (hr >= 0)
                     {
-                        // AUDCLNT_BUFFERFLAGS_SILENT = 2
                         var releaseFn = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)rcVt[RenderClient_ReleaseBuffer];
                         releaseFn(_renderClient, available, 2);
                     }

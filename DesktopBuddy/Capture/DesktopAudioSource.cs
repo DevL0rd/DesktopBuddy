@@ -6,12 +6,6 @@ using FrooxEngine;
 
 namespace DesktopBuddy;
 
-/// <summary>
-/// Custom FrooxEngine Component that implements IWorldAudioDataSource.
-/// Reads desktop window audio from an AudioCapture ring buffer and provides it
-/// as spatial audio through an AudioOutput component.
-/// Only produces audio on the local machine — remote users hear silence.
-/// </summary>
 public class DesktopAudioSource : Component, IWorldAudioDataSource
 {
     private AudioCapture _audioCapture;
@@ -23,7 +17,6 @@ public class DesktopAudioSource : Component, IWorldAudioDataSource
     public void SetAudioCapture(AudioCapture capture)
     {
         _audioCapture = capture;
-        // Start reading from current position — don't replay buffered backlog
         _readPos = capture?.WritePosition ?? 0;
         Log.Msg($"[DesktopAudioSource] AudioCapture set, readPos synced to {_readPos}");
     }
@@ -37,12 +30,9 @@ public class DesktopAudioSource : Component, IWorldAudioDataSource
             return;
         }
 
-        // Read interleaved float stereo directly into a temp span on the stack for small buffers,
-        // or use a pooled array for larger ones
         int framesNeeded = buffer.Length;
         int floatsNeeded = framesNeeded * 2;
 
-        // Use stackalloc for typical audio frame sizes (< 8KB on stack)
         if (floatsNeeded <= 2048)
         {
             Span<float> scratch = stackalloc float[floatsNeeded];

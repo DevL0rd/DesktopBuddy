@@ -7,7 +7,6 @@ namespace DesktopBuddy;
 
 internal static class SoftCamSetup
 {
-    // CLSID_DShowSoftcam = {AEF3B972-5FA5-4647-9571-358EB472BC9E}
     private const string FilterClsid = "{AEF3B972-5FA5-4647-9571-358EB472BC9E}";
 
     internal static bool IsRegistered()
@@ -45,7 +44,6 @@ internal static class SoftCamSetup
             return false;
         }
 
-        // Register both 32-bit and 64-bit DLLs so all consumer apps (Discord 32-bit, Chrome 64-bit) can use the camera
         bool ok = true;
         string dll64 = Path.Combine(softcamDir, "softcam64.dll");
         string dll32 = Path.Combine(softcamDir, "softcam.dll");

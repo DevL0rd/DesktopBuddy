@@ -13,7 +13,6 @@ using Elements.Core;
 using Elements.Assets;
 using SkyFrost.Base;
 using Key = Renderite.Shared.Key;
-using FrooxEngine.ProtoFlux;
 
 namespace DesktopBuddy;
 
@@ -59,8 +58,6 @@ public class DesktopBuddyMod : ResoniteMod
     internal static VirtualMic VMic;
     private static bool _firstRunSetupDone;
     private const int STREAM_PORT = 48080;
-    // Always use the tunnel URL, never fall back to localhost — even for local testing,
-    // the stream must go through cloudflare so we catch tunnel issues during development.
     internal static string? TunnelUrl;
     private static Process _tunnelProcess;
     private static string _cfPath;
@@ -69,7 +66,6 @@ public class DesktopBuddyMod : ResoniteMod
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
-    // Background window polling (Fix 4: move Win32 EnumWindows off engine thread)
     private static Thread _windowPollerThread;
     private static volatile bool _windowPollerRunning;
     private static readonly ConcurrentQueue<WindowEvent> _windowEvents = new();
@@ -129,7 +125,6 @@ public class DesktopBuddyMod : ResoniteMod
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) =>
         {
-            // Restore all redirected processes to default audio device
             var resetPids = new HashSet<uint>();
             foreach (var session in ActiveSessions)
             {
@@ -139,13 +134,11 @@ public class DesktopBuddyMod : ResoniteMod
             KillTunnel();
         };
 
-        // Virtual devices setup — register camera filter and install VB-Cable on first run
         System.Threading.Tasks.Task.Run(() =>
         {
             bool needsRestart = false;
             try
             {
-                // Virtual camera (SoftCam DirectShow filter)
                 if (SoftCamInterop.FindDll() != null)
                 {
                     if (!SoftCamSetup.IsRegistered())
@@ -170,7 +163,6 @@ public class DesktopBuddyMod : ResoniteMod
 
             try
             {
-                // Virtual microphone (VB-Cable)
                 if (!VBCableSetup.IsInstalled())
                 {
                     if (VBCableSetup.FindInstaller() != null)
@@ -200,7 +192,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
         });
 
-        // Start background window poller (Fix 4)
         _windowPollerRunning = true;
         _windowPollerThread = new Thread(WindowPollerLoop)
         { Name = "DesktopBuddy:WindowPoller", IsBackground = true };
@@ -594,7 +585,7 @@ public class DesktopBuddyMod : ResoniteMod
         barUi.Style.FlexibleHeight = -1f;
 
         var imageSpaceSlot = barUi.Empty("Image Space");
-        var imgMask = imageSpaceSlot.AttachComponent<Mask>();
+        imageSpaceSlot.AttachComponent<Mask>();
         var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
         var avatarMaskSprite = imageSpaceSlot.AttachComponent<SpriteProvider>();
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
@@ -660,9 +651,6 @@ public class DesktopBuddyMod : ResoniteMod
                 cd.PressColor.Value = new colorX(1f, 1f, 1f, 0.08f);
             }
         }
-
-        var darkBtn = new colorX(0.22f, 0.22f, 0.28f, 1f);
-        var accentBtn = new colorX(0.25f, 0.35f, 0.55f, 1f);
 
         barUi.Style.MinWidth = 36f;
         barUi.Style.PreferredWidth = 36f;
@@ -778,7 +766,6 @@ public class DesktopBuddyMod : ResoniteMod
                     -worldHalfW + cw / 2f * canvasScale,
                     barYPos, 0f);
             }
-            // Fix 9: only re-schedule when still animating
             float target = widthSmooth.TargetValue.Value;
             if (Math.Abs(cw - target) > 0.5f)
                 root.World.RunInUpdates(1, BarUpdateLoop);
@@ -793,7 +780,7 @@ public class DesktopBuddyMod : ResoniteMod
         {
             barExpanded = !barExpanded;
             widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
-            root.World.RunInUpdates(1, BarUpdateLoop); // Restart animation loop
+            root.World.RunInUpdates(1, BarUpdateLoop);
         };
 
         if (isChild)
@@ -843,7 +830,6 @@ public class DesktopBuddyMod : ResoniteMod
             });
         };
 
-        Slot streamSlotRef = null;
         bool streamTestMode = false;
         ValueUserOverride<bool> streamVisRef = null;
         VideoTextureProvider videoTexRef = null;
@@ -858,7 +844,6 @@ public class DesktopBuddyMod : ResoniteMod
                 var displayVisComp = displaySlot.GetComponent<ValueUserOverride<bool>>();
                 if (displayVisComp != null)
                     displayVisComp.SetOverride(root.World.LocalUser, !streamTestMode);
-                // Don't change volume when toggling test mode — slider controls spatial audio for local user
                 var img = testStreamBtn.Slot.GetComponent<Image>();
                 if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
@@ -915,7 +900,6 @@ public class DesktopBuddyMod : ResoniteMod
             if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
-        // Virtual camera, mic indicator, and spatial audio — parent sessions only
         if (!isChild)
         {
             var camSlot = root.AddSlot("VirtualCamera");
@@ -923,7 +907,6 @@ public class DesktopBuddyMod : ResoniteMod
             camSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
             camSlot.LocalScale = float3.One;
 
-            // Flat quad visual with button
             var camVisual = camSlot.AddSlot("Visual");
             camVisual.LocalScale = new float3(0.04f, 0.02f, 0.001f);
             var meshRenderer = camVisual.AttachComponent<MeshRenderer>();
@@ -932,7 +915,6 @@ public class DesktopBuddyMod : ResoniteMod
             camMat.Tint.Value = new colorX(0.05f, 0.05f, 0.05f, 1f);
             meshRenderer.Materials.Add(camMat);
 
-            // Collider + PhysicalButton for 3D clicking (Button is UIX-only)
             var camCollider = camVisual.AttachComponent<BoxCollider>();
             camCollider.Size.Value = float3.One;
 
@@ -958,7 +940,6 @@ public class DesktopBuddyMod : ResoniteMod
 
             bool spatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
 
-            // Virtual mic indicator + AudioListener — always created (independent of spatial audio)
             {
                 var micSlot = root.AddSlot("VirtualMic");
                 micSlot.LocalPosition = new float3(0.03f, worldHalfH + 0.02f, -0.001f);
@@ -991,7 +972,6 @@ public class DesktopBuddyMod : ResoniteMod
                 };
             }
 
-            // Spatial audio — only when enabled (redirects window audio into game world)
             if (spatialAudio)
             {
                 var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
@@ -1007,7 +987,7 @@ public class DesktopBuddyMod : ResoniteMod
                 spatialOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
                 session.SpatialAudioOutput = spatialOutput;
             }
-        } // end !isChild camera/mic/audio block
+        }
 
         pasteBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
@@ -1016,7 +996,6 @@ public class DesktopBuddyMod : ResoniteMod
         };
 
         bool isPrivate = false;
-        ValueUserOverride<bool> streamVisForPrivate = null;
         string savedStreamUrl = null;
 
         var rootVis = root.AttachComponent<ValueUserOverride<bool>>();
@@ -1058,7 +1037,6 @@ public class DesktopBuddyMod : ResoniteMod
         var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
         ownerRef.Reference.Target = root.World.LocalUser;
 
-        // When spatial audio is off, the volume slider controls Windows process volume directly
         if (!(Config?.GetValue(SpatialAudioEnabled) ?? true))
         {
             volSlider.Value.OnValueChange += (SyncField<float> field) =>
@@ -1237,8 +1215,6 @@ public class DesktopBuddyMod : ResoniteMod
                 session.StreamId = shared.StreamId;
                 var nvEncoder = shared.Encoder;
 
-                // Wire desktop audio to spatial audio source
-                // Wire desktop audio to spatial audio source
                 if (session.SpatialAudioSource != null && shared.Audio != null)
                     session.SpatialAudioSource.SetAudioCapture(shared.Audio);
 
@@ -1265,15 +1241,12 @@ public class DesktopBuddyMod : ResoniteMod
                 audioOutput.Source.Target = videoTex;
                 audioOutput.Volume.Value = 1f;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
-                // Local user never hears stream audio — they hear spatial audio instead
                 audioOutput.ExludeUser(root.World.LocalUser);
 
-                // Slider drives stream volume for remote users only
                 var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
                 volDriver.DriveTarget.Target = audioOutput.Volume;
                 volDriver.ValueSource.Target = volSlider.Value;
 
-                // Drive spatial audio volume from slider via OnValueChange (can't use ValueDriver across local/synced boundary)
                 if (session.SpatialAudioOutput != null)
                 {
                     var spatialOut = session.SpatialAudioOutput;
@@ -1286,7 +1259,6 @@ public class DesktopBuddyMod : ResoniteMod
 
                 var streamSlot = root.AddSlot("RemoteStreamVisual");
                 streamSlot.LocalScale = float3.One * canvasScale;
-                streamSlotRef = streamSlot;
 
                 var streamVis = streamSlot.AttachComponent<ValueUserOverride<bool>>();
                 streamVis.Target.Target = streamSlot.ActiveSelf_Field;
@@ -1294,7 +1266,6 @@ public class DesktopBuddyMod : ResoniteMod
                 streamVis.CreateOverrideOnWrite.Value = false;
                 streamVis.SetOverride(root.World.LocalUser, false);
                 streamVisRef = streamVis;
-                streamVisForPrivate = streamVis;
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
@@ -1490,7 +1461,6 @@ public class DesktopBuddyMod : ResoniteMod
         session.TitleText = titleTextRef;
         session.LastTitle = title;
 
-        // Start background thread for bitmap copy (Fix 1: move heavy memcpy off engine thread)
         session.CopyThreadRunning = true;
         session.CopyThread = new Thread(() => BitmapCopyLoop(session))
         { Name = $"BitmapCopy:{session.StreamId}", IsBackground = true };
@@ -1501,8 +1471,6 @@ public class DesktopBuddyMod : ResoniteMod
         if (!isChild)
             WindowInput.FocusWindow(hwnd);
 
-        // Redirect window's audio to VB-Cable (null sink) so user only hears it spatially in-game.
-        // Only when spatial audio is enabled, and only for parent sessions.
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
         if (useSpatialAudio && !isChild && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
         {
@@ -1605,8 +1573,6 @@ public class DesktopBuddyMod : ResoniteMod
     private static readonly Func<ProceduralTextureBase, Bitmap2D> _getTex2D;
     private static readonly Action<ProceduralTextureBase, Renderite.Shared.TextureUploadHint, FrooxEngine.AssetIntegrated> _setFromBitmap;
 
-    private delegate void SetFromCurrentBitmapDelegate(ProceduralTextureBase instance, Renderite.Shared.TextureUploadHint hint, FrooxEngine.AssetIntegrated callback);
-
     static DesktopBuddyMod()
     {
         var tex2DGetter = typeof(ProceduralTextureBase)
@@ -1626,39 +1592,6 @@ public class DesktopBuddyMod : ResoniteMod
 
         Msg("[DesktopBuddyMod] Compiled reflection delegates: " +
             $"getTex2D={_getTex2D != null}, setFromBitmap={_setFromBitmap != null}");
-    }
-
-    private static void DisconnectEncoder(DesktopSession session)
-    {
-        var streamer = session.Streamer;
-        if (streamer != null) streamer.OnGpuFrame = null;
-
-        // Stop the encoder's keepalive thread BEFORE flushing or disposing.
-        // The keepalive holds a raw pointer to WgcCapture's encode texture —
-        // if we flush/free first, the keepalive could use a dangling pointer.
-        if (session.StreamId > 0)
-        {
-            lock (_sharedStreams)
-            {
-                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) && shared.Encoder != null)
-                    shared.Encoder.Stop();
-            }
-        }
-
-        // Flush the capture's D3D context so the AMD driver has no pending work
-        // referencing shared device state before the encoder releases its resources.
-        streamer?.FlushD3dContext();
-
-        if (session.StreamId > 0)
-            StreamServer?.StopEncoder(session.StreamId);
-
-        bool forceGC = Config?.GetValue(ImmediateGC) ?? false;
-        if (forceGC)
-        {
-            Msg("[DisconnectEncoder] Forcing GC after encoder dispose");
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
     }
 
     private static void ConnectEncoder(DesktopSession session, FfmpegEncoder encoder)
@@ -1686,13 +1619,11 @@ public class DesktopBuddyMod : ResoniteMod
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
 
-        // Stop background bitmap copy thread
         session.CopyThreadRunning = false;
-        session.CopySignal.Set(); // Wake thread so it can exit
+        session.CopySignal.Set();
         session.CopyThread?.Join(500);
         session.CopySignal.Dispose();
 
-        // Dispose VMic so it can rehook to the next session's AudioListener
         if (VMic != null && session.VMicListener != null)
         {
             Msg("[Cleanup] Disposing VMic (listener destroyed)");
@@ -1700,7 +1631,6 @@ public class DesktopBuddyMod : ResoniteMod
             VMic = null;
         }
 
-        // Only restore audio routing if no other active session shares this PID
         if (session.OwnsAudioRedirect && session.ProcessId != 0)
         {
             bool otherSessionUsesSamePid = false;
@@ -1775,7 +1705,6 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
-        // Stop keepalive immediately so it doesn't touch WgcCapture's texture
         if (session.StreamId > 0)
         {
             lock (_sharedStreams)
@@ -1795,8 +1724,6 @@ public class DesktopBuddyMod : ResoniteMod
             {
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
 
-                // Flush the capture's D3D context before any encoder disposal — same
-                // safety step that DisconnectEncoder performs for the resize path.
                 streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
@@ -1883,7 +1810,6 @@ public class DesktopBuddyMod : ResoniteMod
                 {
                     var procWindows = WindowEnumerator.GetProcessWindows(session.ProcessId);
 
-                    // Check for title changes
                     for (int pw = 0; pw < procWindows.Count; pw++)
                     {
                         if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
@@ -1901,14 +1827,12 @@ public class DesktopBuddyMod : ResoniteMod
                         }
                     }
 
-                    // Check for new children
                     foreach (var win in procWindows)
                     {
                         if (win.Handle == session.Hwnd) continue;
                         if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
                         if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
                         {
-                            // Pre-add to tracked set to avoid duplicate events
                             session.TrackedChildHwnds.Add(win.Handle);
                             _windowEvents.Enqueue(new WindowEvent
                             {
@@ -1920,7 +1844,6 @@ public class DesktopBuddyMod : ResoniteMod
                         }
                     }
 
-                    // Check for closed children
                     for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
                     {
                         var child = session.ChildSessions[c];
@@ -1958,7 +1881,6 @@ public class DesktopBuddyMod : ResoniteMod
 
         while (session.CopyThreadRunning)
         {
-            // Self-paced: run at the target frame rate, no request-response round trip
             long intervalTicks = (long)(session.TargetInterval * System.Diagnostics.Stopwatch.Frequency);
             long now = sw.ElapsedTicks;
             long remaining = intervalTicks - (now - lastCaptureTicks);
@@ -1969,7 +1891,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
             lastCaptureTicks = sw.ElapsedTicks;
 
-            // Don't overwrite if engine hasn't consumed the last frame yet
             if (session.BitmapReady) { Thread.Sleep(1); continue; }
 
             var streamer = session.Streamer;
@@ -1991,7 +1912,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
             if (frame == null) continue;
 
-            // Check for resize — let the engine thread handle it
             var texSize = texture.Size.Value;
             if (texSize.x != w || texSize.y != h)
             {
@@ -2052,9 +1972,6 @@ public class DesktopBuddyMod : ResoniteMod
                     session.Texture == null || session.Texture.IsDestroyed)
                 {
                     Msg($"[UpdateLoop] Session {i} root/texture destroyed, cleaning up (root={session.Root != null} rootDestroyed={session.Root?.IsDestroyed} tex={session.Texture != null} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId})");
-                    // Stop VLC before cleanup so the encoder survives long enough for VLC to wind down.
-                    // Use session.VideoTexture directly - when destroyed via context menu,
-                    // session.Root is already destroyed so GetComponentInChildren would fail.
                     var vtp = session.VideoTexture;
                     if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
                     session.VideoTexture = null;
@@ -2075,7 +1992,6 @@ public class DesktopBuddyMod : ResoniteMod
                 if (session.Streamer != null && !session.LastValidState)
                 {
                     Msg($"[UpdateLoop] Window closed (IsValid=false), destroying viewer");
-                    // Stop VLC BEFORE cleanup so the encoder isn't killed while VLC is still reading
                     var vtp = session.VideoTexture;
                     if (vtp != null && !vtp.IsDestroyed)
                     {
@@ -2099,7 +2015,6 @@ public class DesktopBuddyMod : ResoniteMod
                     continue;
                 }
 
-                // Drain window events from background poller (Fix 4: moved off engine thread)
                 while (_windowEvents.TryDequeue(out var evt))
                 {
                     if (evt.Session.Cleaned || evt.Session.Root == null || evt.Session.Root.IsDestroyed) continue;
@@ -2167,7 +2082,6 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
 
-                // Handle resize detected by background copy thread
                 if (session.CapturedSizeChanged)
                 {
                     session.CapturedSizeChanged = false;
@@ -2210,7 +2124,6 @@ public class DesktopBuddyMod : ResoniteMod
                     int rh = session.PendingResizeH;
                     Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
 
-                    // Unhook immediately so no more frames get queued to old encoder
                     if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
 
                     var oldStreamId = session.StreamId;
@@ -2218,7 +2131,6 @@ public class DesktopBuddyMod : ResoniteMod
                     var newEncoder = StreamServer?.CreateEncoder(newStreamId);
                     session.StreamId = newStreamId;
 
-                    // Background: tear down old encoder (Fix 11: slow GPU flush + FFmpeg cleanup off engine thread)
                     var oldStreamer = session.Streamer;
                     var oldHwnd = session.Hwnd;
                     System.Threading.ThreadPool.QueueUserWorkItem(_ =>
@@ -2236,7 +2148,6 @@ public class DesktopBuddyMod : ResoniteMod
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
                     });
 
-                    // Foreground: connect new encoder immediately
                     lock (_sharedStreams)
                     {
                         if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
@@ -2258,21 +2169,16 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
                 }
 
-                // Check if background copy thread has a frame ready
                 if (!session.BitmapReady) continue;
                 session.BitmapReady = false;
 
-                // Only the GPU upload stays on the engine thread (FrooxEngine requirement)
                 using (Perf.Time("texture_upload"))
                     _setFromBitmap?.Invoke(session.Texture, default, null);
 
-                // Virtual camera: auto-render when a consumer is connected and not manually disabled.
-                // Only render from the first session that has a camera to avoid duplicate work.
                 if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
                     !session.VCamRenderPending)
                 {
-                    // Only let one session render — use the latest (most recently spawned) session
                     bool isLast = true;
                     for (int j = i + 1; j < ActiveSessions.Count; j++)
                     {
@@ -2303,7 +2209,6 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
 
-                // Update camera indicator color based on actual state
                 if (session.VCamIndicator != null && !session.VCamIndicator.IsDestroyed && VCam != null)
                 {
                     bool lit = VCam.ConsumerConnected && !VCam.ManuallyDisabled;
@@ -2316,11 +2221,9 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
 
-                // Virtual mic: start independently, hook AudioListener from first session
                 if ((VMic == null || !VMic.IsActive) && VBCableSetup.IsInstalled() &&
                     session.VMicListener != null && !session.VMicListener.IsDestroyed)
                 {
-                    // Use the latest session's listener
                     bool isLast = true;
                     for (int j = i + 1; j < ActiveSessions.Count; j++)
                     {
@@ -2430,7 +2333,7 @@ public class DesktopBuddyMod : ResoniteMod
             long now = System.Diagnostics.Stopwatch.GetTimestamp();
             long elapsed = (now - _lastTunnelErrorTick) * 1000 / System.Diagnostics.Stopwatch.Frequency;
             if (elapsed > 60_000)
-                _tunnelErrorCount = 0; // reset if last error was >60s ago
+                _tunnelErrorCount = 0;
             _lastTunnelErrorTick = now;
             _tunnelErrorCount++;
 
@@ -2452,7 +2355,6 @@ public class DesktopBuddyMod : ResoniteMod
             {
                 var newUrl = new Uri($"{TunnelUrl}/stream/{session.StreamId}");
                 var vtp = session.VideoTexture;
-                // Must run on the update thread — this is called from cloudflared's stderr handler
                 vtp.World.RunInUpdates(0, () =>
                 {
                     if (vtp != null && !vtp.IsDestroyed)
@@ -2496,7 +2398,6 @@ public class DesktopBuddyMod : ResoniteMod
                     return;
                 }
             }
-
             Msg($"[Tunnel] Starting cloudflared tunnel: {_cfPath}");
             var psi = new ProcessStartInfo
             {
@@ -2544,7 +2445,6 @@ public class DesktopBuddyMod : ResoniteMod
                     string oldUrl = TunnelUrl;
                     TunnelUrl = url;
                     Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
-                    // Update sessions whenever URL changes (including after restart where oldUrl is null)
                     if (oldUrl != url)
                         UpdateSessionTunnelUrls();
                 }
@@ -2595,16 +2495,12 @@ public class DesktopBuddyMod : ResoniteMod
     {
         try
         {
-            // EXCEPTION_POINTERS: first field is EXCEPTION_RECORD*, second is CONTEXT*
             IntPtr recordPtr = Marshal.ReadIntPtr(exceptionPointersPtr, 0);
-            // EXCEPTION_RECORD: first field is ExceptionCode (DWORD), second is ExceptionFlags,
-            // third is nested record, fourth is ExceptionAddress
             uint code = (uint)Marshal.ReadInt32(recordPtr, 0);
             IntPtr address = Marshal.ReadIntPtr(recordPtr, IntPtr.Size == 8 ? 24 : 12);
 
             string msg = $"[NativeCrash] FATAL: code=0x{code:X8} addr=0x{address:X}\n";
 
-            // Walk loaded modules to find which module the crash address is in
             try
             {
                 var proc = Process.GetCurrentProcess();
@@ -2620,14 +2516,13 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
             }
-            catch { /* best effort */ }
+            catch { }
 
-            // Managed stack trace (may not be accurate for native crashes but worth capturing)
             try
             {
                 msg += $"[NativeCrash] Managed stack:\n{Environment.StackTrace}\n";
             }
-            catch { /* best effort */ }
+            catch { }
 
             Log.Msg(msg);
         }
@@ -2636,7 +2531,6 @@ public class DesktopBuddyMod : ResoniteMod
             try { Log.Msg("[NativeCrash] FATAL: crash handler failed to log details"); } catch { }
         }
 
-        // EXCEPTION_CONTINUE_SEARCH - let Windows handle it (WER, crash dump, etc.)
         return 0;
     }
 
@@ -2720,9 +2614,6 @@ static class SimulatePressPatch
                 WindowInput.ReleaseAllModifiers();
             }
         }
-        else
-        {
-        }
 
         return false;
     }
@@ -2752,4 +2643,3 @@ static class TypeAppendPatch
         return false;
     }
 }
-

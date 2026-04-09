@@ -30,12 +30,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _audioSamplesEncoded;
     private float[] _audioScratch;
     private Thread _audioEncodeThread;
-    private AVPacket* _audioPkt; // dedicated packet for audio thread
+    private AVPacket* _audioPkt;
 
     private byte[] _ringBuffer;
     private long _ringWritePos;
     private readonly object _ringLock = new();
-    private readonly object _muxerLock = new(); // protects av_write_frame (not thread-safe)
+    private readonly object _muxerLock = new();
     private readonly ManualResetEventSlim _dataAvailable = new(false);
 
     private uint _width, _height;
@@ -51,10 +51,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private int _disposeGuard;
     private IntPtr _deviceContext;
     private object _d3dContextLock;
-    private long _lastEncodeTicks;
 
-
-    // Dedicated encode thread (Fix 2: decouple encoding from WGC callback)
     private Thread _encodeThread;
     private readonly AutoResetEvent _encodeEvent = new(false);
     private volatile IntPtr _pendingTexture;
@@ -64,7 +61,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
     private IntPtr _vpOutputView, _vpNv12Texture;
     private IntPtr _vpInputView, _vpInputViewTex;
-    private uint _lastWidth, _lastHeight;
     private long _startTicks;
     private long _lastVideoPts = -1;
     private long _lastKeyframeRingPos;
@@ -75,11 +71,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
 
-    /// <summary>
-    /// Stops the keepalive thread and prevents further encoding.
-    /// Must be called before the source texture (owned by WgcCapture) is freed.
-    /// Dispose handles FFmpeg resource cleanup separately.
-    /// </summary>
     public void Stop()
     {
         _disposed = true;
@@ -122,14 +113,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         return null;
     }
 
-    public void WaitForData(int timeoutMs)
-    {
-        _dataAvailable.Wait(timeoutMs);
-        _dataAvailable.Reset();
-    }
-
     public System.Threading.Tasks.Task WaitForDataAsync(int timeoutMs)
     {
+        if (_dataAvailable.IsSet)
+        {
+            _dataAvailable.Reset();
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
         return System.Threading.Tasks.Task.Run(() =>
         {
             _dataAvailable.Wait(timeoutMs);
@@ -243,7 +233,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 _codecCtx->width = (int)_width;
                 _codecCtx->height = (int)_height;
-                _codecCtx->time_base = new AVRational { num = 1, den = (int)_fps };
+                _codecCtx->time_base = new AVRational { num = 1, den = 90000 };
                 _codecCtx->framerate = new AVRational { num = (int)_fps, den = 1 };
                 _codecCtx->gop_size = (int)_fps / 3;
                 _codecCtx->max_b_frames = 0;
@@ -254,15 +244,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 if (isAmf)
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 10_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->bit_rate = 12_000_000;
+                    _codecCtx->rc_max_rate = 15_000_000;
+                    _codecCtx->rc_buffer_size = 12_000_000;
                 }
                 else
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 12_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->bit_rate = 12_000_000;
+                    _codecCtx->rc_max_rate = 18_000_000;
+                    _codecCtx->rc_buffer_size = 12_000_000;
                 }
 
                 var swFormat = isAmf
@@ -492,10 +482,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         return buf_size;
     }
 
-    /// <summary>
-    /// Queue a frame for async encoding on the dedicated encode thread.
-    /// Called from the WGC capture callback — returns immediately.
-    /// </summary>
     public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
         if (_disposed || _initFailed || !_initialized) return;
@@ -506,19 +492,18 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             return;
         }
 
-        // PTS check here so we don't waste GPU work on frames that would be skipped
         if (_startTicks != 0)
         {
             double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
-            long videoPts = (long)(elapsedSec * _fps);
+            long videoPts = (long)(elapsedSec * 90000);
             if (videoPts <= Interlocked.Read(ref _lastVideoPts))
-                return; // ahead of target fps, skip
+                return;
         }
 
         _pendingTexture = srcTexture;
         _pendingWidth = width;
         _pendingHeight = height;
-        _encodeEvent.Set(); // always signals, never lost (AutoResetEvent)
+        _encodeEvent.Set();
     }
 
     private void EncodeLoop()
@@ -526,7 +511,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
         while (!_disposed)
         {
-            _encodeEvent.WaitOne(100); // short timeout so we check _disposed regularly
+            _encodeEvent.WaitOne(100);
             if (_disposed) break;
 
             var tex = _pendingTexture;
@@ -545,22 +530,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         }
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread stopped");
-    }
-
-    /// <summary>Kept for compatibility but routes through QueueFrame internally.</summary>
-    public void EncodeFrame(IntPtr srcTexture, uint width, uint height)
-    {
-        if (_disposed || _initFailed || !_initialized) return;
-        if ((width & ~1u) != _width || (height & ~1u) != _height) return;
-
-        try
-        {
-            EncodeFrameInternalLocked(srcTexture, width, height);
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
-        }
     }
 
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height)
@@ -597,10 +566,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
 
             double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
-            long videoPts = (long)(elapsedSec * _fps);
+            long videoPts = (long)(elapsedSec * 90000);
             if (videoPts <= Interlocked.Read(ref _lastVideoPts))
             {
-                // Shouldn't happen often — QueueFrame pre-filters, but guard anyway
                 ffmpeg.av_frame_unref(_hwFrame);
                 return;
             }
@@ -644,8 +612,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 }
             }
 
-            // Audio encoding runs on its own thread (Fix 3)
-
             lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
         }
 
@@ -659,9 +625,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread started");
         while (!_disposed)
         {
-            // Encode at video frame rate cadence — audio frames accumulate between video frames
-            // and get flushed in batches, keeping muxer interleaving tight
-            _encodeEvent.WaitOne(33); // wake on new video frame or timeout at ~30fps
+            _encodeEvent.WaitOne(33);
             if (_disposed) break;
             try { EncodeAudio(); }
             catch (Exception ex) { if (!_disposed) Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode error: {ex.Message}"); }
@@ -935,14 +899,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             try { if (_hwFrame != null) { var f = _hwFrame; ffmpeg.av_frame_free(&f); _hwFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrame free error: {ex.Message}"); _hwFrame = null; }
             try { if (_audioFrame != null) { var f = _audioFrame; ffmpeg.av_frame_free(&f); _audioFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioFrame free error: {ex.Message}"); _audioFrame = null; }
 
-            // Flush D3D context and clear all state BEFORE releasing any resources.
-            // AMD drivers crash (access violation in d3d11.dll) if resources are released
-            // while the context still has pending work or bound references.
             FlushAndClearD3DContext();
 
-            // Release VP resources FIRST - they hold refs to textures that the codec/hw
-            // contexts also reference. Releasing codec first on AMD leaves dangling
-            // internal refs in the VP that trigger access violations.
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing VP resources");
             try
             {

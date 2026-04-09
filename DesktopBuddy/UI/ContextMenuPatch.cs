@@ -22,7 +22,7 @@ public static class ContextMenuPatch
 
     private static readonly string[] IgnoredSubstrings = { "vrmonitor", "SteamVR Status", "rainmeter" };
 
-    private enum MenuOptions // copying this from interactionhandler due to it being inaccessible due to protection levels. i usually use a publicizer for this but don't really wanna add a nuget package with a PR.
+    private enum MenuOptions
     {
         Default,
         Locomotion,
@@ -312,7 +312,7 @@ public static class ContextMenuPatch
     {
         public static void Postfix(InteractionHandler __instance, MenuOptions options)
         {
-            if (__instance.IsOwnedByLocalUser) // juuuust in case
+            if (__instance.IsOwnedByLocalUser)
             {
                 ContextMenu ctx = __instance.ContextMenu;
                 if (options == MenuOptions.Default)

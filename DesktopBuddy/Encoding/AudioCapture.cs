@@ -88,7 +88,6 @@ public sealed class AudioCapture : IDisposable
     }
 
     private const int AC_Initialize = 3;
-    private const int AC_GetBufferSize = 4;
     private const int AC_Start = 10;
     private const int AC_Stop = 11;
     private const int AC_SetEventHandle = 13;
@@ -206,7 +205,6 @@ public sealed class AudioCapture : IDisposable
             if (hr < 0) { Log($"[AudioCapture] Initialize failed: 0x{hr:X8}"); return false; }
             Log("[AudioCapture] IAudioClient initialized (event mode)");
 
-            // Create event and wire to WASAPI for event-driven capture
             _captureEvent = CreateEventW(IntPtr.Zero, false, false, IntPtr.Zero);
             hr = AudioClientSetEventHandle(_audioClient, _captureEvent);
             if (hr < 0) { Log($"[AudioCapture] SetEventHandle failed: 0x{hr:X8}"); return false; }
@@ -268,9 +266,6 @@ public sealed class AudioCapture : IDisposable
                 bool silent = (flags & 0x2) != 0;
                 int sampleCount = (int)numFrames * Channels;
 
-                // Lock-free write: single producer, data is immutable once writePos advances.
-                // Readers with independent readPos will see consistent data because the ring
-                // buffer is 4 seconds long — no risk of overwrite while readers are active.
                 int ringSize = _audioBuffer.Length;
                 long wp = _writePos;
                 int offset = (int)(wp % ringSize);
@@ -293,7 +288,6 @@ public sealed class AudioCapture : IDisposable
                             Buffer.MemoryCopy(src + first, dst, (sampleCount - first) * sizeof(float), (sampleCount - first) * sizeof(float));
                     }
                 }
-                // Memory barrier: ensure data is visible before advancing write pointer
                 Volatile.Write(ref _writePos, wp + sampleCount);
             }
 
@@ -305,8 +299,6 @@ public sealed class AudioCapture : IDisposable
 
     public int ReadSamples(float[] output, int maxSamples, ref long readPos)
     {
-        // Lock-free read: writePos only increases, ring is large enough that
-        // data at readPos is guaranteed valid if reader is <4s behind writer.
         long writePos = Volatile.Read(ref _writePos);
         long available = writePos - readPos;
         if (available <= 0) return 0;
