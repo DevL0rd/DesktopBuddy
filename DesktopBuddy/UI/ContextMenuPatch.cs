@@ -11,7 +11,6 @@ using Elements.Assets;
 
 namespace DesktopBuddy;
 
-[HarmonyPatch(typeof(ContextMenu), nameof(ContextMenu.OpenMenu))]
 public static class ContextMenuPatch
 {
     private const int PAGE_SIZE = 8;
@@ -22,6 +21,15 @@ public static class ContextMenuPatch
     private static bool _desktopIconGenerated;
 
     private static readonly string[] IgnoredSubstrings = { "vrmonitor", "SteamVR Status", "rainmeter" };
+
+    private enum MenuOptions // copying this from interactionhandler due to it being inaccessible due to protection levels. i usually use a publicizer for this but don't really wanna add a nuget package with a PR.
+    {
+        Default,
+        Locomotion,
+        Grabbing,
+        LaserGrab,
+        HandGrab
+    }
 
     private static bool ShouldIgnore(string title)
     {
@@ -220,29 +228,6 @@ public static class ContextMenuPatch
             return null;
         }
     }
-
-    public static void Postfix(ContextMenu __instance)
-    {
-        DesktopBuddyMod.Msg("[ContextMenu] Postfix fired, adding Desktop item");
-        LocaleString label = "Desktop";
-        colorX? color = colorX.Cyan;
-
-        var engine = __instance.World.Engine;
-        var iconTex = GetDesktopIconTexture(engine, __instance.Slot);
-
-        ContextMenuItem item;
-        if (iconTex != null)
-            item = __instance.AddItem(in label, (IAssetProvider<ITexture2D>)iconTex, in color);
-        else
-            item = __instance.AddItem(in label, (Uri)null!, in color);
-
-        item.Button.LocalPressed += (IButton btn, ButtonEventData data) =>
-        {
-            DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
-            ShowPickerPage(__instance, 0);
-        };
-    }
-
     private static void ShowPickerPage(ContextMenu menu, int page)
     {
         DesktopBuddyMod.Msg($"[ContextMenu] ShowPickerPage page={page}");
@@ -318,6 +303,40 @@ public static class ContextMenuPatch
             var mi = menu.AddItem(in lbl, (Uri)null!, in c);
             int next = page + 1;
             mi.Button.LocalPressed += (IButton b, ButtonEventData d) => ShowPickerPage(menu, next);
+        }
+    }
+
+
+    [HarmonyPatch(typeof(InteractionHandler), "OpenContextMenu")]
+    private class ContextMenuOpenMenuPatch
+    {
+        public static void Postfix(InteractionHandler __instance, MenuOptions options)
+        {
+            if (__instance.IsOwnedByLocalUser) // juuuust in case
+            {
+                ContextMenu ctx = __instance.ContextMenu;
+                if (options == MenuOptions.Default)
+                {
+                    DesktopBuddyMod.Msg("[ContextMenu] Postfix fired, adding Desktop item");
+                    LocaleString label = "Desktop";
+                    colorX? color = colorX.Cyan;
+
+                    var engine = __instance.World.Engine;
+                    var iconTex = GetDesktopIconTexture(engine, __instance.Slot);
+
+                    ContextMenuItem item;
+                    if (iconTex != null)
+                        item = ctx.AddItem(in label, (IAssetProvider<ITexture2D>)iconTex, in color);
+                    else
+                        item = ctx.AddItem(in label, (Uri)null!, in color);
+
+                    item.Button.LocalPressed += (IButton btn, ButtonEventData data) =>
+                    {
+                        DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
+                        ShowPickerPage(ctx, 0);
+                    };
+                }
+            }
         }
     }
 }
