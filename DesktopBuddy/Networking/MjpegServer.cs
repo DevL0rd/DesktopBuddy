@@ -161,7 +161,7 @@ public sealed class MjpegServer : IDisposable
                 }
                 else
                 {
-                    await encoder.WaitForDataAsync(50).ConfigureAwait(false);
+                    await encoder.WaitForDataAsync(5).ConfigureAwait(false);
                 }
             }
         }

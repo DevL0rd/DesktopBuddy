@@ -1970,7 +1970,7 @@ public class DesktopBuddyMod : ResoniteMod
             lastCaptureTicks = sw.ElapsedTicks;
 
             // Don't overwrite if engine hasn't consumed the last frame yet
-            if (session.BitmapReady) continue;
+            if (session.BitmapReady) { Thread.Sleep(1); continue; }
 
             var streamer = session.Streamer;
             if (streamer == null) continue;

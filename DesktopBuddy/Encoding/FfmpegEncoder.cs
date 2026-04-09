@@ -36,7 +36,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _ringWritePos;
     private readonly object _ringLock = new();
     private readonly object _muxerLock = new(); // protects av_write_frame (not thread-safe)
-    private readonly SemaphoreSlim _dataAvailable = new(0, 1);
+    private readonly ManualResetEventSlim _dataAvailable = new(false);
 
     private uint _width, _height;
     private int _totalFrames;
@@ -56,7 +56,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     // Dedicated encode thread (Fix 2: decouple encoding from WGC callback)
     private Thread _encodeThread;
-    private readonly SemaphoreSlim _encodeSignal = new(0, 1);
+    private readonly AutoResetEvent _encodeEvent = new(false);
     private volatile IntPtr _pendingTexture;
     private volatile uint _pendingWidth, _pendingHeight;
 
@@ -125,11 +125,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public void WaitForData(int timeoutMs)
     {
         _dataAvailable.Wait(timeoutMs);
+        _dataAvailable.Reset();
     }
 
     public System.Threading.Tasks.Task WaitForDataAsync(int timeoutMs)
     {
-        return _dataAvailable.WaitAsync(timeoutMs);
+        return System.Threading.Tasks.Task.Run(() =>
+        {
+            _dataAvailable.Wait(timeoutMs);
+            _dataAvailable.Reset();
+        });
     }
 
     public int ReadStream(byte[] buffer, ref long readPos, ref bool aligned)
@@ -482,8 +487,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _ringWritePos += buf_size;
         }
 
-        if (_dataAvailable.CurrentCount == 0)
-            try { _dataAvailable.Release(); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Semaphore release error: {ex.Message}"); }
+        _dataAvailable.Set();
 
         return buf_size;
     }
@@ -502,14 +506,19 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             return;
         }
 
-        // No rate limiter — WGC already delivers at the target frame rate.
-        // If frames arrive faster than the encode thread can process,
-        // the latest texture overwrites the pending one (we want the newest frame).
+        // PTS check here so we don't waste GPU work on frames that would be skipped
+        if (_startTicks != 0)
+        {
+            double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
+            long videoPts = (long)(elapsedSec * _fps);
+            if (videoPts <= Interlocked.Read(ref _lastVideoPts))
+                return; // ahead of target fps, skip
+        }
+
         _pendingTexture = srcTexture;
         _pendingWidth = width;
         _pendingHeight = height;
-        if (_encodeSignal.CurrentCount == 0)
-            try { _encodeSignal.Release(); } catch { }
+        _encodeEvent.Set(); // always signals, never lost (AutoResetEvent)
     }
 
     private void EncodeLoop()
@@ -517,7 +526,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
         while (!_disposed)
         {
-            _encodeSignal.Wait(1000);
+            _encodeEvent.WaitOne(100); // short timeout so we check _disposed regularly
             if (_disposed) break;
 
             var tex = _pendingTexture;
@@ -589,13 +598,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
             long videoPts = (long)(elapsedSec * _fps);
-            if (videoPts <= _lastVideoPts)
+            if (videoPts <= Interlocked.Read(ref _lastVideoPts))
             {
-                // We're ahead of the target frame rate — skip this frame to stay in sync
+                // Shouldn't happen often — QueueFrame pre-filters, but guard anyway
                 ffmpeg.av_frame_unref(_hwFrame);
                 return;
             }
-            _lastVideoPts = videoPts;
+            Interlocked.Exchange(ref _lastVideoPts, videoPts);
             _hwFrame->pts = videoPts;
             _hwFrame->width = (int)_width;
             _hwFrame->height = (int)_height;
@@ -619,14 +628,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_packet_rescale_ts(_pkt, _codecCtx->time_base, _stream->time_base);
 
                     bool isKey = (_pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
-                    if (isKey)
-                    {
-                        lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
-                        Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
-                    }
 
                     lock (_muxerLock)
                     {
+                        if (isKey)
+                        {
+                            ffmpeg.avio_flush(_fmtCtx->pb);
+                            Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
+                        }
                         ret = ffmpeg.av_write_frame(_fmtCtx, _pkt);
                         if (ret < 0) Log.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
                     }
@@ -650,7 +659,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread started");
         while (!_disposed)
         {
-            Thread.Sleep(5);
+            // Encode at video frame rate cadence — audio frames accumulate between video frames
+            // and get flushed in batches, keeping muxer interleaving tight
+            _encodeEvent.WaitOne(33); // wake on new video frame or timeout at ~30fps
             if (_disposed) break;
             try { EncodeAudio(); }
             catch (Exception ex) { if (!_disposed) Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode error: {ex.Message}"); }
@@ -975,8 +986,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         if (_selfHandle.IsAllocated) _selfHandle.Free();
 
-        try { if (_dataAvailable.CurrentCount == 0) _dataAvailable.Release(); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: semaphore release error: {ex.Message}"); }
-        try { _dataAvailable.Dispose(); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: semaphore dispose error: {ex.Message}"); }
+        try { _dataAvailable.Set(); } catch { }
+        try { _dataAvailable.Dispose(); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: dataAvailable dispose error: {ex.Message}"); }
+        try { _encodeEvent.Set(); } catch { }
+        try { _encodeEvent.Dispose(); } catch { }
 
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === DONE === {_totalFrames} total frames");
     }
