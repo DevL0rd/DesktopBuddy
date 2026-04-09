@@ -61,8 +61,6 @@ public class DesktopBuddyMod : ResoniteMod
     internal static string? TunnelUrl;
     private static Process _tunnelProcess;
     private static string _cfPath;
-    private static int _tunnelErrorCount;
-    private static long _lastTunnelErrorTick;
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
@@ -2328,22 +2326,6 @@ public class DesktopBuddyMod : ResoniteMod
 
     private static void OnTunnelError(string data)
     {
-        if (data.Contains("canceled by remote") || data.Contains("context canceled"))
-        {
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            long elapsed = (now - _lastTunnelErrorTick) * 1000 / System.Diagnostics.Stopwatch.Frequency;
-            if (elapsed > 60_000)
-                _tunnelErrorCount = 0;
-            _lastTunnelErrorTick = now;
-            _tunnelErrorCount++;
-
-            if (_tunnelErrorCount >= 5)
-            {
-                Msg($"[Tunnel] {_tunnelErrorCount} stream cancellations in <60s, restarting tunnel");
-                _tunnelErrorCount = 0;
-                RestartTunnel();
-            }
-        }
     }
 
     private static void UpdateSessionTunnelUrls()
@@ -2410,7 +2392,6 @@ public class DesktopBuddyMod : ResoniteMod
                     $" --proxy-connect-timeout 30s" +
                     $" --no-chunked-encoding" +
                     $" --compression-quality 0" +
-                    $" --retries 10" +
                     $" --grace-period 30s" +
                     $" --no-autoupdate" +
                     $" --edge-ip-version 4",
@@ -2422,8 +2403,6 @@ public class DesktopBuddyMod : ResoniteMod
             _tunnelProcess = Process.Start(psi);
             if (_tunnelProcess == null) { Msg("[Tunnel] Failed to start cloudflared"); return; }
             var proc = _tunnelProcess;
-            _tunnelErrorCount = 0;
-
             proc.EnableRaisingEvents = true;
             proc.Exited += (s, e) =>
             {
