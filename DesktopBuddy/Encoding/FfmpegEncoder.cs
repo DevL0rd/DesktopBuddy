@@ -29,10 +29,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _audioReadPos;
     private long _audioSamplesEncoded;
     private float[] _audioScratch;
+    private Thread _audioEncodeThread;
+    private AVPacket* _audioPkt; // dedicated packet for audio thread
 
     private byte[] _ringBuffer;
     private long _ringWritePos;
     private readonly object _ringLock = new();
+    private readonly object _muxerLock = new(); // protects av_write_frame (not thread-safe)
     private readonly SemaphoreSlim _dataAvailable = new(0, 1);
 
     private uint _width, _height;
@@ -49,7 +52,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private IntPtr _deviceContext;
     private object _d3dContextLock;
     private long _lastEncodeTicks;
-    private Thread _keepAliveThread;
+
+
+    // Dedicated encode thread (Fix 2: decouple encoding from WGC callback)
+    private Thread _encodeThread;
+    private readonly SemaphoreSlim _encodeSignal = new(0, 1);
+    private volatile IntPtr _pendingTexture;
+    private volatile uint _pendingWidth, _pendingHeight;
 
     private bool _needsVideoProcessor;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
@@ -240,15 +249,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 if (isAmf)
                 {
-                    _codecCtx->bit_rate = 4_000_000;
-                    _codecCtx->rc_max_rate = 5_000_000;
-                    _codecCtx->rc_buffer_size = 4_000_000;
+                    _codecCtx->bit_rate = 8_000_000;
+                    _codecCtx->rc_max_rate = 10_000_000;
+                    _codecCtx->rc_buffer_size = 8_000_000;
                 }
                 else
                 {
-                    _codecCtx->bit_rate = 4_000_000;
-                    _codecCtx->rc_max_rate = 6_000_000;
-                    _codecCtx->rc_buffer_size = 4_000_000;
+                    _codecCtx->bit_rate = 8_000_000;
+                    _codecCtx->rc_max_rate = 12_000_000;
+                    _codecCtx->rc_buffer_size = 8_000_000;
                 }
 
                 var swFormat = isAmf
@@ -318,8 +327,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
-            _keepAliveThread = new Thread(KeepAliveLoop) { Name = $"FfmpegEnc:{_streamId}:KeepAlive", IsBackground = true };
-            _keepAliveThread.Start();
+            _encodeThread = new Thread(EncodeLoop) { Name = $"FfmpegEnc:{_streamId}:Encode", IsBackground = true };
+            _encodeThread.Start();
             Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Ready: {_width}x{_height} {codecName}");
@@ -441,7 +450,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         ffmpeg.av_frame_get_buffer(_audioFrame, 0);
 
         _audioScratch = new float[48000 * 2];
-        Log.Msg($"[FfmpegEnc:{_streamId}] Audio stream added: AAC 48kHz stereo 128kbps");
+        _audioPkt = ffmpeg.av_packet_alloc();
+
+        _audioEncodeThread = new Thread(AudioEncodeLoop)
+        { Name = $"FfmpegEnc:{_streamId}:Audio", IsBackground = true };
+        _audioEncodeThread.Start();
+
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio stream added: AAC 48kHz stereo 128kbps (own thread)");
     }
 
     private static int WriteCallback(void* opaque, byte* buf, int buf_size)
@@ -473,7 +488,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         return buf_size;
     }
 
-    public void EncodeFrame(IntPtr srcTexture, uint width, uint height)
+    /// <summary>
+    /// Queue a frame for async encoding on the dedicated encode thread.
+    /// Called from the WGC capture callback — returns immediately.
+    /// </summary>
+    public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
         if (_disposed || _initFailed || !_initialized) return;
         if ((width & ~1u) != _width || (height & ~1u) != _height)
@@ -483,11 +502,47 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             return;
         }
 
-        long now = System.Diagnostics.Stopwatch.GetTimestamp();
-        long frameInterval = System.Diagnostics.Stopwatch.Frequency / _fps;
-        if ((now - _lastEncodeTicks) < frameInterval)
-            return;
-        _lastEncodeTicks = now;
+        // No rate limiter — WGC already delivers at the target frame rate.
+        // If frames arrive faster than the encode thread can process,
+        // the latest texture overwrites the pending one (we want the newest frame).
+        _pendingTexture = srcTexture;
+        _pendingWidth = width;
+        _pendingHeight = height;
+        if (_encodeSignal.CurrentCount == 0)
+            try { _encodeSignal.Release(); } catch { }
+    }
+
+    private void EncodeLoop()
+    {
+        Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
+        while (!_disposed)
+        {
+            _encodeSignal.Wait(1000);
+            if (_disposed) break;
+
+            var tex = _pendingTexture;
+            var w = _pendingWidth;
+            var h = _pendingHeight;
+            if (tex == IntPtr.Zero) continue;
+
+            try
+            {
+                EncodeFrameInternalLocked(tex, w, h);
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
+            }
+
+        }
+        Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread stopped");
+    }
+
+    /// <summary>Kept for compatibility but routes through QueueFrame internally.</summary>
+    public void EncodeFrame(IntPtr srcTexture, uint width, uint height)
+    {
+        if (_disposed || _initFailed || !_initialized) return;
+        if ((width & ~1u) != _width || (height & ~1u) != _height) return;
 
         try
         {
@@ -496,56 +551,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         catch (Exception ex)
         {
             Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
-        }
-    }
-
-    // MPEG-TS null packet (PID 0x1FFF) — valid padding that VLC ignores.
-    // Keeps the HTTP stream alive so cloudflare doesn't timeout the connection.
-    private static readonly byte[] TsNullPacket = CreateTsNullPacket();
-
-    private static byte[] CreateTsNullPacket()
-    {
-        var pkt = new byte[188];
-        pkt[0] = 0x47;          // sync byte
-        pkt[1] = 0x1F;          // PID 0x1FFF (null packet) high bits
-        pkt[2] = 0xFF;          // PID low bits
-        pkt[3] = 0x10;          // adaptation field control = payload only
-        for (int i = 4; i < 188; i++) pkt[i] = 0xFF; // stuff bytes
-        return pkt;
-    }
-
-    private void KeepAliveLoop()
-    {
-        // Send MPEG-TS null packets when the encoder is idle to keep
-        // the HTTP connection alive. No D3D11 access, no texture pointers.
-        int sleepMs = 1000; // 1 second between keepalives
-
-        while (!_disposed)
-        {
-            Thread.Sleep(sleepMs);
-            if (_disposed) break;
-            if (_totalFrames == 0) continue; // not encoding yet
-
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            long elapsed = now - Interlocked.Read(ref _lastEncodeTicks);
-
-            // Only send keepalive if no frame was encoded in the last 2 seconds
-            if (elapsed < System.Diagnostics.Stopwatch.Frequency * 2) continue;
-
-            lock (_ringLock)
-            {
-                if (_disposed) break;
-                int pos = (int)(_ringWritePos % RING_SIZE);
-                int len = TsNullPacket.Length;
-                int first = Math.Min(len, RING_SIZE - pos);
-                Buffer.BlockCopy(TsNullPacket, 0, _ringBuffer, pos, first);
-                if (first < len)
-                    Buffer.BlockCopy(TsNullPacket, first, _ringBuffer, 0, len - first);
-                _ringWritePos += len;
-            }
-
-            if (_dataAvailable.CurrentCount == 0)
-                try { _dataAvailable.Release(); } catch { }
         }
     }
 
@@ -584,7 +589,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
             long videoPts = (long)(elapsedSec * _fps);
-            if (videoPts <= _lastVideoPts) videoPts = _lastVideoPts + 1;
+            if (videoPts <= _lastVideoPts)
+            {
+                // We're ahead of the target frame rate — skip this frame to stay in sync
+                ffmpeg.av_frame_unref(_hwFrame);
+                return;
+            }
             _lastVideoPts = videoPts;
             _hwFrame->pts = videoPts;
             _hwFrame->width = (int)_width;
@@ -611,24 +621,23 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     bool isKey = (_pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
                     if (isKey)
                     {
-                        ffmpeg.avio_flush(_fmtCtx->pb);
+                        lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
                         Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
                     }
 
-                    ret = ffmpeg.av_write_frame(_fmtCtx, _pkt);
-                    if (ret < 0) Log.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
+                    lock (_muxerLock)
+                    {
+                        ret = ffmpeg.av_write_frame(_fmtCtx, _pkt);
+                        if (ret < 0) Log.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
+                    }
 
                     ffmpeg.av_packet_unref(_pkt);
                 }
             }
 
-            if (_audioCodecCtx != null && _audioCapture != null)
-            {
-                using (DesktopBuddyMod.Perf.Time("ffmpeg_audio"))
-                    EncodeAudio();
-            }
+            // Audio encoding runs on its own thread (Fix 3)
 
-            ffmpeg.avio_flush(_fmtCtx->pb);
+            lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
         }
 
         _totalFrames++;
@@ -636,9 +645,22 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), ringPos={_ringWritePos}");
     }
 
+    private void AudioEncodeLoop()
+    {
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread started");
+        while (!_disposed)
+        {
+            Thread.Sleep(5);
+            if (_disposed) break;
+            try { EncodeAudio(); }
+            catch (Exception ex) { if (!_disposed) Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode error: {ex.Message}"); }
+        }
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread stopped");
+    }
+
     private void EncodeAudio()
     {
-        if (_audioScratch == null || _audioFrame == null) return;
+        if (_audioScratch == null || _audioFrame == null || _audioPkt == null) return;
 
         int frameSize = _audioCodecCtx->frame_size;
         int channels = 2;
@@ -672,14 +694,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             while (true)
             {
-                ret = ffmpeg.avcodec_receive_packet(_audioCodecCtx, _pkt);
+                ret = ffmpeg.avcodec_receive_packet(_audioCodecCtx, _audioPkt);
                 if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF) break;
                 if (ret < 0) break;
 
-                _pkt->stream_index = _audioStream->index;
-                ffmpeg.av_packet_rescale_ts(_pkt, _audioCodecCtx->time_base, _audioStream->time_base);
-                ffmpeg.av_write_frame(_fmtCtx, _pkt);
-                ffmpeg.av_packet_unref(_pkt);
+                _audioPkt->stream_index = _audioStream->index;
+                ffmpeg.av_packet_rescale_ts(_audioPkt, _audioCodecCtx->time_base, _audioStream->time_base);
+                lock (_muxerLock) ffmpeg.av_write_frame(_fmtCtx, _audioPkt);
+                ffmpeg.av_packet_unref(_audioPkt);
             }
 
             offset += samplesPerFrame;
@@ -873,6 +895,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _initialized = false;
         _disposed = true;
 
+        _audioEncodeThread?.Join(2000);
+        _encodeThread?.Join(2000);
+
         var ctxLock = _d3dContextLock;
         bool gotLock = false;
         if (ctxLock != null)
@@ -895,6 +920,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing packets/frames");
             try { if (_pkt != null) { var p = _pkt; ffmpeg.av_packet_free(&p); _pkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: pkt free error: {ex.Message}"); _pkt = null; }
+            try { if (_audioPkt != null) { var p = _audioPkt; ffmpeg.av_packet_free(&p); _audioPkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioPkt free error: {ex.Message}"); _audioPkt = null; }
             try { if (_hwFrame != null) { var f = _hwFrame; ffmpeg.av_frame_free(&f); _hwFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrame free error: {ex.Message}"); _hwFrame = null; }
             try { if (_audioFrame != null) { var f = _audioFrame; ffmpeg.av_frame_free(&f); _audioFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioFrame free error: {ex.Message}"); _audioFrame = null; }
 

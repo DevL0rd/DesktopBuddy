@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using HarmonyLib;
 using ResoniteModLoader;
 using FrooxEngine;
@@ -34,7 +36,7 @@ public class DesktopBuddyMod : ResoniteMod
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
-        new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => true);
+        new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => false);
 
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
@@ -66,6 +68,20 @@ public class DesktopBuddyMod : ResoniteMod
     private static long _lastTunnelErrorTick;
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
+
+    // Background window polling (Fix 4: move Win32 EnumWindows off engine thread)
+    private static Thread _windowPollerThread;
+    private static volatile bool _windowPollerRunning;
+    private static readonly ConcurrentQueue<WindowEvent> _windowEvents = new();
+
+    private struct WindowEvent
+    {
+        public DesktopSession Session;
+        public IntPtr ChildHwnd;
+        public string Title;
+        public WindowEventType EventType;
+    }
+    private enum WindowEventType { NewChild, ChildClosed, TitleChanged }
 
     private static string _latestVersion;
     private static bool _updateShown;
@@ -183,6 +199,12 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg("[Setup] First-time setup complete. A PC restart is recommended for all virtual device features to work correctly.");
             }
         });
+
+        // Start background window poller (Fix 4)
+        _windowPollerRunning = true;
+        _windowPollerThread = new Thread(WindowPollerLoop)
+        { Name = "DesktopBuddy:WindowPoller", IsBackground = true };
+        _windowPollerThread.Start();
 
         Msg("DesktopBuddy initialized!");
     }
@@ -756,7 +778,10 @@ public class DesktopBuddyMod : ResoniteMod
                     -worldHalfW + cw / 2f * canvasScale,
                     barYPos, 0f);
             }
-            root.World.RunInUpdates(1, BarUpdateLoop);
+            // Fix 9: only re-schedule when still animating
+            float target = widthSmooth.TargetValue.Value;
+            if (Math.Abs(cw - target) > 0.5f)
+                root.World.RunInUpdates(1, BarUpdateLoop);
         }
         barCanvas.Size.Value = new float2(barExpandedW, barH);
         barSlot.LocalPosition = new float3(
@@ -768,6 +793,7 @@ public class DesktopBuddyMod : ResoniteMod
         {
             barExpanded = !barExpanded;
             widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
+            root.World.RunInUpdates(1, BarUpdateLoop); // Restart animation loop
         };
 
         if (isChild)
@@ -930,11 +956,11 @@ public class DesktopBuddyMod : ResoniteMod
             session.VCamCamera = cam;
             session.VCamIndicator = camMat;
 
-            bool spatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
-            if (spatialAudio)
+            bool spatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
+
+            // Virtual mic indicator + AudioListener — always created (independent of spatial audio)
             {
-                // Spatial audio + mic indicator
-                var micSlot = root.AddSlot("SpatialAudio");
+                var micSlot = root.AddSlot("VirtualMic");
                 micSlot.LocalPosition = new float3(0.03f, worldHalfH + 0.02f, -0.001f);
                 micSlot.LocalRotation = floatQ.Identity;
                 micSlot.LocalScale = float3.One;
@@ -951,19 +977,6 @@ public class DesktopBuddyMod : ResoniteMod
                 micCollider.Size.Value = float3.One;
                 session.VMicIndicator = micMat;
 
-                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
-                var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
-                session.SpatialAudioSource = audioSource;
-
-                var spatialOutput = localAudioSlot.AttachComponent<AudioOutput>();
-                spatialOutput.Source.Target = audioSource;
-                spatialOutput.Volume.Value = 1f;
-                spatialOutput.SpatialBlend.Value = 1f;
-                spatialOutput.MinDistance.Value = 0.5f;
-                spatialOutput.MaxDistance.Value = 30f;
-                spatialOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
-                session.SpatialAudioOutput = spatialOutput;
-
                 var listener = micSlot.AttachComponent<AudioListener>();
                 session.VMicListener = listener;
 
@@ -976,6 +989,23 @@ public class DesktopBuddyMod : ResoniteMod
                         : new colorX(0.1f, 0.8f, 0.1f, 1f);
                     Msg($"[VirtualMic] {(session.VMicMuted ? "Muted" : "Unmuted")}");
                 };
+            }
+
+            // Spatial audio — only when enabled (redirects window audio into game world)
+            if (spatialAudio)
+            {
+                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
+                var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
+                session.SpatialAudioSource = audioSource;
+
+                var spatialOutput = localAudioSlot.AttachComponent<AudioOutput>();
+                spatialOutput.Source.Target = audioSource;
+                spatialOutput.Volume.Value = 1f;
+                spatialOutput.SpatialBlend.Value = 1f;
+                spatialOutput.MinDistance.Value = 0.5f;
+                spatialOutput.MaxDistance.Value = 30f;
+                spatialOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
+                session.SpatialAudioOutput = spatialOutput;
             }
         } // end !isChild camera/mic/audio block
 
@@ -1460,6 +1490,12 @@ public class DesktopBuddyMod : ResoniteMod
         session.TitleText = titleTextRef;
         session.LastTitle = title;
 
+        // Start background thread for bitmap copy (Fix 1: move heavy memcpy off engine thread)
+        session.CopyThreadRunning = true;
+        session.CopyThread = new Thread(() => BitmapCopyLoop(session))
+        { Name = $"BitmapCopy:{session.StreamId}", IsBackground = true };
+        session.CopyThread.Start();
+
         ScheduleUpdate(root.World);
 
         if (!isChild)
@@ -1640,7 +1676,7 @@ public class DesktopBuddyMod : ResoniteMod
         {
             if (!enc.IsInitialized)
                 enc.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
-            enc.EncodeFrame(texture, (uint)fw, (uint)fh);
+            enc.QueueFrame(texture, (uint)fw, (uint)fh);
         };
     }
 
@@ -1649,6 +1685,12 @@ public class DesktopBuddyMod : ResoniteMod
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
+
+        // Stop background bitmap copy thread
+        session.CopyThreadRunning = false;
+        session.CopySignal.Set(); // Wake thread so it can exit
+        session.CopyThread?.Join(500);
+        session.CopySignal.Dispose();
 
         // Dispose VMic so it can rehook to the next session's AudioListener
         if (VMic != null && session.VMicListener != null)
@@ -1821,6 +1863,157 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] === END (bg queued) === stream {streamId}");
     }
 
+    private static void WindowPollerLoop()
+    {
+        while (_windowPollerRunning)
+        {
+            Thread.Sleep(100);
+            if (!_windowPollerRunning) break;
+
+            DesktopSession[] snapshot;
+            try { snapshot = ActiveSessions.ToArray(); }
+            catch { continue; }
+
+            foreach (var session in snapshot)
+            {
+                if (!_windowPollerRunning) break;
+                if (session.Cleaned || session.IsChildPanel || session.ProcessId == 0) continue;
+
+                try
+                {
+                    var procWindows = WindowEnumerator.GetProcessWindows(session.ProcessId);
+
+                    // Check for title changes
+                    for (int pw = 0; pw < procWindows.Count; pw++)
+                    {
+                        if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
+                        {
+                            if (procWindows[pw].Title != session.LastTitle)
+                            {
+                                _windowEvents.Enqueue(new WindowEvent
+                                {
+                                    Session = session,
+                                    EventType = WindowEventType.TitleChanged,
+                                    Title = procWindows[pw].Title
+                                });
+                            }
+                            break;
+                        }
+                    }
+
+                    // Check for new children
+                    foreach (var win in procWindows)
+                    {
+                        if (win.Handle == session.Hwnd) continue;
+                        if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
+                        if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
+                        {
+                            // Pre-add to tracked set to avoid duplicate events
+                            session.TrackedChildHwnds.Add(win.Handle);
+                            _windowEvents.Enqueue(new WindowEvent
+                            {
+                                Session = session,
+                                EventType = WindowEventType.NewChild,
+                                ChildHwnd = win.Handle,
+                                Title = win.Title
+                            });
+                        }
+                    }
+
+                    // Check for closed children
+                    for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
+                    {
+                        var child = session.ChildSessions[c];
+                        bool childStillActive = false;
+                        if (child.Streamer != null)
+                        {
+                            for (int pw = 0; pw < procWindows.Count; pw++)
+                            {
+                                if (procWindows[pw].Handle == child.Hwnd) { childStillActive = true; break; }
+                            }
+                        }
+                        if (!childStillActive)
+                        {
+                            _windowEvents.Enqueue(new WindowEvent
+                            {
+                                Session = session,
+                                EventType = WindowEventType.ChildClosed,
+                                ChildHwnd = child.Hwnd
+                            });
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[WindowPoller] Error for PID {session.ProcessId}: {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private static void BitmapCopyLoop(DesktopSession session)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long lastCaptureTicks = 0;
+
+        while (session.CopyThreadRunning)
+        {
+            // Self-paced: run at the target frame rate, no request-response round trip
+            long intervalTicks = (long)(session.TargetInterval * System.Diagnostics.Stopwatch.Frequency);
+            long now = sw.ElapsedTicks;
+            long remaining = intervalTicks - (now - lastCaptureTicks);
+            if (remaining > 0)
+            {
+                Thread.Sleep(Math.Max(1, (int)(remaining * 1000 / System.Diagnostics.Stopwatch.Frequency)));
+                if (!session.CopyThreadRunning) break;
+            }
+            lastCaptureTicks = sw.ElapsedTicks;
+
+            // Don't overwrite if engine hasn't consumed the last frame yet
+            if (session.BitmapReady) continue;
+
+            var streamer = session.Streamer;
+            if (streamer == null) continue;
+
+            var texture = session.Texture;
+            if (texture == null || texture.IsDestroyed) continue;
+
+            byte[] frame;
+            int w, h;
+            try
+            {
+                frame = streamer.CaptureFrame(out w, out h);
+            }
+            catch (Exception ex)
+            {
+                Msg($"[BitmapCopyLoop] CaptureFrame error: {ex.Message}");
+                continue;
+            }
+            if (frame == null) continue;
+
+            // Check for resize — let the engine thread handle it
+            var texSize = texture.Size.Value;
+            if (texSize.x != w || texSize.y != h)
+            {
+                session.CapturedWidth = w;
+                session.CapturedHeight = h;
+                session.CapturedSizeChanged = true;
+                continue;
+            }
+
+            var bitmap = _getTex2D?.Invoke(texture);
+            if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
+                continue;
+
+            using (Perf.Time("bitmap_copy"))
+                frame.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
+
+            session.CapturedWidth = w;
+            session.CapturedHeight = h;
+            session.BitmapReady = true;
+        }
+    }
+
     private static void UpdateLoop(World world)
     {
         _updateCount++;
@@ -1906,87 +2099,53 @@ public class DesktopBuddyMod : ResoniteMod
                     continue;
                 }
 
-                if (!session.IsChildPanel && session.ProcessId != 0)
+                // Drain window events from background poller (Fix 4: moved off engine thread)
+                while (_windowEvents.TryDequeue(out var evt))
                 {
-                    session.TimeSinceChildCheck += dt;
-                    if (session.TimeSinceChildCheck >= 0.1)
+                    if (evt.Session.Cleaned || evt.Session.Root == null || evt.Session.Root.IsDestroyed) continue;
+                    if (evt.Session.Root.World != world) continue;
+
+                    switch (evt.EventType)
                     {
-                        session.TimeSinceChildCheck = 0;
-                        try
+                        case WindowEventType.TitleChanged:
+                            evt.Session.LastTitle = evt.Title;
+                            if (evt.Session.TitleText != null && !evt.Session.TitleText.IsDestroyed)
+                                evt.Session.TitleText.Text.Value = evt.Title;
+                            if (evt.Session.Root != null && !evt.Session.Root.IsDestroyed)
+                                evt.Session.Root.Name = $"Desktop: {evt.Title}";
+                            break;
+
+                        case WindowEventType.NewChild:
+                            Msg($"[ChildWindow] Detected new popup: hwnd={evt.ChildHwnd} title='{evt.Title}'");
+                            SpawnChildWindow(evt.Session, evt.ChildHwnd, evt.Title);
+                            break;
+
+                        case WindowEventType.ChildClosed:
                         {
-                            var procWindows = WindowEnumerator.GetProcessWindows(session.ProcessId);
-
-                            // Update window title if changed
-                            for (int pw = 0; pw < procWindows.Count; pw++)
+                            var child = evt.Session.ChildSessions.Find(c => c.Hwnd == evt.ChildHwnd);
+                            if (child != null)
                             {
-                                if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
+                                Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
+                                evt.Session.TrackedChildHwnds.Remove(child.Hwnd);
+                                child.ParentSession = null;
+                                ActiveSessions.Remove(child);
+                                evt.Session.ChildSessions.Remove(child);
                                 {
-                                    if (procWindows[pw].Title != session.LastTitle)
+                                    var cvtp = child.VideoTexture;
+                                    if (cvtp != null && !cvtp.IsDestroyed) { cvtp.URL.Value = null; cvtp.Stop(); }
+                                    child.VideoTexture = null;
+                                    var cRoot = child.Root;
+                                    world.RunInUpdates(10, () =>
                                     {
-                                        session.LastTitle = procWindows[pw].Title;
-                                        if (session.TitleText != null && !session.TitleText.IsDestroyed)
-                                            session.TitleText.Text.Value = session.LastTitle;
-                                        if (session.Root != null && !session.Root.IsDestroyed)
-                                            session.Root.Name = $"Desktop: {session.LastTitle}";
-                                    }
-                                    break;
+                                        if (cRoot != null && !cRoot.IsDestroyed) cRoot.Destroy();
+                                    });
                                 }
+                                CleanupSession(child);
                             }
-
-                            foreach (var win in procWindows)
-                            {
-                                if (win.Handle == session.Hwnd) continue;
-                                if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
-                                if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
-                                {
-                                    Msg($"[ChildWindow] Detected new popup: hwnd={win.Handle} title='{win.Title}' size={cw2}x{ch2}");
-                                    SpawnChildWindow(session, win.Handle, win.Title);
-                                }
-                            }
-
-                            for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
-                            {
-                                var child = session.ChildSessions[c];
-                                bool childStillActive = false;
-                                if (child.Streamer != null)
-                                {
-                                    for (int pw = 0; pw < procWindows.Count; pw++)
-                                    {
-                                        if (procWindows[pw].Handle == child.Hwnd) { childStillActive = true; break; }
-                                    }
-                                }
-                                if (!childStillActive)
-                                {
-                                    Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
-                                    session.TrackedChildHwnds.Remove(child.Hwnd);
-                                    child.ParentSession = null;
-                                    ActiveSessions.Remove(child);
-                                    session.ChildSessions.RemoveAt(c);
-                                    {
-                                        var cvtp = child.VideoTexture;
-                                        if (cvtp != null && !cvtp.IsDestroyed) { cvtp.URL.Value = null; cvtp.Stop(); }
-                                        child.VideoTexture = null;
-                                        var cRoot = child.Root;
-                                        world.RunInUpdates(10, () =>
-                                        {
-                                            if (cRoot != null && !cRoot.IsDestroyed) cRoot.Destroy();
-                                        });
-                                    }
-                                    CleanupSession(child);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Msg($"[ChildWindow] Polling error: {ex.Message}");
+                            break;
                         }
                     }
                 }
-
-                session.TimeSinceLastCapture += dt;
-                if (session.TimeSinceLastCapture < session.TargetInterval)
-                    continue;
-                session.TimeSinceLastCapture = 0;
 
                 if (!session.Texture.IsAssetAvailable)
                 {
@@ -2008,35 +2167,40 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 }
 
-                var frame = session.Streamer.CaptureFrame(out int w, out int h);
-                if (frame == null) continue;
-
-                if (session.Texture.Size.Value.x != w || session.Texture.Size.Value.y != h)
+                // Handle resize detected by background copy thread
+                if (session.CapturedSizeChanged)
                 {
-                    Msg($"[UpdateLoop] Window resize {session.Texture.Size.Value.x}x{session.Texture.Size.Value.y} -> {w}x{h}");
+                    session.CapturedSizeChanged = false;
+                    int w = session.CapturedWidth;
+                    int h = session.CapturedHeight;
 
-                    var texSlot = session.Texture.Slot;
-                    session.Texture.Destroy();
-                    var newTex = texSlot.AttachComponent<SolidColorTexture>();
-                    newTex.Size.Value = new int2(w, h);
-                    newTex.Format.Value = Renderite.Shared.TextureFormat.RGBA32;
-                    newTex.Mipmaps.Value = false;
-                    newTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
-                    session.Texture = newTex;
-                    session.ManualModeSet = false;
+                    if (session.Texture.Size.Value.x != w || session.Texture.Size.Value.y != h)
+                    {
+                        Msg($"[UpdateLoop] Window resize {session.Texture.Size.Value.x}x{session.Texture.Size.Value.y} -> {w}x{h}");
 
-                    if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
-                        session.TextureImage.Texture.Target = newTex;
+                        var texSlot = session.Texture.Slot;
+                        session.Texture.Destroy();
+                        var newTex = texSlot.AttachComponent<SolidColorTexture>();
+                        newTex.Size.Value = new int2(w, h);
+                        newTex.Format.Value = Renderite.Shared.TextureFormat.RGBA32;
+                        newTex.Mipmaps.Value = false;
+                        newTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
+                        session.Texture = newTex;
+                        session.ManualModeSet = false;
 
-                    if (session.Canvas != null && !session.Canvas.IsDestroyed)
-                        session.Canvas.Size.Value = new float2(w, h);
+                        if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
+                            session.TextureImage.Texture.Target = newTex;
 
-                    session.OnResize?.Invoke(w, h);
-                    session.PendingResizeW = w;
-                    session.PendingResizeH = h;
-                    session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
-                    Msg($"[UpdateLoop] Texture recreated at {w}x{h}");
-                    continue;
+                        if (session.Canvas != null && !session.Canvas.IsDestroyed)
+                            session.Canvas.Size.Value = new float2(w, h);
+
+                        session.OnResize?.Invoke(w, h);
+                        session.PendingResizeW = w;
+                        session.PendingResizeH = h;
+                        session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
+                        Msg($"[UpdateLoop] Texture recreated at {w}x{h}");
+                        continue;
+                    }
                 }
 
                 if (session.ResizeDebounceUntil > 0 && world.Time.WorldTime >= session.ResizeDebounceUntil)
@@ -2045,12 +2209,34 @@ public class DesktopBuddyMod : ResoniteMod
                     int rw = session.PendingResizeW;
                     int rh = session.PendingResizeH;
                     Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
-                    DisconnectEncoder(session);
 
+                    // Unhook immediately so no more frames get queued to old encoder
+                    if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
+
+                    var oldStreamId = session.StreamId;
                     int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
                     var newEncoder = StreamServer?.CreateEncoder(newStreamId);
                     session.StreamId = newStreamId;
 
+                    // Background: tear down old encoder (Fix 11: slow GPU flush + FFmpeg cleanup off engine thread)
+                    var oldStreamer = session.Streamer;
+                    var oldHwnd = session.Hwnd;
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        try
+                        {
+                            lock (_sharedStreams)
+                            {
+                                if (_sharedStreams.TryGetValue(oldHwnd, out var oldShared) && oldShared.Encoder != null)
+                                    oldShared.Encoder.Stop();
+                            }
+                            oldStreamer?.FlushD3dContext();
+                            StreamServer?.StopEncoder(oldStreamId);
+                        }
+                        catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
+                    });
+
+                    // Foreground: connect new encoder immediately
                     lock (_sharedStreams)
                     {
                         if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
@@ -2072,13 +2258,11 @@ public class DesktopBuddyMod : ResoniteMod
                     Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
                 }
 
-                var bitmap = _getTex2D?.Invoke(session.Texture);
-                if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
-                    continue;
+                // Check if background copy thread has a frame ready
+                if (!session.BitmapReady) continue;
+                session.BitmapReady = false;
 
-                using (Perf.Time("bitmap_copy"))
-                    frame.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
-
+                // Only the GPU upload stays on the engine thread (FrooxEngine requirement)
                 using (Perf.Time("texture_upload"))
                     _setFromBitmap?.Invoke(session.Texture, default, null);
 

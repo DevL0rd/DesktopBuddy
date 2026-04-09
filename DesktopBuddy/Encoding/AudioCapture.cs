@@ -15,6 +15,15 @@ public sealed class AudioCapture : IDisposable
     internal static Action<string> LogHandler = Console.WriteLine;
     internal static void Log(string msg) => LogHandler(msg);
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr CreateEventW(IntPtr lpEventAttributes, bool bManualReset, bool bInitialState, IntPtr lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr hObject);
+
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
 
@@ -91,12 +100,12 @@ public sealed class AudioCapture : IDisposable
 
     private float[] _audioBuffer;
     private long _writePos;
-    public long WritePosition => _writePos;
-    private readonly object _audioLock = new();
+    public long WritePosition => Volatile.Read(ref _writePos);
     private const int AUDIO_RING_SAMPLES = 48000 * 2 * 2;
 
     private IntPtr _audioClient;
     private IntPtr _captureClient;
+    private IntPtr _captureEvent;
     private Thread _captureThread;
     private volatile bool _disposed;
 
@@ -190,12 +199,18 @@ public sealed class AudioCapture : IDisposable
 
             hr = AudioClientInitialize(_audioClient,
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
                 0, 0, formatPtr, IntPtr.Zero);
             Marshal.FreeCoTaskMem(formatPtr);
 
             if (hr < 0) { Log($"[AudioCapture] Initialize failed: 0x{hr:X8}"); return false; }
-            Log("[AudioCapture] IAudioClient initialized");
+            Log("[AudioCapture] IAudioClient initialized (event mode)");
+
+            // Create event and wire to WASAPI for event-driven capture
+            _captureEvent = CreateEventW(IntPtr.Zero, false, false, IntPtr.Zero);
+            hr = AudioClientSetEventHandle(_audioClient, _captureEvent);
+            if (hr < 0) { Log($"[AudioCapture] SetEventHandle failed: 0x{hr:X8}"); return false; }
+            Log("[AudioCapture] WASAPI event handle set");
 
             hr = AudioClientGetService(_audioClient, IID_IAudioCaptureClient, out _captureClient);
             if (hr < 0) { Log($"[AudioCapture] GetService failed: 0x{hr:X8}"); return false; }
@@ -224,7 +239,8 @@ public sealed class AudioCapture : IDisposable
     {
         while (!_disposed)
         {
-            Thread.Sleep(10);
+            WaitForSingleObject(_captureEvent, 100);
+            if (_disposed) break;
             try
             {
                 DrainCaptureBuffer();
@@ -252,31 +268,33 @@ public sealed class AudioCapture : IDisposable
                 bool silent = (flags & 0x2) != 0;
                 int sampleCount = (int)numFrames * Channels;
 
-                lock (_audioLock)
+                // Lock-free write: single producer, data is immutable once writePos advances.
+                // Readers with independent readPos will see consistent data because the ring
+                // buffer is 4 seconds long — no risk of overwrite while readers are active.
+                int ringSize = _audioBuffer.Length;
+                long wp = _writePos;
+                int offset = (int)(wp % ringSize);
+                if (silent)
                 {
-                    int ringSize = _audioBuffer.Length;
-                    int offset = (int)(_writePos % ringSize);
-                    if (silent)
-                    {
-                        int first = Math.Min(sampleCount, ringSize - offset);
-                        Array.Clear(_audioBuffer, offset, first);
-                        if (first < sampleCount)
-                            Array.Clear(_audioBuffer, 0, sampleCount - first);
-                    }
-                    else
-                    {
-                        float* src = (float*)data;
-                        int first = Math.Min(sampleCount, ringSize - offset);
-                        fixed (float* dst = &_audioBuffer[offset])
-                            Buffer.MemoryCopy(src, dst, first * sizeof(float), first * sizeof(float));
-                        if (first < sampleCount)
-                        {
-                            fixed (float* dst = &_audioBuffer[0])
-                                Buffer.MemoryCopy(src + first, dst, (sampleCount - first) * sizeof(float), (sampleCount - first) * sizeof(float));
-                        }
-                    }
-                    _writePos += sampleCount;
+                    int first = Math.Min(sampleCount, ringSize - offset);
+                    Array.Clear(_audioBuffer, offset, first);
+                    if (first < sampleCount)
+                        Array.Clear(_audioBuffer, 0, sampleCount - first);
                 }
+                else
+                {
+                    float* src = (float*)data;
+                    int first = Math.Min(sampleCount, ringSize - offset);
+                    fixed (float* dst = &_audioBuffer[offset])
+                        Buffer.MemoryCopy(src, dst, first * sizeof(float), first * sizeof(float));
+                    if (first < sampleCount)
+                    {
+                        fixed (float* dst = &_audioBuffer[0])
+                            Buffer.MemoryCopy(src + first, dst, (sampleCount - first) * sizeof(float), (sampleCount - first) * sizeof(float));
+                    }
+                }
+                // Memory barrier: ensure data is visible before advancing write pointer
+                Volatile.Write(ref _writePos, wp + sampleCount);
             }
 
             CaptureClientReleaseBuffer(_captureClient, numFrames);
@@ -287,50 +305,48 @@ public sealed class AudioCapture : IDisposable
 
     public int ReadSamples(float[] output, int maxSamples, ref long readPos)
     {
-        lock (_audioLock)
+        // Lock-free read: writePos only increases, ring is large enough that
+        // data at readPos is guaranteed valid if reader is <4s behind writer.
+        long writePos = Volatile.Read(ref _writePos);
+        long available = writePos - readPos;
+        if (available <= 0) return 0;
+        if (available > _audioBuffer.Length)
         {
-            long available = _writePos - readPos;
-            if (available <= 0) return 0;
-            if (available > _audioBuffer.Length)
-            {
-                readPos = _writePos - _audioBuffer.Length;
-                available = _audioBuffer.Length;
-            }
-
-            int toRead = (int)Math.Min(available, maxSamples);
-            int ringSize = _audioBuffer.Length;
-            int offset = (int)(readPos % ringSize);
-            int first = Math.Min(toRead, ringSize - offset);
-            Array.Copy(_audioBuffer, offset, output, 0, first);
-            if (first < toRead)
-                Array.Copy(_audioBuffer, 0, output, first, toRead - first);
-            readPos += toRead;
-            return toRead;
+            readPos = writePos - _audioBuffer.Length;
+            available = _audioBuffer.Length;
         }
+
+        int toRead = (int)Math.Min(available, maxSamples);
+        int ringSize = _audioBuffer.Length;
+        int offset = (int)(readPos % ringSize);
+        int first = Math.Min(toRead, ringSize - offset);
+        Array.Copy(_audioBuffer, offset, output, 0, first);
+        if (first < toRead)
+            Array.Copy(_audioBuffer, 0, output, first, toRead - first);
+        readPos += toRead;
+        return toRead;
     }
 
     public int ReadSamples(Span<float> output, ref long readPos)
     {
-        lock (_audioLock)
+        long writePos = Volatile.Read(ref _writePos);
+        long available = writePos - readPos;
+        if (available <= 0) return 0;
+        if (available > _audioBuffer.Length)
         {
-            long available = _writePos - readPos;
-            if (available <= 0) return 0;
-            if (available > _audioBuffer.Length)
-            {
-                readPos = _writePos - _audioBuffer.Length;
-                available = _audioBuffer.Length;
-            }
-
-            int toRead = (int)Math.Min(available, output.Length);
-            int ringSize = _audioBuffer.Length;
-            int offset = (int)(readPos % ringSize);
-            int first = Math.Min(toRead, ringSize - offset);
-            _audioBuffer.AsSpan(offset, first).CopyTo(output);
-            if (first < toRead)
-                _audioBuffer.AsSpan(0, toRead - first).CopyTo(output.Slice(first));
-            readPos += toRead;
-            return toRead;
+            readPos = writePos - _audioBuffer.Length;
+            available = _audioBuffer.Length;
         }
+
+        int toRead = (int)Math.Min(available, output.Length);
+        int ringSize = _audioBuffer.Length;
+        int offset = (int)(readPos % ringSize);
+        int first = Math.Min(toRead, ringSize - offset);
+        _audioBuffer.AsSpan(offset, first).CopyTo(output);
+        if (first < toRead)
+            _audioBuffer.AsSpan(0, toRead - first).CopyTo(output.Slice(first));
+        readPos += toRead;
+        return toRead;
     }
 
     public void Dispose()
@@ -343,6 +359,7 @@ public sealed class AudioCapture : IDisposable
 
         if (_captureClient != IntPtr.Zero) { Marshal.Release(_captureClient); _captureClient = IntPtr.Zero; }
         if (_audioClient != IntPtr.Zero) { Marshal.Release(_audioClient); _audioClient = IntPtr.Zero; }
+        if (_captureEvent != IntPtr.Zero) { CloseHandle(_captureEvent); _captureEvent = IntPtr.Zero; }
 
         Log("[AudioCapture] Disposed");
     }
@@ -352,6 +369,13 @@ public sealed class AudioCapture : IDisposable
         var vtable = *(IntPtr**)client;
         var fn = (delegate* unmanaged[Stdcall]<IntPtr, int, int, long, long, IntPtr, IntPtr, int>)vtable[AC_Initialize];
         return fn(client, shareMode, streamFlags, bufferDuration, periodicity, pFormat, sessionGuid);
+    }
+
+    private static unsafe int AudioClientSetEventHandle(IntPtr client, IntPtr eventHandle)
+    {
+        var vtable = *(IntPtr**)client;
+        var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)vtable[AC_SetEventHandle];
+        return fn(client, eventHandle);
     }
 
     private static unsafe int AudioClientStart(IntPtr client)

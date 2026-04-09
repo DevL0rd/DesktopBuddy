@@ -244,7 +244,9 @@ public sealed class WgcCapture : IDisposable
 
     private IntPtr _stagingTexture;
     private int _stagingTexW, _stagingTexH;
-    private IntPtr _encodeTexture;
+    // Double-buffered encode textures (Fix 12: capture writes to one while encoder reads from the other)
+    private IntPtr _encodeTexture0, _encodeTexture1;
+    private int _encodeTexFlip;
     private int _encodeTexW, _encodeTexH;
     private byte[] _buffer;
     private GCHandle _pinnedBuffer;
@@ -486,12 +488,16 @@ public sealed class WgcCapture : IDisposable
         {
             Interlocked.Exchange(ref _lastFrameTicks, DateTime.UtcNow.Ticks);
             EnsureEncodeTexture(w, h);
-            ContextCopyResource(_d3dContext, _encodeTexture, srcTexture);
+            // Double-buffer: write to current slot, flip for next frame
+            int slot = _encodeTexFlip;
+            IntPtr encodeTex = slot == 0 ? _encodeTexture0 : _encodeTexture1;
+            _encodeTexFlip = 1 - slot;
+            ContextCopyResource(_d3dContext, encodeTex, srcTexture);
 
             using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
             {
                 var gpuCb = OnGpuFrame;
-                try { gpuCb?.Invoke(_d3dDevice, _encodeTexture, w, h); }
+                try { gpuCb?.Invoke(_d3dDevice, encodeTex, w, h); }
                 catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
             }
 
@@ -585,8 +591,9 @@ public sealed class WgcCapture : IDisposable
 
     private void EnsureEncodeTexture(int w, int h)
     {
-        if (_encodeTexture != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH) return;
-        if (_encodeTexture != IntPtr.Zero) { Marshal.Release(_encodeTexture); _encodeTexture = IntPtr.Zero; }
+        if (_encodeTexture0 != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH) return;
+        if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
+        if (_encodeTexture1 != IntPtr.Zero) { Marshal.Release(_encodeTexture1); _encodeTexture1 = IntPtr.Zero; }
 
         var desc = new D3D11_TEXTURE2D_DESC
         {
@@ -599,9 +606,10 @@ public sealed class WgcCapture : IDisposable
             CPUAccessFlags = 0,
             MiscFlags = 0
         };
-        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _encodeTexture);
+        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _encodeTexture0);
+        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _encodeTexture1);
         _encodeTexW = w; _encodeTexH = h;
-
+        _encodeTexFlip = 0;
     }
 
     private long _lastFrameTicks;
@@ -962,7 +970,8 @@ public sealed class WgcCapture : IDisposable
         // are safe from any thread. Release child objects before the device.
         ReleaseGpuConvertResources(disposing: false);
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
-        if (_encodeTexture != IntPtr.Zero) { Marshal.Release(_encodeTexture); _encodeTexture = IntPtr.Zero; }
+        if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
+        if (_encodeTexture1 != IntPtr.Zero) { Marshal.Release(_encodeTexture1); _encodeTexture1 = IntPtr.Zero; }
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 

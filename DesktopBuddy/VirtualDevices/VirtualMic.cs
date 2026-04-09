@@ -12,6 +12,15 @@ namespace DesktopBuddy;
 /// </summary>
 internal sealed class VirtualMic : IDisposable
 {
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr CreateEventW(IntPtr lpEventAttributes, bool bManualReset, bool bInitialState, IntPtr lpName);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr hObject);
+
     [DllImport("ole32.dll")]
     private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
 
@@ -29,13 +38,17 @@ internal sealed class VirtualMic : IDisposable
     private const int AudioClient_GetCurrentPadding = 6;
     private const int AudioClient_Start = 10;
     private const int AudioClient_Stop = 11;
+    private const int AudioClient_SetEventHandle = 13;
     private const int AudioClient_GetService = 14;
+
+    private const int AUDCLNT_STREAMFLAGS_EVENTCALLBACK = 0x00040000;
 
     private const int RenderClient_GetBuffer = 3;
     private const int RenderClient_ReleaseBuffer = 4;
 
     private IntPtr _audioClient;
     private IntPtr _renderClient;
+    private IntPtr _renderEvent;
     private uint _bufferFrameCount;
     private Thread _renderThread;
     private volatile bool _disposed;
@@ -48,7 +61,6 @@ internal sealed class VirtualMic : IDisposable
     private float[] _gameAudioRing;
     private long _gameAudioWritePos;
     private long _gameAudioReadPos;
-    private readonly object _gameAudioLock = new();
     private const int GAME_RING_SAMPLES = 48000 * 2 * 2; // 2 seconds stereo
 
     private float[] _scratch;
@@ -116,9 +128,16 @@ internal sealed class VirtualMic : IDisposable
         {
             var acVt = *(IntPtr**)_audioClient;
             var initFn = (delegate* unmanaged[Stdcall]<IntPtr, int, uint, long, long, byte*, IntPtr, int>)acVt[AudioClient_Initialize];
-            hr = initFn(_audioClient, 0, 0, 200000, 0, wfx, IntPtr.Zero);
+            hr = initFn(_audioClient, 0, (uint)AUDCLNT_STREAMFLAGS_EVENTCALLBACK, 200000, 0, wfx, IntPtr.Zero);
             if (hr < 0) { Log.Msg($"[VirtualMic] IAudioClient::Initialize failed: 0x{hr:X8}"); Cleanup(); return false; }
-            Log.Msg("[VirtualMic] IAudioClient initialized");
+            Log.Msg("[VirtualMic] IAudioClient initialized (event mode)");
+
+            // Create and wire WASAPI event for event-driven render
+            _renderEvent = CreateEventW(IntPtr.Zero, false, false, IntPtr.Zero);
+            var setEventFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, int>)acVt[AudioClient_SetEventHandle];
+            hr = setEventFn(_audioClient, _renderEvent);
+            if (hr < 0) { Log.Msg($"[VirtualMic] SetEventHandle failed: 0x{hr:X8}"); Cleanup(); return false; }
+            Log.Msg("[VirtualMic] WASAPI event handle set");
 
             var getBufFn = (delegate* unmanaged[Stdcall]<IntPtr, out uint, int>)acVt[AudioClient_GetBufferSize];
             hr = getBufFn(_audioClient, out _bufferFrameCount);
@@ -163,50 +182,48 @@ internal sealed class VirtualMic : IDisposable
     {
         if (_disposed || Muted || samples.Length == 0) return;
 
-        lock (_gameAudioLock)
-        {
-            int ringSize = _gameAudioRing.Length;
-            int toWrite = Math.Min(samples.Length, ringSize);
-            int offset = (int)(_gameAudioWritePos % ringSize);
-            int first = Math.Min(toWrite, ringSize - offset);
+        // Lock-free SPSC write: single producer (audio render thread)
+        int ringSize = _gameAudioRing.Length;
+        long wp = Volatile.Read(ref _gameAudioWritePos);
+        int toWrite = Math.Min(samples.Length, ringSize);
+        int offset = (int)(wp % ringSize);
+        int first = Math.Min(toWrite, ringSize - offset);
 
-            samples.Slice(0, first).CopyTo(_gameAudioRing.AsSpan(offset, first));
-            if (first < toWrite)
-                samples.Slice(first, toWrite - first).CopyTo(_gameAudioRing.AsSpan(0, toWrite - first));
+        samples.Slice(0, first).CopyTo(_gameAudioRing.AsSpan(offset, first));
+        if (first < toWrite)
+            samples.Slice(first, toWrite - first).CopyTo(_gameAudioRing.AsSpan(0, toWrite - first));
 
-            _gameAudioWritePos += toWrite;
-        }
+        Volatile.Write(ref _gameAudioWritePos, wp + toWrite);
     }
 
     private int ReadGameAudio(float[] output, int maxSamples)
     {
-        lock (_gameAudioLock)
+        // Lock-free SPSC read: single consumer (render loop thread)
+        long writePos = Volatile.Read(ref _gameAudioWritePos);
+        long available = writePos - _gameAudioReadPos;
+        if (available <= 0) return 0;
+        if (available > _gameAudioRing.Length)
         {
-            long available = _gameAudioWritePos - _gameAudioReadPos;
-            if (available <= 0) return 0;
-            if (available > _gameAudioRing.Length)
-            {
-                _gameAudioReadPos = _gameAudioWritePos - _gameAudioRing.Length;
-                available = _gameAudioRing.Length;
-            }
-
-            int toRead = (int)Math.Min(available, maxSamples);
-            int ringSize = _gameAudioRing.Length;
-            int offset = (int)(_gameAudioReadPos % ringSize);
-            int first = Math.Min(toRead, ringSize - offset);
-            Array.Copy(_gameAudioRing, offset, output, 0, first);
-            if (first < toRead)
-                Array.Copy(_gameAudioRing, 0, output, first, toRead - first);
-            _gameAudioReadPos += toRead;
-            return toRead;
+            _gameAudioReadPos = writePos - _gameAudioRing.Length;
+            available = _gameAudioRing.Length;
         }
+
+        int toRead = (int)Math.Min(available, maxSamples);
+        int ringSize = _gameAudioRing.Length;
+        int offset = (int)(_gameAudioReadPos % ringSize);
+        int first = Math.Min(toRead, ringSize - offset);
+        Array.Copy(_gameAudioRing, offset, output, 0, first);
+        if (first < toRead)
+            Array.Copy(_gameAudioRing, 0, output, first, toRead - first);
+        _gameAudioReadPos += toRead;
+        return toRead;
     }
 
     private unsafe void RenderLoop()
     {
         while (!_disposed)
         {
-            Thread.Sleep(10);
+            WaitForSingleObject(_renderEvent, 100);
             if (_disposed || _renderClient == IntPtr.Zero) break;
 
             try
@@ -272,6 +289,7 @@ internal sealed class VirtualMic : IDisposable
         }
         if (_renderClient != IntPtr.Zero) { Marshal.Release(_renderClient); _renderClient = IntPtr.Zero; }
         if (_audioClient != IntPtr.Zero) { Marshal.Release(_audioClient); _audioClient = IntPtr.Zero; }
+        if (_renderEvent != IntPtr.Zero) { CloseHandle(_renderEvent); _renderEvent = IntPtr.Zero; }
     }
 
     public void Dispose()

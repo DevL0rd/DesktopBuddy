@@ -1,5 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using Renderite.Shared;
 
@@ -149,9 +151,28 @@ internal sealed class VirtualCamera : IDisposable
                     d[2] = s[2]; // R
                 }
             }
-            else // RGBA32 and others
+            else // RGBA32
             {
-                for (int x = 0; x < dstW; x++)
+                int x = 0;
+                // SSSE3 path: process 4 RGBA pixels -> 12 BGR bytes at a time
+                if (Ssse3.IsSupported && bpp == 4)
+                {
+                    // Shuffle mask: RGBA [R0,G0,B0,A0, R1,G1,B1,A1, R2,G2,B2,A2, R3,G3,B3,A3]
+                    //            -> BGR  [B0,G0,R0, B1,G1,R1, B2,G2,R2, B3,G3,R3, xx,xx,xx,xx]
+                    var mask = Vector128.Create(
+                        (byte)2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, 0x80, 0x80, 0x80, 0x80);
+
+                    for (; x + 4 <= dstW; x += 4)
+                    {
+                        var rgba = Sse2.LoadVector128(srcRow + x * 4);
+                        var bgr = Ssse3.Shuffle(rgba, mask);
+                        // Write 12 bytes (4 BGR pixels)
+                        *(long*)(dstRow + x * 3) = bgr.AsInt64().GetElement(0);
+                        *(int*)(dstRow + x * 3 + 8) = bgr.AsInt32().GetElement(2);
+                    }
+                }
+                // Scalar remainder
+                for (; x < dstW; x++)
                 {
                     byte* s = srcRow + x * bpp;
                     byte* d = dstRow + x * 3;

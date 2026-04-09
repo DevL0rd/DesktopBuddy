@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using FrooxEngine;
 using FrooxEngine.UIX;
 
@@ -16,6 +17,15 @@ public class DesktopSession
     public bool ManualModeSet;
     public double TimeSinceLastCapture;
     public double TargetInterval;
+
+    // Background bitmap copy thread (Fix 1: move heavy memcpy off engine thread)
+    public Thread CopyThread;
+    public ManualResetEventSlim CopySignal = new(false);
+    public volatile bool CopyThreadRunning;
+    public volatile bool BitmapReady;
+    public volatile int CapturedWidth;
+    public volatile int CapturedHeight;
+    public volatile bool CapturedSizeChanged; // set when bg thread detects resize
 
     public Component LastActiveSource;
 
