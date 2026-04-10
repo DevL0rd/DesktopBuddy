@@ -17,4 +17,5 @@ jobs:
           dotnet-quality: 'preview'
 
       - name: Build
-        run: dotnet build DesktopBuddy/DesktopBuddy.csproj
+        shell: cmd
+        run: scripts\build.bat

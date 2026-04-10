@@ -25,39 +25,9 @@ public sealed class MjpegServer : IDisposable
 
     public void Start()
     {
-        try
-        {
-            _listener.Prefixes.Add($"http://+:{_port}/");
-            _listener.Start();
-            Log.Msg($"[MjpegServer] Listening on http://+:{_port}/");
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[MjpegServer] http://+ failed ({ex.Message}), requesting admin urlacl...");
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "netsh",
-                    Arguments = $"http add urlacl url=http://+:{_port}/ sddl=D:(A;;GX;;;S-1-1-0)",
-                    UseShellExecute = true,
-                    Verb = "runas"
-                };
-                var proc = System.Diagnostics.Process.Start(psi);
-                proc?.WaitForExit();
-                Log.Msg($"[MjpegServer] urlacl result: {proc?.ExitCode}");
-            }
-            catch (Exception urlEx)
-            {
-                Log.Msg($"[MjpegServer] urlacl failed: {urlEx.Message}");
-            }
-
-            _listener.Close();
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://+:{_port}/");
-            _listener.Start();
-            Log.Msg($"[MjpegServer] Listening on http://+:{_port}/ (after urlacl)");
-        }
+        _listener.Prefixes.Add($"http://+:{_port}/");
+        _listener.Start();
+        Log.Msg($"[MjpegServer] Listening on http://+:{_port}/");
         _ = ListenLoopAsync();
     }
 

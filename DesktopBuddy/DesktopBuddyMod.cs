@@ -56,7 +56,6 @@ public class DesktopBuddyMod : ResoniteMod
     internal static MjpegServer? StreamServer;
     internal static VirtualCamera VCam;
     internal static VirtualMic VMic;
-    private static bool _firstRunSetupDone;
     private const int STREAM_PORT = 48080;
     internal static string? TunnelUrl;
     private static Process _tunnelProcess;
@@ -134,27 +133,16 @@ public class DesktopBuddyMod : ResoniteMod
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            bool needsRestart = false;
             try
             {
-                if (SoftCamInterop.FindDll() != null)
+                if (SoftCamSetup.IsRegistered())
                 {
-                    if (!SoftCamSetup.IsRegistered())
-                    {
-                        Msg("[VirtualCamera] Registering DirectShow filter (one-time setup)...");
-                        SoftCamSetup.Register();
-                        needsRestart = true;
-                    }
-                    else
-                    {
-                        Msg("[VirtualCamera] DirectShow filter already registered");
-                    }
                     VCam = new VirtualCamera();
                     VCam.StartIdle();
                 }
                 else
                 {
-                    Msg("[VirtualCamera] softcam64.dll not found, virtual camera unavailable");
+                    Msg("[VirtualCamera] DirectShow filter not registered, virtual camera unavailable");
                 }
             }
             catch (Exception ex) { Msg($"[VirtualCamera] Setup error: {ex.Message}"); }
@@ -162,32 +150,9 @@ public class DesktopBuddyMod : ResoniteMod
             try
             {
                 if (!VBCableSetup.IsInstalled())
-                {
-                    if (VBCableSetup.FindInstaller() != null)
-                    {
-                        Msg("[VirtualMic] Installing VB-Cable (one-time setup)...");
-                        VBCableSetup.Install();
-                        VBCableSetup.DisableCableLoopback();
-                        needsRestart = true;
-                    }
-                    else
-                    {
-                        Msg("[VirtualMic] VB-Cable installer not found, virtual mic unavailable");
-                    }
-                }
-                else
-                {
-                    Msg("[VirtualMic] VB-Cable already installed");
-                    VBCableSetup.DisableCableLoopback();
-                }
+                    Msg("[VirtualMic] VB-Cable not installed, virtual mic unavailable");
             }
             catch (Exception ex) { Msg($"[VirtualMic] Setup error: {ex.Message}"); }
-
-            if (needsRestart && !_firstRunSetupDone)
-            {
-                _firstRunSetupDone = true;
-                Msg("[Setup] First-time setup complete. A PC restart is recommended for all virtual device features to work correctly.");
-            }
         });
 
         _windowPollerRunning = true;

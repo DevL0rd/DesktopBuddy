@@ -19,50 +19,39 @@ jobs:
           dotnet-quality: 'preview'
 
       - name: Build
-        run: dotnet build DesktopBuddy/DesktopBuddy.csproj
+        shell: cmd
+        run: scripts\build.bat
+
+      - name: Get build info
+        id: buildinfo
+        shell: pwsh
+        run: |
+          $short = git rev-parse --short HEAD
+          $dt    = (Get-Date -AsUTC).ToString("yyyy.MM.dd_HH.mm.ss")
+          $name  = "DesktopBuddy-Alpha-Manager_${dt}_${short}"
+          echo "short=$short"  >> $env:GITHUB_OUTPUT
+          echo "name=$name"    >> $env:GITHUB_OUTPUT
 
       - name: Package
-        shell: bash
-        run: scripts/package.sh
-
-      - name: Get short SHA
-        id: sha
-        shell: bash
-        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        shell: cmd
+        env:
+          ZIP_NAME: ${{ steps.buildinfo.outputs.name }}
+        run: scripts\package.bat
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ steps.sha.outputs.short }}
-          name: Build ${{ steps.sha.outputs.short }}
+          tag_name: ${{ steps.buildinfo.outputs.name }}
+          name: ${{ steps.buildinfo.outputs.name }}
           body: |
-            ## Installation
+            ## DesktopBuddy Manager
 
-            1. Download `DesktopBuddy.zip` below
-            2. Extract it into your **Resonite root folder** (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`)
-
-            After extracting, your folder should look like:
-            ```
-            Resonite/
-              rml_mods/
-                DesktopBuddy.dll
-              ffmpeg/
-                avcodec-61.dll
-                ...
-              cloudflared/
-                cloudflared.exe
-              softcam/
-                softcam.dll
-                softcam64.dll
-              vbcable/
-                VBCABLE_Setup_x64.exe
-                ...
-            ```
-
-            3. Launch Resonite — on first run, **accept the two UAC (admin) prompts** to register the virtual camera and microphone drivers
-            4. **Restart your PC** after first run — the virtual microphone driver requires a reboot
+            1. Download `${{ steps.buildinfo.outputs.name }}.exe` below
+            2. Run the downloaded manager `.exe` as administrator - it will auto-detect your Resonite install via Steam, or let you browse to it manually
+            3. Click **Install / Update** - the manager will copy all files, register the virtual camera driver, and install the virtual audio cable
+            4. Restart your PC if prompted - the virtual microphone driver may require a reboot
 
             The virtual camera appears as **"DesktopBuddy - Camera"** and the virtual microphone as **"CABLE Output"** in Discord, Zoom, Chrome, OBS, etc.
 
-            > Having issues? See the [troubleshooting guide](https://github.com/DevL0rd/DesktopBuddy#troubleshooting) in the README.
-          files: DesktopBuddy.zip
+            > Having issues? Use the support report button in the manager, then see the [troubleshooting guide](https://github.com/DevL0rd/DesktopBuddy#troubleshooting) in the README.
+          files: ${{ steps.buildinfo.outputs.name }}.exe

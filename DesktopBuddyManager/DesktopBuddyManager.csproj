@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>Manager</AssemblyName>
+    <RootNamespace>DesktopBuddyManager</RootNamespace>
+    <ModBuildDir>$(MSBuildThisFileDirectory)..\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0</ModBuildDir>
+  </PropertyGroup>
+
+  <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" StandardOutputImportance="low" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitSha" />
+    </Exec>
+    <PropertyGroup>
+      <GitSha Condition="'$(GitSha)' == ''">unknown</GitSha>
+      <BuildInfoContent>namespace DesktopBuddyManager { internal static class BuildInfo { internal const string GitSha = "$(GitSha)"%3B } }</BuildInfoContent>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.g.cs" Overwrite="true" Lines="$(BuildInfoContent)" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildInfo.g.cs" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="MainForm.cs" />
+    <Compile Include="ManagerUpdateService.cs" />
+    <Compile Include="SupportReportService.cs" />
+    <Compile Include="DescriptionPromptForm.cs" />
+
+    <EmbeddedResource Include="..\LICENSE">
+      <LogicalName>DesktopBuddyManager.LICENSE</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="$(ModBuildDir)\DesktopBuddy.dll">
+      <LogicalName>payload/rml_mods/DesktopBuddy.dll</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="..\ffmpeg\*.dll">
+      <LogicalName>payload/ffmpeg/%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="..\softcam\*.dll">
+      <LogicalName>payload/softcam/%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="..\vbcable\*" Exclude="..\vbcable\*.lnk">
+      <LogicalName>payload/vbcable/%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="..\cloudflared\cloudflared.exe">
+      <LogicalName>payload/cloudflared/cloudflared.exe</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

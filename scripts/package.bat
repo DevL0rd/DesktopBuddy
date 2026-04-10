@@ -4,53 +4,32 @@ SETLOCAL ENABLEDELAYEDEXPANSION
 set "SCRIPT_DIR=%~dp0"
 set "ROOT_DIR=%SCRIPT_DIR%.."
 set "BUILD_DIR=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0"
-set "OUT_ZIP=%ROOT_DIR%\DesktopBuddy.zip"
-set "STAGING=%TEMP%\DesktopBuddy_pkg_%RANDOM%"
+set "INSTALLER_DIR=%ROOT_DIR%\DesktopBuddyManager\bin\Debug\net10.0-windows10.0.22621.0"
+set "MANAGER_DIR=%ROOT_DIR%\DesktopBuddyManager\bin\Debug\net10.0-windows10.0.22621.0"
 
-REM Verify build exists
+for /f %%i in ('git -C "%ROOT_DIR%" rev-parse --short HEAD 2^>nul') do set "SHORT=%%i"
+if not defined SHORT set "SHORT=unknown"
+if not defined ZIP_NAME (
+    for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy.MM.dd_HH.mm.ss"') do set "DT=%%d"
+    set "ZIP_NAME=DesktopBuddy-Alpha-Manager_!DT!_!SHORT!"
+)
+
+set "OUT_EXE=%ROOT_DIR%\!ZIP_NAME!.exe"
+
 if not exist "%BUILD_DIR%\DesktopBuddy.dll" (
     echo ERROR: DesktopBuddy.dll not found. Run scripts\build.bat first.
     exit /b 1
 )
 
-REM Stage files
-mkdir "%STAGING%\rml_mods" 2>nul
-mkdir "%STAGING%\ffmpeg" 2>nul
-mkdir "%STAGING%\cloudflared" 2>nul
-mkdir "%STAGING%\softcam" 2>nul
-mkdir "%STAGING%\vbcable" 2>nul
+echo Building manager...
+dotnet publish "%ROOT_DIR%\DesktopBuddyManager\DesktopBuddyManager.csproj" -r win-x64 --self-contained false -p:PublishSingleFile=true -o "%ROOT_DIR%\DesktopBuddyManager\publish" /nologo /verbosity:quiet
+if errorlevel 1 ( echo ERROR: Manager build failed. & exit /b 1 )
 
-copy "%BUILD_DIR%\DesktopBuddy.dll" "%STAGING%\rml_mods\" >nul
-echo   rml_mods\DesktopBuddy.dll
-
-for %%f in ("%ROOT_DIR%\ffmpeg\*.dll") do (
-    copy "%%f" "%STAGING%\ffmpeg\" >nul
-    echo   ffmpeg\%%~nxf
-)
-
-for %%f in ("%ROOT_DIR%\softcam\*.dll") do (
-    copy "%%f" "%STAGING%\softcam\" >nul
-    echo   softcam\%%~nxf
-)
-
-for %%f in ("%ROOT_DIR%\vbcable\*") do (
-    copy "%%f" "%STAGING%\vbcable\" >nul
-    echo   vbcable\%%~nxf
-)
-
-copy "%ROOT_DIR%\cloudflared\cloudflared.exe" "%STAGING%\cloudflared\" >nul
-echo   cloudflared\cloudflared.exe
-
-REM Create zip
-if exist "%OUT_ZIP%" del "%OUT_ZIP%"
-echo.
-echo Creating zip...
-powershell -Command "Compress-Archive -Path '%STAGING%\*' -DestinationPath '%OUT_ZIP%'"
+if exist "!OUT_EXE!" del "!OUT_EXE!"
+copy "%ROOT_DIR%\DesktopBuddyManager\publish\Manager.exe" "!OUT_EXE!" >nul
 
 echo.
-echo Done: DesktopBuddy.zip
-echo Extract into Resonite root folder.
-
-rmdir /s /q "%STAGING%" 2>nul
+echo Done: !ZIP_NAME!.exe
+echo Run as administrator to manage DesktopBuddy.
 
 ENDLOCAL

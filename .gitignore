@@ -7,4 +7,6 @@ obj/
 *.log
 packages/
 *.ts
-DesktopBuddy.zip
+DesktopBuddy*.zip
+DesktopBuddy*.exe
+DesktopBuddyManager/publish/
