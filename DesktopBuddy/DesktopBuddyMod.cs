@@ -2129,17 +2129,19 @@ public class DesktopBuddyMod : ResoniteMod
                     var newEncoder = StreamServer?.CreateEncoder(newStreamId);
                     session.StreamId = newStreamId;
 
+                    FfmpegEncoder oldEncoder = null;
+                    lock (_sharedStreams)
+                    {
+                        if (_sharedStreams.TryGetValue(session.Hwnd, out var oldShared))
+                            oldEncoder = oldShared.Encoder;
+                    }
+
                     var oldStreamer = session.Streamer;
-                    var oldHwnd = session.Hwnd;
                     System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                     {
                         try
                         {
-                            lock (_sharedStreams)
-                            {
-                                if (_sharedStreams.TryGetValue(oldHwnd, out var oldShared) && oldShared.Encoder != null)
-                                    oldShared.Encoder.Stop();
-                            }
+                            oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
                             StreamServer?.StopEncoder(oldStreamId);
                         }

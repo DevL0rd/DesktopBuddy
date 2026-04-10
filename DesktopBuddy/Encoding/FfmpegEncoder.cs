@@ -500,7 +500,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 return;
         }
 
-        _pendingTexture = srcTexture;
+        Marshal.AddRef(srcTexture);
+        var prev = Interlocked.Exchange(ref _pendingTexture, srcTexture);
+        if (prev != IntPtr.Zero) Marshal.Release(prev);
         _pendingWidth = width;
         _pendingHeight = height;
         _encodeEvent.Set();
@@ -514,7 +516,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _encodeEvent.WaitOne(100);
             if (_disposed) break;
 
-            var tex = _pendingTexture;
+            var tex = Interlocked.Exchange(ref _pendingTexture, IntPtr.Zero);
             var w = _pendingWidth;
             var h = _pendingHeight;
             if (tex == IntPtr.Zero) continue;
@@ -526,6 +528,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             catch (Exception ex)
             {
                 Log.Msg($"[FfmpegEnc:{_streamId}] Encode error (frame {_totalFrames}): {ex}");
+            }
+            finally
+            {
+                Marshal.Release(tex);
             }
 
         }

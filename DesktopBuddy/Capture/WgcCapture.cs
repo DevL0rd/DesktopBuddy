@@ -226,9 +226,6 @@ public sealed class WgcCapture : IDisposable
 
     private IntPtr _stagingTexture;
     private int _stagingTexW, _stagingTexH;
-    private IntPtr _encodeTexture0, _encodeTexture1;
-    private int _encodeTexFlip;
-    private int _encodeTexW, _encodeTexH;
     private byte[] _buffer;
     private GCHandle _pinnedBuffer;
     private readonly object _frameLock = new();
@@ -464,22 +461,11 @@ public sealed class WgcCapture : IDisposable
 
         try
         {
-            if (_encodeTexture0 == IntPtr.Zero)
-                EnsureEncodeTexture(w, h);
-
-            if (_encodeTexture0 != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH)
+            using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
             {
-                int slot = _encodeTexFlip;
-                IntPtr encodeTex = slot == 0 ? _encodeTexture0 : _encodeTexture1;
-                _encodeTexFlip = 1 - slot;
-                ContextCopyResource(_d3dContext, encodeTex, srcTexture);
-
-                using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
-                {
-                    var gpuCb = OnGpuFrame;
-                    try { gpuCb?.Invoke(_d3dDevice, encodeTex, w, h); }
-                    catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
-                }
+                var gpuCb = OnGpuFrame;
+                try { gpuCb?.Invoke(_d3dDevice, srcTexture, w, h); }
+                catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
             }
 
             EnsureGpuConvertPipeline(w, h);
@@ -570,29 +556,6 @@ public sealed class WgcCapture : IDisposable
         }
     }
 
-    private void EnsureEncodeTexture(int w, int h)
-    {
-        if (_encodeTexture0 != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH) return;
-
-        if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
-        if (_encodeTexture1 != IntPtr.Zero) { Marshal.Release(_encodeTexture1); _encodeTexture1 = IntPtr.Zero; }
-
-        var desc = new D3D11_TEXTURE2D_DESC
-        {
-            Width = (uint)w, Height = (uint)h,
-            MipLevels = 1, ArraySize = 1,
-            Format = DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleCount = 1, SampleQuality = 0,
-            Usage = 0,
-            BindFlags = 0,
-            CPUAccessFlags = 0,
-            MiscFlags = 0
-        };
-        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _encodeTexture0);
-        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _encodeTexture1);
-        _encodeTexW = w; _encodeTexH = h;
-        _encodeTexFlip = 0;
-    }
 
     private void EnsureStagingTexture(int w, int h)
     {
@@ -879,6 +842,7 @@ public sealed class WgcCapture : IDisposable
 
     public object D3dContextLock => _disposeLock;
 
+
     public unsafe void FlushD3dContext()
     {
         lock (_disposeLock)
@@ -934,8 +898,6 @@ public sealed class WgcCapture : IDisposable
         Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
         ReleaseGpuConvertResources(disposing: false);
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
-        if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
-        if (_encodeTexture1 != IntPtr.Zero) { Marshal.Release(_encodeTexture1); _encodeTexture1 = IntPtr.Zero; }
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
