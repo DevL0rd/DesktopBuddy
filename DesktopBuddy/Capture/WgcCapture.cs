@@ -464,17 +464,22 @@ public sealed class WgcCapture : IDisposable
 
         try
         {
-            EnsureEncodeTexture(w, h);
-            int slot = _encodeTexFlip;
-            IntPtr encodeTex = slot == 0 ? _encodeTexture0 : _encodeTexture1;
-            _encodeTexFlip = 1 - slot;
-            ContextCopyResource(_d3dContext, encodeTex, srcTexture);
+            if (_encodeTexture0 == IntPtr.Zero)
+                EnsureEncodeTexture(w, h);
 
-            using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
+            if (_encodeTexture0 != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH)
             {
-                var gpuCb = OnGpuFrame;
-                try { gpuCb?.Invoke(_d3dDevice, encodeTex, w, h); }
-                catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
+                int slot = _encodeTexFlip;
+                IntPtr encodeTex = slot == 0 ? _encodeTexture0 : _encodeTexture1;
+                _encodeTexFlip = 1 - slot;
+                ContextCopyResource(_d3dContext, encodeTex, srcTexture);
+
+                using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
+                {
+                    var gpuCb = OnGpuFrame;
+                    try { gpuCb?.Invoke(_d3dDevice, encodeTex, w, h); }
+                    catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
+                }
             }
 
             EnsureGpuConvertPipeline(w, h);
@@ -568,6 +573,7 @@ public sealed class WgcCapture : IDisposable
     private void EnsureEncodeTexture(int w, int h)
     {
         if (_encodeTexture0 != IntPtr.Zero && w == _encodeTexW && h == _encodeTexH) return;
+
         if (_encodeTexture0 != IntPtr.Zero) { Marshal.Release(_encodeTexture0); _encodeTexture0 = IntPtr.Zero; }
         if (_encodeTexture1 != IntPtr.Zero) { Marshal.Release(_encodeTexture1); _encodeTexture1 = IntPtr.Zero; }
 
