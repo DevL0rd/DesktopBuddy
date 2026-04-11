@@ -287,16 +287,32 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default)
+    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default, DesktopSession parentSession = null)
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd})");
 
         WindowInput.RestoreIfMinimized(hwnd);
 
         var streamer = new DesktopStreamer(hwnd, monitorHandle);
-        if (!streamer.TryInitialCapture())
+        var world = root.World;
+
+        System.Threading.Tasks.Task.Run(() =>
         {
-            Msg($"[StartStreaming] Failed initial capture for: {title}");
+            if (!streamer.TryInitialCapture())
+            {
+                Msg($"[StartStreaming] Failed initial capture for: {title}");
+                streamer.Dispose();
+                return;
+            }
+            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, isChild, streamer, parentSession));
+        });
+    }
+
+    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, bool isChild, DesktopStreamer streamer, DesktopSession parentSession = null)
+    {
+        if (root == null || root.IsDestroyed)
+        {
+            Msg($"[StartStreaming] Root slot destroyed before capture completed: {title}");
             streamer.Dispose();
             return;
         }
@@ -359,6 +375,12 @@ public class DesktopBuddyMod : ResoniteMod
             Collider = collider,
         };
         ActiveSessions.Add(session);
+        if (parentSession != null)
+        {
+            session.ParentSession = parentSession;
+            parentSession.ChildSessions.Add(session);
+            Msg($"[ChildWindow] Linked to parent, parent now tracking {parentSession.ChildSessions.Count} children");
+        }
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
 
@@ -1477,19 +1499,7 @@ public class DesktopBuddyMod : ResoniteMod
 
         try
         {
-            StartStreaming(root, childHwnd, title, isChild: true);
-
-            var childSession = ActiveSessions.Find(s => s.Hwnd == childHwnd && s.Root == root);
-            if (childSession != null)
-            {
-                childSession.ParentSession = parentSession;
-                parentSession.ChildSessions.Add(childSession);
-                Msg($"[ChildWindow] Full DesktopBuddy spawned, parent now tracking {parentSession.ChildSessions.Count} children");
-            }
-            else
-            {
-                Msg($"[ChildWindow] Warning: StartStreaming succeeded but session not found");
-            }
+            StartStreaming(root, childHwnd, title, isChild: true, parentSession: parentSession);
         }
         catch (Exception ex)
         {
@@ -1541,9 +1551,7 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
 
         session.CopyThreadRunning = false;
-        session.CopySignal.Set();
         session.CopyThread?.Join(500);
-        session.CopySignal.Dispose();
 
         if (VMic != null && session.VMicListener != null)
         {
@@ -1722,74 +1730,92 @@ public class DesktopBuddyMod : ResoniteMod
             try { snapshot = ActiveSessions.ToArray(); }
             catch { continue; }
 
+            var byProcess = new Dictionary<uint, List<DesktopSession>>();
             foreach (var session in snapshot)
             {
-                if (!_windowPollerRunning) break;
                 if (session.Cleaned || session.IsChildPanel || session.ProcessId == 0) continue;
+                if (!byProcess.TryGetValue(session.ProcessId, out var list))
+                    byProcess[session.ProcessId] = list = new List<DesktopSession>();
+                list.Add(session);
+            }
 
+            foreach (var kvp in byProcess)
+            {
+                if (!_windowPollerRunning) break;
+                var sessions = kvp.Value;
+
+                List<WindowEnumerator.WindowInfo> procWindows;
+                HashSet<IntPtr> windowSet;
                 try
                 {
-                    var procWindows = WindowEnumerator.GetProcessWindows(session.ProcessId);
-
+                    procWindows = WindowEnumerator.GetProcessWindows(kvp.Key);
+                    windowSet = new HashSet<IntPtr>(procWindows.Count);
                     for (int pw = 0; pw < procWindows.Count; pw++)
+                        windowSet.Add(procWindows[pw].Handle);
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[WindowPoller] Error enumerating PID {kvp.Key}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (var session in sessions)
+                {
+                    try
                     {
-                        if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
+                        for (int pw = 0; pw < procWindows.Count; pw++)
                         {
-                            if (procWindows[pw].Title != session.LastTitle)
+                            if (procWindows[pw].Handle == session.Hwnd && !string.IsNullOrEmpty(procWindows[pw].Title))
+                            {
+                                if (procWindows[pw].Title != session.LastTitle)
+                                {
+                                    _windowEvents.Enqueue(new WindowEvent
+                                    {
+                                        Session = session,
+                                        EventType = WindowEventType.TitleChanged,
+                                        Title = procWindows[pw].Title
+                                    });
+                                }
+                                break;
+                            }
+                        }
+
+                        foreach (var win in procWindows)
+                        {
+                            if (win.Handle == session.Hwnd) continue;
+                            if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
+                            if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
+                            {
+                                session.TrackedChildHwnds.Add(win.Handle);
+                                _windowEvents.Enqueue(new WindowEvent
+                                {
+                                    Session = session,
+                                    EventType = WindowEventType.NewChild,
+                                    ChildHwnd = win.Handle,
+                                    Title = win.Title
+                                });
+                            }
+                        }
+
+                        for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
+                        {
+                            var child = session.ChildSessions[c];
+                            bool childStillActive = child.Streamer != null && windowSet.Contains(child.Hwnd);
+                            if (!childStillActive)
                             {
                                 _windowEvents.Enqueue(new WindowEvent
                                 {
                                     Session = session,
-                                    EventType = WindowEventType.TitleChanged,
-                                    Title = procWindows[pw].Title
+                                    EventType = WindowEventType.ChildClosed,
+                                    ChildHwnd = child.Hwnd
                                 });
                             }
-                            break;
                         }
                     }
-
-                    foreach (var win in procWindows)
+                    catch (Exception ex)
                     {
-                        if (win.Handle == session.Hwnd) continue;
-                        if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
-                        if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
-                        {
-                            session.TrackedChildHwnds.Add(win.Handle);
-                            _windowEvents.Enqueue(new WindowEvent
-                            {
-                                Session = session,
-                                EventType = WindowEventType.NewChild,
-                                ChildHwnd = win.Handle,
-                                Title = win.Title
-                            });
-                        }
+                        Msg($"[WindowPoller] Error for session hwnd={session.Hwnd}: {ex.Message}");
                     }
-
-                    for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
-                    {
-                        var child = session.ChildSessions[c];
-                        bool childStillActive = false;
-                        if (child.Streamer != null)
-                        {
-                            for (int pw = 0; pw < procWindows.Count; pw++)
-                            {
-                                if (procWindows[pw].Handle == child.Hwnd) { childStillActive = true; break; }
-                            }
-                        }
-                        if (!childStillActive)
-                        {
-                            _windowEvents.Enqueue(new WindowEvent
-                            {
-                                Session = session,
-                                EventType = WindowEventType.ChildClosed,
-                                ChildHwnd = child.Hwnd
-                            });
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Msg($"[WindowPoller] Error for PID {session.ProcessId}: {ex.Message}");
                 }
             }
         }
@@ -1797,17 +1823,23 @@ public class DesktopBuddyMod : ResoniteMod
 
     private static void BitmapCopyLoop(DesktopSession session)
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         long lastCaptureTicks = 0;
+        long freq = Stopwatch.Frequency;
+        long twoMsTicks = freq / 2000;
 
         while (session.CopyThreadRunning)
         {
-            long intervalTicks = (long)(session.TargetInterval * System.Diagnostics.Stopwatch.Frequency);
+            long intervalTicks = (long)(session.TargetInterval * freq);
             long now = sw.ElapsedTicks;
             long remaining = intervalTicks - (now - lastCaptureTicks);
             if (remaining > 0)
             {
-                Thread.Sleep(Math.Max(1, (int)(remaining * 1000 / System.Diagnostics.Stopwatch.Frequency)));
+                if (remaining > twoMsTicks)
+                    Thread.Sleep((int)((remaining - twoMsTicks) * 1000 / freq));
+                long deadline = lastCaptureTicks + intervalTicks;
+                while (sw.ElapsedTicks < deadline)
+                    Thread.SpinWait(50);
                 if (!session.CopyThreadRunning) break;
             }
             lastCaptureTicks = sw.ElapsedTicks;
@@ -1871,6 +1903,16 @@ public class DesktopBuddyMod : ResoniteMod
 
         try
         {
+            int lastVCamIdx = -1;
+            int lastVMicIdx = -1;
+            for (int k = 0; k < ActiveSessions.Count; k++)
+            {
+                var s = ActiveSessions[k];
+                if (s.Root?.World != world) continue;
+                if (s.VCamCamera != null && !s.VCamCamera.IsDestroyed) lastVCamIdx = k;
+                if (s.VMicListener != null && !s.VMicListener.IsDestroyed) lastVMicIdx = k;
+            }
+
             for (int i = ActiveSessions.Count - 1; i >= 0; i--)
             {
                 var session = ActiveSessions[i];
@@ -2072,15 +2114,7 @@ public class DesktopBuddyMod : ResoniteMod
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
                     !session.VCamRenderPending)
                 {
-                    bool isLast = true;
-                    for (int j = i + 1; j < ActiveSessions.Count; j++)
-                    {
-                        var later = ActiveSessions[j];
-                        if (later.VCamCamera != null && !later.VCamCamera.IsDestroyed &&
-                            later.Root?.World == world)
-                        { isLast = false; break; }
-                    }
-                    if (isLast)
+                    if (i == lastVCamIdx)
                     {
                         session.VCamRenderPending = true;
                         var vcam = session.VCamCamera;
@@ -2117,15 +2151,7 @@ public class DesktopBuddyMod : ResoniteMod
                 if ((VMic == null || !VMic.IsActive) && VBCableSetup.IsInstalled() &&
                     session.VMicListener != null && !session.VMicListener.IsDestroyed)
                 {
-                    bool isLast = true;
-                    for (int j = i + 1; j < ActiveSessions.Count; j++)
-                    {
-                        var later = ActiveSessions[j];
-                        if (later.VMicListener != null && !later.VMicListener.IsDestroyed &&
-                            later.Root?.World == world)
-                        { isLast = false; break; }
-                    }
-                    if (isLast)
+                    if (i == lastVMicIdx)
                     {
                         VMic = new VirtualMic();
                         if (VMic.Start())

@@ -62,48 +62,67 @@ public sealed class WgcCapture : IDisposable
 
     private const int D3D_DRIVER_TYPE_UNKNOWN = 0;
 
+    private static IntPtr _cachedPreferredAdapter = IntPtr.Zero;
+    private static bool _adapterCacheReady;
+    private static readonly object _adapterCacheLock = new();
+
     private static unsafe IntPtr FindPreferredAdapter()
     {
-        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
-        int hr = CreateDXGIFactory1(ref factoryGuid, out IntPtr factory);
-        if (hr < 0 || factory == IntPtr.Zero) return IntPtr.Zero;
-
-        var vtable = *(IntPtr**)factory;
-        var enumAdapters = (delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, int>)vtable[IDXGIFactory_EnumAdapters];
-
-        IntPtr bestAdapter = IntPtr.Zero;
-        bool bestIsDiscrete = false;
-
-        for (uint i = 0; ; i++)
+        lock (_adapterCacheLock)
         {
-            IntPtr adapter;
-            hr = enumAdapters(factory, i, &adapter);
-            if (hr < 0) break;
-
-            var adapterVtable = *(IntPtr**)adapter;
-            var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, DXGI_ADAPTER_DESC*, int>)adapterVtable[IDXGIAdapter_GetDesc];
-            DXGI_ADAPTER_DESC desc;
-            getDesc(adapter, &desc);
-
-            bool isDiscrete = desc.VendorId == 0x10DE || desc.VendorId == 0x1002;
-            string descStr = new string((char*)desc.Description);
-            Log.Msg($"[WgcCapture] Adapter {i}: '{descStr}' VendorId=0x{desc.VendorId:X4} VRAM={desc.DedicatedVideoMemory / 1048576}MB{(isDiscrete ? " [discrete]" : "")}");
-
-            if (isDiscrete && !bestIsDiscrete)
+            if (_adapterCacheReady)
             {
-                if (bestAdapter != IntPtr.Zero) Marshal.Release(bestAdapter);
-                bestAdapter = adapter;
-                bestIsDiscrete = true;
+                if (_cachedPreferredAdapter != IntPtr.Zero)
+                    Marshal.AddRef(_cachedPreferredAdapter);
+                return _cachedPreferredAdapter;
             }
-            else
+
+            var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");
+            int hr = CreateDXGIFactory1(ref factoryGuid, out IntPtr factory);
+            if (hr < 0 || factory == IntPtr.Zero) { _adapterCacheReady = true; return IntPtr.Zero; }
+
+            var vtable = *(IntPtr**)factory;
+            var enumAdapters = (delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, int>)vtable[IDXGIFactory_EnumAdapters];
+
+            IntPtr bestAdapter = IntPtr.Zero;
+            bool bestIsDiscrete = false;
+
+            for (uint i = 0; ; i++)
             {
-                if (bestAdapter == IntPtr.Zero) bestAdapter = adapter;
-                else Marshal.Release(adapter);
+                IntPtr adapter;
+                hr = enumAdapters(factory, i, &adapter);
+                if (hr < 0) break;
+
+                var adapterVtable = *(IntPtr**)adapter;
+                var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, DXGI_ADAPTER_DESC*, int>)adapterVtable[IDXGIAdapter_GetDesc];
+                DXGI_ADAPTER_DESC desc;
+                getDesc(adapter, &desc);
+
+                bool isDiscrete = desc.VendorId == 0x10DE || desc.VendorId == 0x1002;
+                string descStr = new string((char*)desc.Description);
+                Log.Msg($"[WgcCapture] Adapter {i}: '{descStr}' VendorId=0x{desc.VendorId:X4} VRAM={desc.DedicatedVideoMemory / 1048576}MB{(isDiscrete ? " [discrete]" : "")}");
+
+                if (isDiscrete && !bestIsDiscrete)
+                {
+                    if (bestAdapter != IntPtr.Zero) Marshal.Release(bestAdapter);
+                    bestAdapter = adapter;
+                    bestIsDiscrete = true;
+                }
+                else
+                {
+                    if (bestAdapter == IntPtr.Zero) bestAdapter = adapter;
+                    else Marshal.Release(adapter);
+                }
             }
+
+            Marshal.Release(factory);
+
+            _cachedPreferredAdapter = bestAdapter;
+            if (_cachedPreferredAdapter != IntPtr.Zero)
+                Marshal.AddRef(_cachedPreferredAdapter);
+            _adapterCacheReady = true;
+            return bestAdapter;
         }
-
-        Marshal.Release(factory);
-        return bestAdapter;
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]

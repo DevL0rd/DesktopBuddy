@@ -54,8 +54,8 @@ public class DesktopTextureSource : ProceduralTextureBase
     protected override void ClearTextureData() { }
     protected override void GenerateErrorIndication() { }
 
-    // Set by the background BitmapCopyLoop thread, cleared on the engine thread in OnCommonUpdate.
     private volatile bool _frameReady;
+    private Bitmap2D _cachedBitmap;
 
     /// <summary>
     /// Must be called on the engine thread immediately after AttachComponent.
@@ -66,6 +66,7 @@ public class DesktopTextureSource : ProceduralTextureBase
     {
         Width = w;
         Height = h;
+        _cachedBitmap = null;
         FilterMode.Value = TextureFilterMode.Bilinear;
         Log.Msg($"[DesktopTextureSource] Initialized at {w}x{h}");
     }
@@ -80,8 +81,12 @@ public class DesktopTextureSource : ProceduralTextureBase
         if (_frameReady) return false;
         if (IsDestroyed) return false;
 
-        var bitmap = _getTex2D?.Invoke(this);
-        if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h) return false;
+        var bitmap = _cachedBitmap ??= _getTex2D?.Invoke(this);
+        if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
+        {
+            _cachedBitmap = null;
+            return false;
+        }
 
         data.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
         _frameReady = true;
@@ -106,9 +111,9 @@ public class DesktopTextureSource : ProceduralTextureBase
         }
 
         if (!_frameReady) return;
-        _frameReady = false;
 
         using (DesktopBuddyMod.Perf.Time("texture_upload"))
             _setFromBitmap?.Invoke(this, default, null);
+        _frameReady = false;
     }
 }

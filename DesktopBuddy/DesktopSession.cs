@@ -18,7 +18,6 @@ public class DesktopSession
     public double TargetInterval;
 
     public Thread CopyThread;
-    public ManualResetEventSlim CopySignal = new(false);
     public volatile bool CopyThreadRunning;
     public volatile int CapturedWidth;
     public volatile int CapturedHeight;
