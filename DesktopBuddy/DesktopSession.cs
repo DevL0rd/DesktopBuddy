@@ -23,7 +23,7 @@ public class DesktopSession
     public int LastScrollSign;
     public double LastScrollTick;
 
-    public int StreamId;
+    public int StreamId = -1;
     public IntPtr Hwnd;
 
     public uint ProcessId;
@@ -57,6 +57,7 @@ public class DesktopSession
     public DesktopAudioSource SpatialAudioSource;
     public AudioOutput SpatialAudioOutput;
     public bool OwnsAudioRedirect;
+    internal AudioMmfWriter AudioMmfWriter;
 
     public Action<int, int> OnResize;
 }

@@ -68,6 +68,11 @@
                       Condition="Exists('..\DesktopBuddyRenderer\bin\Debug\net472\DesktopBuddyRenderer.dll')">
       <LogicalName>payload/Renderer/BepInEx/plugins/DesktopBuddyRenderer.dll</LogicalName>
     </EmbeddedResource>
+
+    <EmbeddedResource Include="..\DesktopBuddyRenderer\bin\Debug\net472\FFmpeg.AutoGen.dll"
+                      Condition="Exists('..\DesktopBuddyRenderer\bin\Debug\net472\FFmpeg.AutoGen.dll')">
+      <LogicalName>payload/Renderer/BepInEx/plugins/FFmpeg.AutoGen.dll</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

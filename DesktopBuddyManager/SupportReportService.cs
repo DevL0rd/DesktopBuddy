@@ -13,7 +13,6 @@ namespace DesktopBuddyManager;
 
 internal sealed class SupportReportService
 {
-    private static readonly string[] CrashKeywords = ["desktopbuddy", "resonite", "dotnet", "coreclr", "clr"];
     private static readonly string[] EventProviders = [".NET Runtime", "Application Error", "Application Hang", "Windows Error Reporting"];
     private static readonly TimeSpan ArtifactLookback = TimeSpan.FromDays(14);
 
@@ -109,9 +108,21 @@ internal sealed class SupportReportService
         // ── Binary / non-text crash artifacts in their own subfolder ──────────
         var crashDir = Path.Combine(reportDir, "crash-artifacts");
         Directory.CreateDirectory(crashDir);
-        var crashCount = CopyCrashArtifacts(crashDir);
+        var copiedArtifacts = CopyCrashArtifacts(crashDir);
+        var crashCount = copiedArtifacts.Count;
         if (crashCount == 0)
             Directory.Delete(crashDir);   // remove empty folder from zip
+        else
+        {
+            report.AppendLine(sep);
+            report.AppendLine("  CRASH ARTIFACTS INCLUDED");
+            report.AppendLine(sep);
+            foreach (var artifact in copiedArtifacts.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+                report.AppendLine(artifact);
+            report.AppendLine();
+
+            await File.WriteAllTextAsync(Path.Combine(reportDir, "report.txt"), report.ToString(), Encoding.UTF8);
+        }
 
         // ── Zip ───────────────────────────────────────────────────────────────
         var zipPath = reportDir + ".zip";
@@ -196,9 +207,9 @@ internal sealed class SupportReportService
         }
     }
 
-    private static int CopyCrashArtifacts(string destinationDir)
+    private static List<string> CopyCrashArtifacts(string destinationDir)
     {
-        var copied = 0;
+        var copied = new List<string>();
 
         foreach (var dumpDir in EnumerateCrashDumpDirectories())
         {
@@ -210,13 +221,13 @@ internal sealed class SupportReportService
                          .Where(file => file.Extension.Equals(".dmp", StringComparison.OrdinalIgnoreCase) ||
                                         file.Extension.Equals(".mdmp", StringComparison.OrdinalIgnoreCase) ||
                                         file.Extension.Equals(".wer", StringComparison.OrdinalIgnoreCase))
-                         .Where(IsRelevantArtifact)
+                         .Where(IsRecentArtifact)
                          .OrderByDescending(file => file.LastWriteTimeUtc)
                          .Take(20))
             {
                 var destinationPath = Path.Combine(destinationDir, file.Name);
                 file.CopyTo(destinationPath, overwrite: true);
-                copied++;
+                copied.Add(file.Name);
             }
         }
 
@@ -227,13 +238,13 @@ internal sealed class SupportReportService
 
             foreach (var directory in new DirectoryInfo(werDir)
                          .EnumerateDirectories("*", SearchOption.TopDirectoryOnly)
-                         .Where(IsRelevantArtifact)
+                         .Where(IsRecentArtifact)
                          .OrderByDescending(dir => dir.LastWriteTimeUtc)
                          .Take(10))
             {
                 var targetDir = Path.Combine(destinationDir, directory.Name);
                 CopyDirectory(directory.FullName, targetDir);
-                copied++;
+                copied.Add(directory.Name + Path.DirectorySeparatorChar);
             }
         }
 
@@ -257,13 +268,9 @@ internal sealed class SupportReportService
         yield return Path.Combine(commonAppData, "Microsoft", "Windows", "WER", "ReportQueue");
     }
 
-    private static bool IsRelevantArtifact(FileSystemInfo info)
+    private static bool IsRecentArtifact(FileSystemInfo info)
     {
-        if (DateTime.UtcNow - info.LastWriteTimeUtc > ArtifactLookback)
-            return false;
-
-        var candidate = info.FullName.ToLowerInvariant();
-        return CrashKeywords.Any(candidate.Contains);
+        return DateTime.UtcNow - info.LastWriteTimeUtc <= ArtifactLookback;
     }
 
     private static int AppendEventLogEntries(StringBuilder builder)

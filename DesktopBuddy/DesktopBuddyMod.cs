@@ -379,27 +379,47 @@ public class DesktopBuddyMod : ResoniteMod
         bool isMonitorCapture = hwnd == IntPtr.Zero && monitorIndex >= 0;
         if (CaptureChannel != null && CaptureChannel.IsOpen)
         {
-            // Register both window and monitor captures with the channel
-            // Window: hwnd != 0, uses magic DisplayIndex + UWC path
-            // Monitor: hwnd == 0, uses magic DisplayIndex + renderer's monitor handling
-            captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
-            if (captureSlot < 0)
+            if (hwnd != IntPtr.Zero)
             {
-                Msg($"[StartStreaming] No free capture slots for: {title}");
-                streamer.Dispose();
-                root.Destroy();
-                return;
-            }
-            int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
-            procTex.DisplayIndex.Value = magicIdx;
-            if (isMonitorCapture)
-                Msg($"[StartStreaming] Monitor capture: slot {captureSlot}, DisplayIndex={magicIdx} (monitorIndex={monitorIndex})");
-            else
+                // Window capture — magic DisplayIndex + renderer UWC path
+                captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
+                if (captureSlot < 0)
+                {
+                    Msg($"[StartStreaming] No free capture slots for: {title}");
+                    streamer.Dispose();
+                    root.Destroy();
+                    return;
+                }
+                int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
+                procTex.DisplayIndex.Value = magicIdx;
                 Msg($"[StartStreaming] Window capture: slot {captureSlot}, DisplayIndex={magicIdx}");
+            }
+            else if (isMonitorCapture)
+            {
+                // Monitor capture — real DisplayIndex for local display, register slot for streaming
+                captureSlot = CaptureChannel.RegisterSession(IntPtr.Zero, streamer.MonitorHandle, monitorIndex);
+                if (captureSlot < 0)
+                {
+                    Msg($"[StartStreaming] No free capture slots for monitor: {title}");
+                    streamer.Dispose();
+                    root.Destroy();
+                    return;
+                }
+                procTex.DisplayIndex.Value = monitorIndex;
+                Msg($"[StartStreaming] Monitor capture: slot {captureSlot}, DisplayIndex={monitorIndex} (real, for local display)");
+            }
         }
         else
         {
-            Msg($"[StartStreaming] WARNING: Cannot set up texture - CaptureChannel unavailable (hwnd={hwnd}, channel={(CaptureChannel?.IsOpen ?? false)})");
+            if (isMonitorCapture)
+            {
+                procTex.DisplayIndex.Value = monitorIndex;
+                Msg($"[StartStreaming] Monitor capture (no channel): DisplayIndex={monitorIndex}");
+            }
+            else
+            {
+                Msg($"[StartStreaming] WARNING: Cannot set up texture - CaptureChannel unavailable (hwnd={hwnd}, channel={(CaptureChannel?.IsOpen ?? false)})");
+            }
         }
         Msg("[StartStreaming] Texture component created");
 

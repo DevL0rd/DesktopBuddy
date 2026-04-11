@@ -182,6 +182,17 @@ internal sealed class RendererDepsService
         using var file = File.Create(destPath);
         stream.CopyTo(file);
         log("DesktopBuddyRenderer: installed");
+
+        // Deploy FFmpeg.AutoGen.dll alongside the renderer plugin
+        const string ffmpegResource = "payload/Renderer/BepInEx/plugins/FFmpeg.AutoGen.dll";
+        using var ffmpegStream = asm.GetManifestResourceStream(ffmpegResource);
+        if (ffmpegStream != null)
+        {
+            var ffmpegDest = Path.Combine(destDir, "FFmpeg.AutoGen.dll");
+            using var ffmpegFile = File.Create(ffmpegDest);
+            ffmpegStream.CopyTo(ffmpegFile);
+            log("FFmpeg.AutoGen: installed");
+        }
     }
 
     private static async Task<(string? url, string? name)> GetLatestReleaseZipAsync(HttpClient http, string apiUrl)
