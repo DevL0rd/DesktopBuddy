@@ -9,7 +9,7 @@
 
   <PropertyGroup>
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
-    <RendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</RendererManagedPath>
+    <RendererManagedPath>$(MSBuildThisFileDirectory)..\lib\renderer</RendererManagedPath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
   </PropertyGroup>
 
