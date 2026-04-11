@@ -53,6 +53,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private object _d3dContextLock;
 
     private Thread _encodeThread;
+    private Thread _initThread;
+    private volatile int _initStarted;
     private readonly AutoResetEvent _encodeEvent = new(false);
     private volatile IntPtr _pendingTexture;
     private volatile uint _pendingWidth, _pendingHeight;
@@ -336,6 +338,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             return false;
         }
         }
+    }
+
+    public void StartInitializeAsync(IntPtr d3dDevice, uint width, uint height, object d3dContextLock, AudioCapture audioCapture = null)
+    {
+        if (Interlocked.Exchange(ref _initStarted, 1) != 0) return;
+        _initThread = new Thread(() => Initialize(d3dDevice, width, height, d3dContextLock, audioCapture))
+        { Name = $"FfmpegEnc:{_streamId}:Init", IsBackground = true };
+        _initThread.Start();
     }
 
     private void SetupHardwareContext(IntPtr d3dDevice, AVPixelFormat swFormat)
@@ -876,6 +886,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _initialized = false;
         _disposed = true;
 
+        _initThread?.Join(5000);
         _audioEncodeThread?.Join(2000);
         _encodeThread?.Join(2000);
 

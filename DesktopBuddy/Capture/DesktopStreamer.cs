@@ -13,6 +13,7 @@ public sealed class DesktopStreamer : IDisposable
     public int Height { get; private set; }
     public bool IsValid => _wgc?.IsValid ?? false;
     public object D3dContextLock => _wgc?.D3dContextLock;
+    public IntPtr D3dDevice => _wgc?.D3dDevice ?? IntPtr.Zero;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame
     {

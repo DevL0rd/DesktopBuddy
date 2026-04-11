@@ -1535,8 +1535,7 @@ public class DesktopBuddyMod : ResoniteMod
         var enc = encoder;
         session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
         {
-            if (!enc.IsInitialized)
-                enc.Initialize(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
+            enc.StartInitializeAsync(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
             enc.QueueFrame(texture, (uint)fw, (uint)fh);
         };
     }

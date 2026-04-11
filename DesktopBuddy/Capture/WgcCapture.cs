@@ -235,8 +235,6 @@ public sealed class WgcCapture : IDisposable
     private Direct3D11CaptureFramePool _framePool;
     private GraphicsCaptureSession _session;
 
-    private IntPtr _stagingTexture;
-    private int _stagingTexW, _stagingTexH;
     private volatile bool _closed;
     private int _lastWidth, _lastHeight;
     private int _framesCaptured;
@@ -259,6 +257,7 @@ public sealed class WgcCapture : IDisposable
     public int Width { get; private set; }
     public int Height { get; private set; }
     public int FramesCaptured => _framesCaptured;
+    public IntPtr D3dDevice => _d3dDevice;
     public bool IsValid => !_disposed && !_closed && _item != null && (_isDesktop || (IsWindow(_hwnd) && !IsIconic(_hwnd)));
 
     public void RecreatePoolIfNeeded()
@@ -469,37 +468,43 @@ public sealed class WgcCapture : IDisposable
 
         try
         {
-            using (DesktopBuddyMod.Perf.Time("nvenc_encode"))
+            using (DesktopBuddyMod.Perf.Time("queue_frame"))
             {
                 var gpuCb = OnGpuFrame;
                 try { gpuCb?.Invoke(_d3dDevice, srcTexture, w, h); }
                 catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
             }
 
-            EnsureConvertedTexture(w, h);
-            GpuConvert(srcTexture, w, h);
-            EnsureConvertedStaging(w, h);
-            ContextCopyResource(_d3dContext, _convertedStaging, _convertedTexture);
-
-            var mapped = new D3D11_MAPPED_SUBRESOURCE();
-            int hr;
-            using (DesktopBuddyMod.Perf.Time("gpu_readback"))
-                hr = ContextMap(_d3dContext, _convertedStaging, 0, 1, 0, ref mapped);
-            if (hr < 0) { Log.Msg($"[WgcCapture] Map failed hr=0x{hr:X8}"); return; }
-
-            try
+            var tex = _textureTarget;
+            if (tex != null && !tex.IsDestroyed)
             {
-                var tex = _textureTarget;
-                if (tex != null && !tex.IsDestroyed)
-                {
-                    using (DesktopBuddyMod.Perf.Time("bitmap_copy"))
-                        tex.WriteFrameDirect(mapped.pData, (int)mapped.RowPitch, w, h);
-                }
+                EnsureConvertedTexture(w, h);
+                GpuConvert(srcTexture, w, h);
+                EnsureConvertedStaging(w, h);
+                ContextCopyResource(_d3dContext, _convertedStaging, _convertedTexture);
 
-                _lastWidth = w; _lastHeight = h; _framesCaptured++;
-                if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame: {w}x{h}");
+                D3D11_MAPPED_SUBRESOURCE mapped = default;
+                int hr;
+                using (DesktopBuddyMod.Perf.Time("gpu_readback"))
+                    hr = ContextMap(_d3dContext, _convertedStaging, 0, 1, 0, ref mapped);
+
+                if (hr >= 0)
+                {
+                    try
+                    {
+                        using (DesktopBuddyMod.Perf.Time("bitmap_copy"))
+                            tex.WriteFrameDirect(mapped.pData, (int)mapped.RowPitch, w, h);
+                    }
+                    finally { ContextUnmap(_d3dContext, _convertedStaging, 0); }
+                }
+                else
+                {
+                    Log.Msg($"[WgcCapture] Map failed hr=0x{hr:X8}");
+                }
             }
-            finally { ContextUnmap(_d3dContext, _convertedStaging, 0); }
+
+            _lastWidth = w; _lastHeight = h; _framesCaptured++;
+            if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame: {w}x{h}");
         }
         catch (Exception ex)
         {
@@ -651,34 +656,6 @@ public sealed class WgcCapture : IDisposable
         finally { Marshal.Release(srv); }
     }
 
-    private void EnsureStagingTexture(int w, int h)
-    {
-        if (_stagingTexture != IntPtr.Zero)
-        {
-            if (w == _stagingTexW && h == _stagingTexH) return;
-            Marshal.Release(_stagingTexture);
-            _stagingTexture = IntPtr.Zero;
-        }
-
-        var desc = new D3D11_TEXTURE2D_DESC
-        {
-            Width = (uint)w,
-            Height = (uint)h,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = DXGI_FORMAT_B8G8R8A8_UNORM,  // native WGC format
-            SampleCount = 1,
-            SampleQuality = 0,
-            Usage = D3D11_USAGE_STAGING,
-            BindFlags = 0,
-            CPUAccessFlags = D3D11_CPU_ACCESS_READ,
-            MiscFlags = 0
-        };
-
-        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _stagingTexture);
-        _stagingTexW = w; _stagingTexH = h;
-    }
-
     private unsafe void CheckDevice(string context)
     {
         var vtable = *(IntPtr**)_d3dDevice;
@@ -780,7 +757,6 @@ public sealed class WgcCapture : IDisposable
         if (_convertedStaging != IntPtr.Zero) { Marshal.Release(_convertedStaging); _convertedStaging = IntPtr.Zero; }
         if (_constantBuffer != IntPtr.Zero) { Marshal.Release(_constantBuffer); _constantBuffer = IntPtr.Zero; }
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
-        if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
 
         _winrtDevice = null;
