@@ -31,36 +31,61 @@ internal sealed class SupportReportService
             Directory.Delete(reportDir, recursive: true);
         Directory.CreateDirectory(reportDir);
 
-        var summaryLines = new List<string>();
+        // ── Build single consolidated text report ─────────────────────────────
+        var report = new StringBuilder();
+        var sep = new string('=', 80);
 
-        await WriteTextFileAsync(
-            Path.Combine(reportDir, "user-description.txt"),
-            string.IsNullOrWhiteSpace(description) ? "No description provided." : description.Trim());
+        report.AppendLine(sep);
+        report.AppendLine("  DESKTOPBUDDY SUPPORT REPORT");
+        report.AppendLine($"  Generated: {timestamp:yyyy-MM-dd HH:mm:ss}");
+        report.AppendLine(sep);
+        report.AppendLine();
 
-        var environmentInfo = BuildEnvironmentInfo(resonitePath, managerBuildSha, timestamp);
-        await WriteTextFileAsync(Path.Combine(reportDir, "environment.txt"), environmentInfo);
+        // User description
+        report.AppendLine(sep);
+        report.AppendLine("  USER DESCRIPTION");
+        report.AppendLine(sep);
+        report.AppendLine(string.IsNullOrWhiteSpace(description) ? "No description provided." : description.Trim());
+        report.AppendLine();
 
-        var desktopBuddyLogsDir = Path.Combine(reportDir, "desktopbuddy-logs");
-        Directory.CreateDirectory(desktopBuddyLogsDir);
-        var copiedLogFiles = CopyDesktopBuddyLogs(resonitePath, desktopBuddyLogsDir);
-        summaryLines.Add($"DesktopBuddy logs copied: {copiedLogFiles}");
+        // Environment
+        report.AppendLine(sep);
+        report.AppendLine("  ENVIRONMENT");
+        report.AppendLine(sep);
+        report.AppendLine(BuildEnvironmentInfo(resonitePath, managerBuildSha, timestamp));
 
+        // Log file contents (last 5, inlined)
+        report.AppendLine(sep);
+        report.AppendLine("  DESKTOPBUDDY LOG FILES (last 5)");
+        report.AppendLine(sep);
+        var logCount = await Task.Run(() => AppendLogContents(report, resonitePath));
+        if (logCount == 0)
+            report.AppendLine("No DesktopBuddy log files found.");
+        report.AppendLine();
+
+        // Windows event log
+        report.AppendLine(sep);
+        report.AppendLine("  WINDOWS APPLICATION EVENT LOG (last 7 days)");
+        report.AppendLine(sep);
+        var eventCount = await Task.Run(() => AppendEventLogEntries(report));
+        report.AppendLine();
+
+        await File.WriteAllTextAsync(Path.Combine(reportDir, "report.txt"), report.ToString(), Encoding.UTF8);
+
+        // ── Binary / non-text crash artifacts in their own subfolder ──────────
         var crashDir = Path.Combine(reportDir, "crash-artifacts");
         Directory.CreateDirectory(crashDir);
-        var copiedCrashArtifacts = CopyCrashArtifacts(crashDir);
-        summaryLines.Add($"Crash artifacts copied: {copiedCrashArtifacts}");
+        var crashCount = CopyCrashArtifacts(crashDir);
+        if (crashCount == 0)
+            Directory.Delete(crashDir);   // remove empty folder from zip
 
-        var eventLogPath = Path.Combine(reportDir, "windows-event-log.txt");
-        var eventCount = await Task.Run(() => WriteRelevantEventLogEntries(eventLogPath));
-        summaryLines.Add($"Event log entries written: {eventCount}");
-
-        await WriteTextFileAsync(Path.Combine(reportDir, "report-summary.txt"), string.Join(Environment.NewLine, summaryLines));
-
+        // ── Zip ───────────────────────────────────────────────────────────────
         var zipPath = reportDir + ".zip";
         if (File.Exists(zipPath))
             File.Delete(zipPath);
 
         ZipFile.CreateFromDirectory(reportDir, zipPath, CompressionLevel.Fastest, includeBaseDirectory: true);
+        Directory.Delete(reportDir, recursive: true);
         return zipPath;
     }
 
@@ -78,7 +103,7 @@ internal sealed class SupportReportService
         return sb.ToString();
     }
 
-    private static int CopyDesktopBuddyLogs(string? resonitePath, string destinationDir)
+    private static int AppendLogContents(StringBuilder sb, string? resonitePath)
     {
         var sourceDirs = new List<string>();
         if (!string.IsNullOrWhiteSpace(resonitePath))
@@ -87,27 +112,30 @@ internal sealed class SupportReportService
             sourceDirs.Add(Path.Combine(resonitePath, "rml_mods"));
         }
 
-        var copied = 0;
-        foreach (var sourceDir in sourceDirs.Distinct(StringComparer.OrdinalIgnoreCase))
+        var files = sourceDirs
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(Directory.Exists)
+            .SelectMany(dir => new DirectoryInfo(dir)
+                .EnumerateFiles("DesktopBuddy_*.log", SearchOption.TopDirectoryOnly))
+            .OrderByDescending(f => f.LastWriteTimeUtc)
+            .Take(5)
+            .ToList();
+
+        foreach (var file in files)
         {
-            if (!Directory.Exists(sourceDir))
-                continue;
-
-            var files = new DirectoryInfo(sourceDir)
-                .EnumerateFiles("DesktopBuddy_*.log", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(file => file.LastWriteTimeUtc)
-                .Take(20)
-                .ToList();
-
-            foreach (var file in files)
+            sb.AppendLine($"--- {file.Name} ---");
+            try
             {
-                var destinationPath = Path.Combine(destinationDir, file.Name);
-                file.CopyTo(destinationPath, overwrite: true);
-                copied++;
+                sb.AppendLine(File.ReadAllText(file.FullName, Encoding.UTF8));
             }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"(could not read: {ex.Message})");
+            }
+            sb.AppendLine();
         }
 
-        return copied;
+        return files.Count;
     }
 
     private static int CopyCrashArtifacts(string destinationDir)
@@ -180,9 +208,8 @@ internal sealed class SupportReportService
         return CrashKeywords.Any(candidate.Contains);
     }
 
-    private static int WriteRelevantEventLogEntries(string destinationPath)
+    private static int AppendEventLogEntries(StringBuilder builder)
     {
-        var builder = new StringBuilder();
         var count = 0;
         var sevenDaysMs = (long)TimeSpan.FromDays(7).TotalMilliseconds;
         var providerFilter = string.Join(" or ", EventProviders.Select(provider => $"Provider[@Name='{provider}']"));
@@ -196,33 +223,18 @@ internal sealed class SupportReportService
         for (EventRecord? record = reader.ReadEvent(); record != null; record = reader.ReadEvent())
         {
             count++;
-            builder.AppendLine(new string('=', 80));
-            builder.AppendLine($"Time: {record.TimeCreated:yyyy-MM-dd HH:mm:ss}");
-            builder.AppendLine($"Provider: {record.ProviderName}");
-            builder.AppendLine($"Level: {record.LevelDisplayName}");
-            builder.AppendLine($"Event ID: {record.Id}");
-            builder.AppendLine($"Machine: {record.MachineName}");
-            builder.AppendLine("Message:");
-
+            builder.AppendLine($"[{record.TimeCreated:yyyy-MM-dd HH:mm:ss}] [{record.ProviderName}] [{record.LevelDisplayName}] ID:{record.Id}");
             string message;
-            try
-            {
-                message = record.FormatDescription() ?? "(no description available)";
-            }
-            catch
-            {
-                message = "(message unavailable)";
-            }
-
+            try   { message = record.FormatDescription() ?? "(no description available)"; }
+            catch { message = "(message unavailable)"; }
             builder.AppendLine(message.Trim());
             builder.AppendLine();
             record.Dispose();
         }
 
         if (count == 0)
-            builder.AppendLine("No relevant Application event log entries were found in the last 7 days.");
+            builder.AppendLine("No relevant Application event log entries found in the last 7 days.");
 
-        File.WriteAllText(destinationPath, builder.ToString(), Encoding.UTF8);
         return count;
     }
 
@@ -237,6 +249,4 @@ internal sealed class SupportReportService
             CopyDirectory(directory, Path.Combine(destinationDir, Path.GetFileName(directory)));
     }
 
-    private static Task WriteTextFileAsync(string path, string contents) =>
-        File.WriteAllTextAsync(path, contents, Encoding.UTF8);
 }

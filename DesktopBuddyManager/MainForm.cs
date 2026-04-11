@@ -46,7 +46,7 @@ internal sealed class MainForm : Form
     private const string SavedPathKey   = @"Software\DesktopBuddy";
     private const string SavedPathValue = "ManagerPath";
     private const int    FormW          = 760;
-    private const int    FormH          = 760;
+    private const int    FormH          = 920;
     private const int    Pad            = 20;
     private const int    IW             = FormW - Pad * 2;
     private static readonly TimeSpan CameraScanInterval = TimeSpan.FromSeconds(10);
@@ -65,7 +65,11 @@ internal sealed class MainForm : Form
     private Button      _installBtn = null!;
     private Button      _reportBtn  = null!;
     private RichTextBox _log        = null!;
+    private Label       _managerVerLbl  = null!;
+    private Label       _modVerLbl      = null!;
+    private ManagerUpdateResult? _pendingManagerUpdate;
     private System.Windows.Forms.Timer _timer = null!;
+    private System.Windows.Forms.Timer _autoUpdateTimer = null!;
 
     private List<ProcessInfo> _camProcs  = [];
     private bool              _installing;
@@ -80,7 +84,7 @@ internal sealed class MainForm : Form
     private readonly ManagerUpdateService _updateService = new();
     private readonly SupportReportService _supportReportService = new();
 
-    internal MainForm()
+    internal MainForm(string? autoInstallPath = null)
     {
         Text            = "DesktopBuddy Manager";
         ClientSize      = new Size(FormW, FormH);
@@ -101,11 +105,35 @@ internal sealed class MainForm : Form
                 await RefreshStatusAsync();
         };
 
+        _autoUpdateTimer = new System.Windows.Forms.Timer { Interval = 60_000 };
+        _autoUpdateTimer.Tick += async (_, _) =>
+        {
+            if (!_updateCheckInProgress && !_closingForUpdate && !_installing)
+                await CheckForUpdatesAsync(userTriggered: false);
+        };
+
         Shown += async (_, _) =>
         {
             await DetectResonitePathAsync(logWhenMissing: true);
             _timer.Start();
-            _ = CheckForManagerUpdateAsync();
+            _autoUpdateTimer.Start();
+
+            if (autoInstallPath != null && IsResoniteRoot(autoInstallPath))
+            {
+                Log($"Auto-install triggered for: {autoInstallPath}");
+                _pathBox.Text = autoInstallPath;
+                _chkLicense.Checked = true;
+                _chkClose.Checked   = true;
+                UpdateInstallBtn();
+                // Run check then immediately install
+                await CheckForUpdatesAsync(userTriggered: false);
+                if (!_closingForUpdate)
+                    BeginInstall();
+            }
+            else
+            {
+                await CheckForUpdatesAsync(userTriggered: false);
+            }
         };
     }
 
@@ -243,6 +271,37 @@ internal sealed class MainForm : Form
         (_camDot, _camLbl) = AddStatusRow(statusCard, "Camera Driver",          3);
 
         y += 152;
+
+        // ── Version / Updates ───────────────────────────────────────
+        y += 10;
+        Controls.Add(SectionLabel("Version", Pad, y));
+        y += 22;
+
+        _managerVerLbl = new Label
+        {
+            Location  = new Point(Pad, y),
+            Size      = new Size(IW, 20),
+            Font      = F_Small,
+            ForeColor = C_TxMuted,
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Text      = $"Manager: {ManagerUpdateService.CurrentBuildSha} — not checked yet",
+        };
+        Controls.Add(_managerVerLbl);
+        y += 22;
+
+        _modVerLbl = new Label
+        {
+            Location  = new Point(Pad, y),
+            Size      = new Size(IW, 20),
+            Font      = F_Small,
+            ForeColor = C_TxMuted,
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Text      = "Installed mod: not checked yet",
+        };
+        Controls.Add(_modVerLbl);
+        y += 26;
 
         // ── License ───────────────────────────────────────────────
         y += 10;
@@ -430,23 +489,40 @@ internal sealed class MainForm : Form
 
     private void UpdateInstallBtn()
     {
-        var ok = !_installing &&
-                 !_updateCheckInProgress &&
-                 !_closingForUpdate &&
-                 IsResoniteRoot(_pathBox.Text.Trim()) &&
-                 _chkLicense.Checked &&
-                 _chkClose.Checked;
-        _installBtn.Enabled = ok;
+        var resonitePath = _pathBox.Text.Trim();
+        var modSha = ManagerUpdateService.GetInstalledModSha(resonitePath);
+        bool modNotInstalled = modSha is "not installed" or "unknown";
+        bool canInstall = !_installing &&
+                          !_updateCheckInProgress &&
+                          !_closingForUpdate &&
+                          IsResoniteRoot(resonitePath) &&
+                          _chkLicense.Checked &&
+                          _chkClose.Checked;
+        _installBtn.Enabled = canInstall;
+        _installBtn.Text    = _pendingManagerUpdate != null
+            ? "Update Manager + Install"
+            : modNotInstalled ? "Install" : "Check for Updates";
         _reportBtn.Enabled = !_installing && !_updateCheckInProgress && !_closingForUpdate && !_reportGenerating;
     }
 
-    private async Task CheckForManagerUpdateAsync()
+    private void SetVersionLabels(string managerText, Color managerColor, string modText, Color modColor)
+    {
+        _managerVerLbl.ForeColor = managerColor;
+        _managerVerLbl.Text = managerText;
+        _modVerLbl.ForeColor = modColor;
+        _modVerLbl.Text = modText;
+    }
+
+    private async Task CheckForUpdatesAsync(bool userTriggered = false)
     {
         if (_updateCheckInProgress || _closingForUpdate)
             return;
 
         _updateCheckInProgress = true;
         UpdateInstallBtn();
+
+        if (userTriggered)
+            Log("Checking for updates...");
         Log($"Manager build SHA: {ManagerUpdateService.CurrentBuildSha}");
 
         try
@@ -454,30 +530,67 @@ internal sealed class MainForm : Form
             var update = await _updateService.CheckForUpdateAsync();
             Log(update.Message);
 
-            if (!update.HasUpdate)
-                return;
+            var latestSha = update.LatestSha;
+            var latestTag = update.LatestTag;
+            var managerSha = ManagerUpdateService.CurrentBuildSha;
+            var modSha = ManagerUpdateService.GetInstalledModSha(_pathBox.Text.Trim());
 
-            _closingForUpdate = true;
-            _timer.Stop();
-            UpdateInstallBtn();
-            Log($"Downloading updated manager asset: {update.AssetName}");
+            bool managerCurrent = string.Equals(managerSha, latestSha, StringComparison.OrdinalIgnoreCase);
+            string managerText = managerCurrent
+                ? $"Manager: {managerSha} — up to date"
+                : $"Manager: {managerSha} — update available ({latestTag})";
+            Color managerColor = managerCurrent ? C_Green : C_Blue;
 
-            var managerPath = await _updateService.DownloadUpdateAsync(update);
-            SaveSelectedPath();
-            Log($"Launching updated manager: {managerPath}");
-            ManagerUpdateService.LaunchManager(managerPath);
-
-            BeginInvoke(new Action(() =>
+            bool modNotInstalled = modSha is "not installed" or "unknown";
+            bool modCurrent = !modNotInstalled && string.Equals(modSha, latestSha, StringComparison.OrdinalIgnoreCase);
+            string modText;
+            Color modColor;
+            if (modNotInstalled)
             {
-                Close();
-                Application.ExitThread();
-                Environment.Exit(0);
-            }));
+                modText  = $"Installed mod: {modSha}";
+                modColor = C_TxMuted;
+            }
+            else if (modCurrent)
+            {
+                modText  = $"Installed mod: {modSha} — up to date";
+                modColor = C_Green;
+            }
+            else if (managerCurrent && !string.Equals(modSha, managerSha, StringComparison.OrdinalIgnoreCase))
+            {
+                modText  = $"Installed mod: {modSha} — manager is newer, click Update Mod";
+                modColor = C_Amber;
+            }
+            else
+            {
+                modText  = $"Installed mod: {modSha} — update available ({latestTag})";
+                modColor = C_Amber;
+            }
+
+            SetVersionLabels(managerText, managerColor, modText, modColor);
+
+            if (!update.HasUpdate)
+            {
+                _pendingManagerUpdate = null;
+                UpdateInstallBtn();
+                return;
+            }
+
+            // Manager update available — store it, button text will reflect it
+            _pendingManagerUpdate = update;
+            Log($"Manager update available: {update.Tag} — click Install to update the manager and reinstall.");
+            UpdateInstallBtn();
         }
         catch (Exception ex)
         {
             _closingForUpdate = false;
-            Log($"Manager update check failed: {ex.Message}");
+            var modSha2 = ManagerUpdateService.GetInstalledModSha(_pathBox.Text.Trim());
+            bool modNotInstalled2 = modSha2 is "not installed" or "unknown";
+            SetVersionLabels(
+                $"Manager: {ManagerUpdateService.CurrentBuildSha} — check failed",
+                C_Amber,
+                modNotInstalled2 ? $"Installed mod: {modSha2}" : $"Installed mod: {modSha2} — unknown",
+                C_TxMuted);
+            Log($"Update check failed: {ex.Message}");
         }
         finally
         {
@@ -796,24 +909,90 @@ internal sealed class MainForm : Form
         }
 
         _installBtn.Enabled = false;
-        _installBtn.Text    = "Installing...";
+        _installBtn.Text    = "Checking for updates...";
         _installing         = true;
         _timer.Stop();
 
-        Task.Run(() =>
+        Task.Run(async () =>
         {
-            try   { DoInstall(resonitePath); }
+            try
+            {
+                // Always check for updates before installing
+                ManagerUpdateResult? freshUpdate = null;
+                try
+                {
+                    freshUpdate = await _updateService.CheckForUpdateAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log($"Pre-install update check failed (continuing): {ex.Message}");
+                }
+
+                if (freshUpdate?.HasUpdate == true)
+                {
+                    // Manager update found — download new manager, relaunch with --auto-install, exit
+                    Log($"Manager update found ({freshUpdate.Tag}). Downloading before install...");
+                    var oldExePath = Environment.ProcessPath ?? AppContext.BaseDirectory;
+                    try
+                    {
+                        var newPath = await _updateService.DownloadUpdateAsync(freshUpdate);
+                        SaveSelectedPath();
+                        Log($"Launching updated manager with auto-install: {newPath}");
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName         = newPath,
+                            Arguments        = $"--delete-old \"{oldExePath}\" --auto-install \"{resonitePath}\"",
+                            WorkingDirectory = Path.GetDirectoryName(newPath),
+                            UseShellExecute  = true,
+                        };
+                        Process.Start(psi);
+                        BeginInvoke(new Action(() =>
+                        {
+                            Close();
+                            Application.ExitThread();
+                            Environment.Exit(0);
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Manager update download failed, proceeding with current version: {ex.Message}");
+                        Invoke(() => _installBtn.Text = "Installing...");
+                        RunDoInstall(resonitePath);
+                    }
+                }
+                else
+                {
+                    Invoke(() => _installBtn.Text = "Installing...");
+                    RunDoInstall(resonitePath);
+                }
+            }
             finally
             {
                 Invoke(() =>
                 {
-                    _installing         = false;
-                    _installBtn.Text    = "Install / Update";
+                    _installing = false;
                     _timer.Start();
                     _ = RefreshStatusAsync(forceCameraScan: true);
+                    UpdateInstallBtn();
                 });
             }
         });
+    }
+
+    private void RunDoInstall(string resonitePath)
+    {
+        try
+        {
+            DoInstall(resonitePath);
+        }
+        catch (Exception ex)
+        {
+            Log($"ERROR during install: {ex.Message}");
+            Log(ex.StackTrace ?? "");
+            Invoke(() => MessageBox.Show(
+                $"Installation failed:\n\n{ex.Message}",
+                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error));
+        }
     }
 
     private void DoInstall(string resonitePath)
@@ -829,6 +1008,16 @@ internal sealed class MainForm : Form
             catch { }
             finally { p.Dispose(); }
         }
+        foreach (var name in new[] { "Renderite.Host", "Renderite.Renderer", "cloudflared",
+                                     "chrome", "Discord", "DiscordPTB", "DiscordCanary" })
+        {
+            foreach (var p in Process.GetProcessesByName(name))
+            {
+                try   { p.Kill(); Log($"Closed {name} (PID {p.Id})"); }
+                catch { }
+                finally { p.Dispose(); }
+            }
+        }
         foreach (var p in FindSoftcamProcesses())
         {
             try
@@ -839,8 +1028,7 @@ internal sealed class MainForm : Form
             }
             catch { }
         }
-        if (Process.GetProcessesByName("Resonite").Length > 0 || FindSoftcamProcesses().Count > 0)
-            System.Threading.Thread.Sleep(1000);
+        System.Threading.Thread.Sleep(1500);
 
         if (!CopyFiles(resonitePath)) return;
 

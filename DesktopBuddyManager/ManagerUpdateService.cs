@@ -39,7 +39,7 @@ internal sealed class ManagerUpdateService
             return ManagerUpdateResult.NoUpdate($"Latest release {tag} did not expose a recognizable build SHA.");
 
         if (string.Equals(CurrentBuildSha, latestSha, StringComparison.OrdinalIgnoreCase))
-            return ManagerUpdateResult.NoUpdate($"Manager is already on the latest release ({tag}).");
+            return ManagerUpdateResult.NoUpdate($"Manager is already on the latest release ({tag}).", latestSha, tag);
 
         return ManagerUpdateResult.UpdateAvailable(tag, latestSha, asset.Value.Name, asset.Value.DownloadUrl);
     }
@@ -80,6 +80,16 @@ internal sealed class ManagerUpdateService
         {
             TryDelete(tempPath);
         }
+    }
+
+    internal static string GetInstalledModSha(string? resonitePath)
+    {
+        if (string.IsNullOrWhiteSpace(resonitePath))
+            return "unknown";
+        var shaFile = Path.Combine(resonitePath.Trim(), "rml_mods", "DesktopBuddy.sha");
+        if (!File.Exists(shaFile))
+            return "not installed";
+        return NormalizeSha(File.ReadAllText(shaFile).Trim());
     }
 
     internal static void LaunchManager(string managerPath)
@@ -167,7 +177,7 @@ internal sealed class ManagerUpdateService
 
 internal sealed class ManagerUpdateResult
 {
-    private ManagerUpdateResult(bool hasUpdate, string message, string? tag, string? sha, string? assetName, string? downloadUrl)
+    private ManagerUpdateResult(bool hasUpdate, string message, string? tag, string? sha, string? assetName, string? downloadUrl, string latestSha, string latestTag)
     {
         HasUpdate = hasUpdate;
         Message = message;
@@ -175,6 +185,8 @@ internal sealed class ManagerUpdateResult
         Sha = sha;
         AssetName = assetName;
         DownloadUrl = downloadUrl;
+        LatestSha = latestSha;
+        LatestTag = latestTag;
     }
 
     internal bool HasUpdate { get; }
@@ -183,10 +195,12 @@ internal sealed class ManagerUpdateResult
     internal string? Sha { get; }
     internal string? AssetName { get; }
     internal string? DownloadUrl { get; }
+    internal string LatestSha { get; }
+    internal string LatestTag { get; }
 
-    internal static ManagerUpdateResult NoUpdate(string message) =>
-        new(false, message, null, null, null, null);
+    internal static ManagerUpdateResult NoUpdate(string message, string latestSha = "unknown", string latestTag = "unknown") =>
+        new(false, message, null, null, null, null, latestSha, latestTag);
 
     internal static ManagerUpdateResult UpdateAvailable(string tag, string sha, string assetName, string downloadUrl) =>
-        new(true, $"Manager update available: {tag} ({sha}).", tag, sha, assetName, downloadUrl);
+        new(true, $"Manager update available: {tag} ({sha}).", tag, sha, assetName, downloadUrl, sha, tag);
 }

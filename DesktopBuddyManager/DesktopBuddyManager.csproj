@@ -43,6 +43,10 @@
       <LogicalName>payload/rml_mods/DesktopBuddy.dll</LogicalName>
     </EmbeddedResource>
 
+    <EmbeddedResource Include="$(ModBuildDir)\DesktopBuddy.sha">
+      <LogicalName>payload/rml_mods/DesktopBuddy.sha</LogicalName>
+    </EmbeddedResource>
+
     <EmbeddedResource Include="..\ffmpeg\*.dll">
       <LogicalName>payload/ffmpeg/%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>

@@ -18,6 +18,7 @@
       <BuildInfoContent>namespace DesktopBuddy { internal static class BuildInfo { internal const string GitSha = "$(GitSha)"%3B } }</BuildInfoContent>
     </PropertyGroup>
     <WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.g.cs" Overwrite="true" Lines="$(BuildInfoContent)" />
+    <WriteLinesToFile File="$(OutputPath)DesktopBuddy.sha" Overwrite="true" Lines="$(GitSha)" />
     <ItemGroup>
       <Compile Include="$(IntermediateOutputPath)BuildInfo.g.cs" />
     </ItemGroup>
@@ -91,6 +92,7 @@
       <VBCableFiles Include="$(MSBuildThisFileDirectory)..\vbcable\*" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
+    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
     <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
     <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" />
     <Copy SourceFiles="@(VBCableFiles)" DestinationFolder="$(ResonitePath)\vbcable" ContinueOnError="true" />
