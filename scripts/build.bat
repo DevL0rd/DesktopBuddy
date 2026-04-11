@@ -26,10 +26,17 @@ if !RESTART! equ 1 (
     timeout /t 2 /nobreak
 )
 
-REM Build the project
+REM Build the mod (game-side)
 dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj"
 if !ERRORLEVEL! neq 0 (
-    echo BUILD FAILED — not launching Resonite
+    echo MOD BUILD FAILED — not launching Resonite
+    exit /b !ERRORLEVEL!
+)
+
+REM Build the renderer plugin
+dotnet build "%SCRIPT_DIR%..\DesktopBuddyRenderer\DesktopBuddyRenderer.csproj"
+if !ERRORLEVEL! neq 0 (
+    echo RENDERER BUILD FAILED — not launching Resonite
     exit /b !ERRORLEVEL!
 )
 

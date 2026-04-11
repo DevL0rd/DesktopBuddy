@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
+    <RendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</RendererManagedPath>
+    <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
+  </PropertyGroup>
+
+  <!-- BepInEx 5.x + Harmony (reference-only) -->
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(LibPath)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity + Renderite DLLs (reference-only, not redistributed) -->
+  <ItemGroup>
+    <Reference Include="UnityEngine">
+      <HintPath>$(RendererManagedPath)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(RendererManagedPath)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Renderite.Unity">
+      <HintPath>$(RendererManagedPath)\Renderite.Unity.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Renderite.Shared">
+      <HintPath>$(RendererManagedPath)\Renderite.Shared.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(RendererManagedPath)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->
+  <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins" ContinueOnError="true" Retries="0" />
+  </Target>
+
+</Project>

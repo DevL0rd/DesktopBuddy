@@ -34,6 +34,7 @@
     <Compile Include="ManagerUpdateService.cs" />
     <Compile Include="SupportReportService.cs" />
     <Compile Include="DescriptionPromptForm.cs" />
+    <Compile Include="RendererDepsService.cs" />
 
     <EmbeddedResource Include="..\LICENSE">
       <LogicalName>DesktopBuddyManager.LICENSE</LogicalName>
@@ -61,6 +62,11 @@
 
     <EmbeddedResource Include="..\cloudflared\cloudflared.exe">
       <LogicalName>payload/cloudflared/cloudflared.exe</LogicalName>
+    </EmbeddedResource>
+
+    <EmbeddedResource Include="..\DesktopBuddyRenderer\bin\Debug\net472\DesktopBuddyRenderer.dll"
+                      Condition="Exists('..\DesktopBuddyRenderer\bin\Debug\net472\DesktopBuddyRenderer.dll')">
+      <LogicalName>payload/Renderer/BepInEx/plugins/DesktopBuddyRenderer.dll</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 

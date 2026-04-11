@@ -65,6 +65,13 @@ public class DesktopBuddyMod : ResoniteMod
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
+    // Renderer-side capture side-channel
+    internal static CaptureSessionChannel? CaptureChannel;
+    private static bool _captureChannelOpened;
+
+    // Track our DesktopTextureProvider instances so the patch can bypass the Userspace world check
+    internal static readonly System.Collections.Generic.HashSet<DesktopTextureProvider> OurProviders = new();
+
     private static Thread _windowPollerThread;
     private static volatile bool _windowPollerRunning;
     private static readonly ConcurrentQueue<WindowEvent> _windowEvents = new();
@@ -163,6 +170,58 @@ public class DesktopBuddyMod : ResoniteMod
         _windowPollerThread.Start();
 
         Msg("DesktopBuddy initialized!");
+
+        // Open the renderer capture side-channel after a delay so RenderSystem is initialized
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                // Give the render system a moment to start
+                Thread.Sleep(5000);
+                OpenCaptureChannel();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[CaptureChannel] Failed to open: {ex.Message}");
+            }
+        });
+    }
+
+    private static void OpenCaptureChannel()
+    {
+        if (_captureChannelOpened) return;
+
+        try
+        {
+            var engine = FrooxEngine.Engine.Current;
+            if (engine == null) { Msg("[CaptureChannel] Engine.Current is null"); return; }
+
+            var renderSystem = engine.RenderSystem;
+            if (renderSystem == null) { Msg("[CaptureChannel] RenderSystem is null"); return; }
+
+            // Access private _messagingHost field via reflection
+            var hostField = renderSystem.GetType().GetField("_messagingHost",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (hostField == null) { Msg("[CaptureChannel] _messagingHost field not found"); return; }
+
+            var host = hostField.GetValue(renderSystem);
+            if (host == null) { Msg("[CaptureChannel] _messagingHost is null (renderer not started?)"); return; }
+
+            var queueNameProp = host.GetType().GetProperty("QueueName");
+            if (queueNameProp == null) { Msg("[CaptureChannel] QueueName property not found"); return; }
+
+            var queueName = (string)queueNameProp.GetValue(host);
+            if (string.IsNullOrEmpty(queueName)) { Msg("[CaptureChannel] QueueName is empty"); return; }
+
+            CaptureChannel = new CaptureSessionChannel();
+            CaptureChannel.Open(queueName);
+            _captureChannelOpened = true;
+            Msg($"[CaptureChannel] Opened successfully (queueName={queueName})");
+        }
+        catch (Exception ex)
+        {
+            Msg($"[CaptureChannel] Error: {ex}");
+        }
     }
 
     private static void CheckForUpdate()
@@ -255,11 +314,11 @@ public class DesktopBuddyMod : ResoniteMod
         });
     }
 
-    internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default)
+    internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
     {
         try
         {
-            Msg($"[SpawnStreaming] Starting for '{title}' hwnd={hwnd}");
+            Msg($"[SpawnStreaming] Starting for '{title}' hwnd={hwnd} monitorIndex={monitorIndex}");
             var localUser = world.LocalUser;
             if (localUser == null) { Msg("[SpawnStreaming] LocalUser is null, aborting"); return; }
             var userRoot = localUser.Root;
@@ -279,7 +338,7 @@ public class DesktopBuddyMod : ResoniteMod
 
             Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
 
-            StartStreaming(root, hwnd, title, monitorHandle: monitorHandle);
+            StartStreaming(root, hwnd, title, monitorHandle: monitorHandle, monitorIndex: monitorIndex);
         }
         catch (Exception ex)
         {
@@ -287,9 +346,9 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default, DesktopSession parentSession = null)
+    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default, DesktopSession parentSession = null, int monitorIndex = -1)
     {
-        Msg($"[StartStreaming] Window: {title} (hwnd={hwnd})");
+        Msg($"[StartStreaming] Window: {title} (hwnd={hwnd} monitorIndex={monitorIndex})");
 
         WindowInput.RestoreIfMinimized(hwnd);
 
@@ -304,11 +363,11 @@ public class DesktopBuddyMod : ResoniteMod
                 streamer.Dispose();
                 return;
             }
-            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, isChild, streamer, parentSession));
+            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, isChild, streamer, parentSession, monitorIndex));
         });
     }
 
-    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, bool isChild, DesktopStreamer streamer, DesktopSession parentSession = null)
+    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, bool isChild, DesktopStreamer streamer, DesktopSession parentSession = null, int monitorIndex = -1)
     {
         if (root == null || root.IsDestroyed)
         {
@@ -336,8 +395,36 @@ public class DesktopBuddyMod : ResoniteMod
         Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
-        var procTex = texSlot.AttachComponent<DesktopTextureSource>();
-        procTex.Initialize(w, h);
+        var procTex = texSlot.AttachComponent<DesktopTextureProvider>();
+        OurProviders.Add(procTex);
+        int captureSlot = -1;
+        if (hwnd != IntPtr.Zero && CaptureChannel != null && CaptureChannel.IsOpen)
+        {
+            // Window capture — use magic index + renderer UWC path
+            captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
+            if (captureSlot < 0)
+            {
+                Msg($"[StartStreaming] No free capture slots for: {title}");
+                streamer.Dispose();
+                root.Destroy();
+                return;
+            }
+            int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
+            procTex.DisplayIndex.Value = magicIdx;
+            Msg($"[StartStreaming] Window capture: slot {captureSlot}, DisplayIndex={magicIdx}");
+            // NOTE: The renderer may not have the UWC source ready yet for this magic index.
+            // The UpdateLoop handles retries by re-sending desktopTex.Update() periodically.
+        }
+        else if (hwnd == IntPtr.Zero && monitorIndex >= 0)
+        {
+            // Monitor capture — use real display index, Renderite's DuplicableDisplay handles it
+            procTex.DisplayIndex.Value = monitorIndex;
+            Msg($"[StartStreaming] Monitor capture: DisplayIndex={monitorIndex}");
+        }
+        else
+        {
+            Msg($"[StartStreaming] WARNING: Cannot set up texture (hwnd={hwnd}, monitorIndex={monitorIndex}, channel={(CaptureChannel?.IsOpen ?? false)})");
+        }
         Msg("[StartStreaming] Texture component created");
 
         var ui = new UIBuilder(displaySlot, w, h, canvasScale);
@@ -346,6 +433,8 @@ public class DesktopBuddyMod : ResoniteMod
         ui.NestInto(displayBg.RectTransform);
 
         var rawImage = ui.RawImage(procTex);
+        // Flip Y to match Renderite's texture coordinate convention (same as native Userspace display)
+        rawImage.UVRect.Value = new Rect(float2.Zero, new float2(1f, -1f));
         Msg("[StartStreaming] Canvas + RawImage created");
 
         var mat = displaySlot.AttachComponent<UI_UnlitMaterial>();
@@ -373,6 +462,9 @@ public class DesktopBuddyMod : ResoniteMod
             Hwnd = hwnd,
             ProcessId = processId,
             Collider = collider,
+            CaptureSlot = captureSlot,
+            LastKnownW = w,
+            LastKnownH = h,
         };
         ActiveSessions.Add(session);
         if (parentSession != null)
@@ -1426,8 +1518,6 @@ public class DesktopBuddyMod : ResoniteMod
         session.TitleText = titleTextRef;
         session.LastTitle = title;
 
-        streamer.SetTextureTarget(procTex);
-
         ScheduleUpdate(root.World);
 
         if (!isChild)
@@ -1540,6 +1630,35 @@ public class DesktopBuddyMod : ResoniteMod
         };
     }
 
+    /// <summary>
+    /// Re-sends the DesktopTexture.Update() message to the renderer for a window capture
+    /// whose UWC source may not have been registered on the first attempt.
+    /// </summary>
+    private static void RetriggerDesktopTexture(DesktopTextureProvider provider)
+    {
+        try
+        {
+            var type = typeof(DesktopTextureProvider);
+            var assetField = type.GetField("_desktopTex",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (assetField == null) return;
+
+            var desktopTex = assetField.GetValue(provider) as DesktopTexture;
+            if (desktopTex == null) return;
+
+            var onCreatedMethod = type.GetMethod("OnTextureCreated",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (onCreatedMethod == null) return;
+
+            var callback = (Action)Delegate.CreateDelegate(typeof(Action), provider, onCreatedMethod);
+            desktopTex.Update(provider.DisplayIndex.Value, callback);
+        }
+        catch (Exception ex)
+        {
+            Msg($"[RetriggerDesktopTexture] Error: {ex.Message}");
+        }
+    }
+
     private static void CleanupSession(DesktopSession session)
     {
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
@@ -1623,6 +1742,15 @@ public class DesktopBuddyMod : ResoniteMod
 
         Msg($"[Cleanup] Removing canvas ID");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);
+
+        if (session.CaptureSlot >= 0 && CaptureChannel != null)
+        {
+            CaptureChannel.StopSession(session.CaptureSlot);
+            Msg($"[Cleanup] Stopped capture slot {session.CaptureSlot}");
+        }
+
+        if (session.Texture != null)
+            OurProviders.Remove(session.Texture);
 
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
@@ -1954,6 +2082,14 @@ public class DesktopBuddyMod : ResoniteMod
                 if (!session.Texture.IsAssetAvailable)
                 {
                     if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
+
+                    // For window captures (magic DisplayIndex), the renderer may not have
+                    // registered the UWC source yet. Re-send the Update message so the
+                    // renderer's TryGetDisplayTexture is retried.
+                    if (session.CaptureSlot >= 0 && _updateCount % 5 == 0)
+                    {
+                        RetriggerDesktopTexture(session.Texture);
+                    }
                     continue;
                 }
 
@@ -1966,20 +2102,14 @@ public class DesktopBuddyMod : ResoniteMod
                     int sw = streamerForResize.Width;
                     int sh = streamerForResize.Height;
 
-                    if (sw > 0 && sh > 0 && (session.Texture.Width != sw || session.Texture.Height != sh))
+                    if (sw > 0 && sh > 0 && (session.LastKnownW != sw || session.LastKnownH != sh))
                     {
-                        Msg($"[UpdateLoop] Window resize {session.Texture.Width}x{session.Texture.Height} -> {sw}x{sh}");
+                        Msg($"[UpdateLoop] Window resize {session.LastKnownW}x{session.LastKnownH} -> {sw}x{sh}");
+                        session.LastKnownW = sw;
+                        session.LastKnownH = sh;
 
-                        var texSlot = session.Texture.Slot;
-                        session.Texture.Destroy();
-                        var newTex = texSlot.AttachComponent<DesktopTextureSource>();
-                        newTex.Initialize(sw, sh);
-                        session.Texture = newTex;
-                        streamerForResize.SetTextureTarget(newTex);
-
-                        if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
-                            session.TextureImage.Texture.Target = newTex;
-
+                        // Renderer-side UWC handles texture resize automatically.
+                        // We only update game-side UI layout.
                         if (session.Canvas != null && !session.Canvas.IsDestroyed)
                             session.Canvas.Size.Value = new float2(sw, sh);
 
@@ -1987,7 +2117,7 @@ public class DesktopBuddyMod : ResoniteMod
                         session.PendingResizeW = sw;
                         session.PendingResizeH = sh;
                         session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
-                        Msg($"[UpdateLoop] Texture recreated at {sw}x{sh}");
+                        Msg($"[UpdateLoop] UI resized to {sw}x{sh}");
                         continue;
                     }
                 }

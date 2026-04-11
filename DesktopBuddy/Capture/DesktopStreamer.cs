@@ -9,6 +9,7 @@ public sealed class DesktopStreamer : IDisposable
     private WgcCapture _wgc;
     private int _disposed;
 
+    public IntPtr MonitorHandle => _monitorHandle;
     public int Width { get; private set; }
     public int Height { get; private set; }
     public bool IsValid => _wgc?.IsValid ?? false;

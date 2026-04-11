@@ -8,13 +8,15 @@ namespace DesktopBuddy;
 public class DesktopSession
 {
     public DesktopStreamer Streamer;
-    public DesktopTextureSource Texture;
+    public DesktopTextureProvider Texture;
     public RawImage TextureImage;
     public Canvas Canvas;
     public Slot Root;
     public bool UpdateInProgress;
     public double TimeSinceLastCapture;
     public double TargetInterval;
+    public int CaptureSlot = -1;
+    public int LastKnownW, LastKnownH;
 
     public Component LastActiveSource;
 

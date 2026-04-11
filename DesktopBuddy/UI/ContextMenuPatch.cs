@@ -245,7 +245,7 @@ public static class ContextMenuPatch
             int idx = i;
             entries.Add(($"Monitor {idx + 1} ({mon.Width}x{mon.Height})",
                 new colorX(0.1f, 0.25f, 0.4f, 1f),
-                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, $"Monitor {idx + 1}", mon.Handle); },
+                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, $"Monitor {idx + 1}", mon.Handle, monitorIndex: idx); },
                 IntPtr.Zero));
         }
 

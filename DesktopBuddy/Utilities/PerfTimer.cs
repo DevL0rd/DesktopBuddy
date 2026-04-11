@@ -12,6 +12,7 @@ public sealed class PerfTimer : IDisposable
     private const int REPORT_INTERVAL_MS = 5_000;
 
     private readonly Dictionary<string, StepStats> _steps = new();
+    private readonly Dictionary<string, long> _counters = new();
     private readonly object _lock = new();
     private long _totalFrames;
     private long _droppedFrames;
@@ -57,6 +58,24 @@ public sealed class PerfTimer : IDisposable
 
     public void IncrementFrames() => Interlocked.Increment(ref _totalFrames);
 
+    public void IncrementDropped(string reason = null)
+    {
+        Interlocked.Increment(ref _droppedFrames);
+        if (!string.IsNullOrEmpty(reason))
+            IncrementCounter($"drop:{reason}");
+    }
+
+    public void IncrementCounter(string counter, long delta = 1)
+    {
+        lock (_lock)
+        {
+            if (_counters.TryGetValue(counter, out var value))
+                _counters[counter] = value + delta;
+            else
+                _counters[counter] = delta;
+        }
+    }
+
     public TimedScope Time(string step) => new TimedScope(this, step);
 
     public readonly struct TimedScope : IDisposable
@@ -82,6 +101,7 @@ public sealed class PerfTimer : IDisposable
     private void PrintReport()
     {
         Dictionary<string, StepStats> snapshot;
+        Dictionary<string, long> countersSnapshot;
         long frames, dropped;
 
         lock (_lock)
@@ -99,6 +119,10 @@ public sealed class PerfTimer : IDisposable
                 kvp.Value.MaxTicks = 0;
                 kvp.Value.Count = 0;
             }
+
+            countersSnapshot = new Dictionary<string, long>(_counters);
+            _counters.Clear();
+
             frames = Interlocked.Exchange(ref _totalFrames, 0);
             dropped = Interlocked.Exchange(ref _droppedFrames, 0);
         }
@@ -117,6 +141,9 @@ public sealed class PerfTimer : IDisposable
             double totalMs = kvp.Value.TotalTicks / freqMs;
             lines.Add($"[Perf]   {kvp.Key}: avg={avgMs:F2}ms max={maxMs:F2}ms total={totalMs:F0}ms n={kvp.Value.Count}");
         }
+
+        foreach (var kvp in countersSnapshot)
+            lines.Add($"[Perf]   {kvp.Key}: count={kvp.Value}");
 
         Log.Msg(string.Join("\n", lines));
     }

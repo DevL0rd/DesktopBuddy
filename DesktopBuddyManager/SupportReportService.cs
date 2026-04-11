@@ -63,6 +63,40 @@ internal sealed class SupportReportService
             report.AppendLine("No DesktopBuddy log files found.");
         report.AppendLine();
 
+        // Renderer BepInEx log
+        report.AppendLine(sep);
+        report.AppendLine("  RENDERER BEPINEX LOG");
+        report.AppendLine(sep);
+        await Task.Run(() => AppendSingleLogFile(report, resonitePath, Path.Combine("Renderer", "BepInEx", "LogOutput.log")));
+        report.AppendLine();
+
+        // Renderite player log
+        report.AppendLine(sep);
+        report.AppendLine("  RENDERITE PLAYER LOG (last 500 lines)");
+        report.AppendLine(sep);
+        await Task.Run(() =>
+        {
+            var playerLog = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "Low",
+                "Yellow Dog Man Studios", "Renderite.Renderer", "Player.log");
+            if (File.Exists(playerLog))
+            {
+                try
+                {
+                    var lines = File.ReadAllLines(playerLog, Encoding.UTF8);
+                    var start = Math.Max(0, lines.Length - 500);
+                    for (int i = start; i < lines.Length; i++)
+                        report.AppendLine(lines[i]);
+                }
+                catch (Exception ex) { report.AppendLine($"(could not read: {ex.Message})"); }
+            }
+            else
+            {
+                report.AppendLine("Player.log not found.");
+            }
+        });
+        report.AppendLine();
+
         // Windows event log
         report.AppendLine(sep);
         report.AppendLine("  WINDOWS APPLICATION EVENT LOG (last 7 days)");
@@ -136,6 +170,30 @@ internal sealed class SupportReportService
         }
 
         return files.Count;
+    }
+
+    private static void AppendSingleLogFile(StringBuilder sb, string? resonitePath, string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(resonitePath))
+        {
+            sb.AppendLine("(Resonite path not set)");
+            return;
+        }
+        var path = Path.Combine(resonitePath, relativePath);
+        if (!File.Exists(path))
+        {
+            sb.AppendLine($"{relativePath} not found.");
+            return;
+        }
+        try
+        {
+            sb.AppendLine($"--- {relativePath} ---");
+            sb.AppendLine(File.ReadAllText(path, Encoding.UTF8));
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"(could not read: {ex.Message})");
+        }
     }
 
     private static int CopyCrashArtifacts(string destinationDir)

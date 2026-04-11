@@ -46,7 +46,7 @@ internal sealed class MainForm : Form
     private const string SavedPathKey   = @"Software\DesktopBuddy";
     private const string SavedPathValue = "ManagerPath";
     private const int    FormW          = 760;
-    private const int    FormH          = 920;
+    private const int    FormH          = 1028;
     private const int    Pad            = 20;
     private const int    IW             = FormW - Pad * 2;
     private static readonly TimeSpan CameraScanInterval = TimeSpan.FromSeconds(10);
@@ -60,6 +60,12 @@ internal sealed class MainForm : Form
     private Label       _runLbl     = null!;
     private Label       _camDot     = null!;
     private Label       _camLbl     = null!;
+    private Label       _rhDot      = null!;
+    private Label       _rhLbl      = null!;
+    private Label       _bepDot     = null!;
+    private Label       _bepLbl     = null!;
+    private Label       _rpDot      = null!;
+    private Label       _rpLbl      = null!;
     private CheckBox    _chkLicense = null!;
     private CheckBox    _chkClose   = null!;
     private Button      _installBtn = null!;
@@ -83,6 +89,7 @@ internal sealed class MainForm : Form
     private List<ProcessInfo> _cachedCameraProcs = [];
     private readonly ManagerUpdateService _updateService = new();
     private readonly SupportReportService _supportReportService = new();
+    private readonly RendererDepsService _rendererDepsService = new();
 
     internal MainForm(string? autoInstallPath = null)
     {
@@ -248,10 +255,11 @@ internal sealed class MainForm : Form
         Controls.Add(SectionLabel("System Status", Pad, y));
         y += 22;
 
+        const int statusRows = 7;
         var statusCard = new DoubleBufferedPanel
         {
             Location  = new Point(Pad, y),
-            Size      = new Size(IW, 144),
+            Size      = new Size(IW, statusRows * 36),
             BackColor = C_BgCard,
         };
         statusCard.Paint += (_, e) =>
@@ -260,7 +268,7 @@ internal sealed class MainForm : Form
             using var border = new Pen(C_Border);
             g.DrawRectangle(border, 0, 0, statusCard.Width - 1, statusCard.Height - 1);
             using var sep = new Pen(C_Border);
-            for (var i = 1; i < 4; i++)
+            for (var i = 1; i < statusRows; i++)
                 g.DrawLine(sep, 1, i * 36, statusCard.Width - 2, i * 36);
         };
         Controls.Add(statusCard);
@@ -269,8 +277,11 @@ internal sealed class MainForm : Form
         (_scDot,  _scLbl)  = AddStatusRow(statusCard, "SoftCam Virtual Camera", 1);
         (_runDot, _runLbl) = AddStatusRow(statusCard, "Resonite",               2);
         (_camDot, _camLbl) = AddStatusRow(statusCard, "Camera Driver",          3);
+        (_rhDot,  _rhLbl)  = AddStatusRow(statusCard, "RenderiteHook",          4);
+        (_bepDot, _bepLbl) = AddStatusRow(statusCard, "BepInEx.Renderer",       5);
+        (_rpDot,  _rpLbl)  = AddStatusRow(statusCard, "Renderer Plugin",        6);
 
-        y += 152;
+        y += statusRows * 36 + 8;
 
         // ── Version / Updates ───────────────────────────────────────
         y += 10;
@@ -803,6 +814,10 @@ internal sealed class MainForm : Form
                 : "Not In Use";
             SetRow(_camDot, _camLbl, _camProcs.Count == 0, "Not In Use", camText);
 
+            SetRow(_rhDot,  _rhLbl,  snapshot.RendererDeps.RenderiteHookInstalled,    "Installed", "Not Installed");
+            SetRow(_bepDot, _bepLbl, snapshot.RendererDeps.BepInExRendererInstalled,  "Installed", "Not Installed");
+            SetRow(_rpDot,  _rpLbl,  snapshot.RendererDeps.RendererPluginInstalled,    "Installed", "Not Installed");
+
             UpdateInstallBtn();
         }
         finally
@@ -833,11 +848,16 @@ internal sealed class MainForm : Form
 
     private StatusSnapshot CollectStatusSnapshot(bool forceCameraScan)
     {
+        var resonitePath = _pathBox.Text.Trim();
+        var rendererDeps = IsResoniteRoot(resonitePath)
+            ? RendererDepsService.Check(resonitePath)
+            : new RendererDepsService.DepsStatus(false, false, false);
         return new StatusSnapshot(
             IsVBCableInstalled(),
             IsSoftCamRegistered(),
             IsProcessRunning("Resonite"),
-            GetCameraProcesses(forceCameraScan));
+            GetCameraProcesses(forceCameraScan),
+            rendererDeps);
     }
 
     private List<ProcessInfo> GetCameraProcesses(bool forceRefresh)
@@ -1047,6 +1067,15 @@ internal sealed class MainForm : Form
 
         try
         {
+            _rendererDepsService.InstallAllAsync(resonitePath, Log).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Log($"Renderer deps install failed: {ex.Message}");
+        }
+
+        try
+        {
             using var key = Registry.CurrentUser.CreateSubKey(SavedPathKey);
             key.SetValue(SavedPathValue, resonitePath, RegistryValueKind.String);
         }
@@ -1221,4 +1250,5 @@ internal sealed record StatusSnapshot(
     bool VBCableInstalled,
     bool SoftCamRegistered,
     bool ResoniteRunning,
-    List<ProcessInfo> CameraProcesses);
+    List<ProcessInfo> CameraProcesses,
+    RendererDepsService.DepsStatus RendererDeps);
