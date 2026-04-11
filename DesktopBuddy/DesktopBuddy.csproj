@@ -91,12 +91,12 @@
       <SoftcamDlls Include="$(MSBuildThisFileDirectory)..\softcam\*.dll" />
       <VBCableFiles Include="$(MSBuildThisFileDirectory)..\vbcable\*" />
     </ItemGroup>
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
-    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" />
-    <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" />
-    <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" />
-    <Copy SourceFiles="@(VBCableFiles)" DestinationFolder="$(ResonitePath)\vbcable" ContinueOnError="true" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(VBCableFiles)" DestinationFolder="$(ResonitePath)\vbcable" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

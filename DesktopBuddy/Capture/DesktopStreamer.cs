@@ -50,16 +50,14 @@ public sealed class DesktopStreamer : IDisposable
         return true;
     }
 
-    public byte[] CaptureFrame(out int width, out int height)
+    public void SetTextureTarget(DesktopTextureSource tex) => _wgc?.SetTextureTarget(tex);
+
+    public void RecreatePoolIfNeeded()
     {
+        if (_wgc == null) return;
         _wgc.RecreatePoolIfNeeded();
-        var frame = _wgc.TakeFrame(out width, out height);
-        if (frame != null)
-        {
-            Width = width;
-            Height = height;
-        }
-        return frame;
+        Width = _wgc.Width;
+        Height = _wgc.Height;
     }
 
     public void FlushD3dContext() => _wgc?.FlushD3dContext();

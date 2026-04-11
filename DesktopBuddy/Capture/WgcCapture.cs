@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.InteropServices;
-using System.Threading;
 using WinRT;
 using Windows.Graphics;
 using Windows.Graphics.Capture;
@@ -147,22 +146,30 @@ public sealed class WgcCapture : IDisposable
     private const int D3D_DRIVER_TYPE_HARDWARE = 1;
     private const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
 
-    private const int ID3D11Device_CreateBuffer = 3;
     private const int ID3D11Device_CreateTexture2D = 5;
-    private const int ID3D11Device_CreateShaderResourceView = 7;
-    private const int ID3D11Device_CreateUnorderedAccessView = 8;
-    private const int ID3D11Device_CreateComputeShader = 18;
     private const int ID3D11Device_GetDeviceRemovedReason = 38;
     private const int ID3D11DeviceContext_Map = 14;
     private const int ID3D11DeviceContext_Unmap = 15;
-    private const int ID3D11DeviceContext_Dispatch = 41;
     private const int ID3D11DeviceContext_CopyResource = 47;
     private const int ID3D11DeviceContext_ClearState = 110;
     private const int ID3D11DeviceContext_Flush = 111;
+
+    // Compute pipeline vtable slots
+    private const int ID3D11Device_CreateBuffer = 3;
+    private const int ID3D11Device_CreateShaderResourceView = 7;
+    private const int ID3D11Device_CreateUnorderedAccessView = 8;
+    private const int ID3D11Device_CreateComputeShader = 18;
+    private const int ID3D11DeviceContext_Dispatch = 41;
+    private const int ID3D11DeviceContext_UpdateSubresource = 48;
     private const int ID3D11DeviceContext_CSSetShaderResources = 67;
     private const int ID3D11DeviceContext_CSSetUnorderedAccessViews = 68;
     private const int ID3D11DeviceContext_CSSetShader = 69;
     private const int ID3D11DeviceContext_CSSetConstantBuffers = 71;
+
+    private const int DXGI_FORMAT_R32_TYPELESS = 39;
+    private const int DXGI_FORMAT_R32_UINT = 42;
+    private const uint D3D11_BIND_CONSTANT_BUFFER = 0x4;
+    private const uint D3D11_BIND_UNORDERED_ACCESS = 0x80;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct D3D11_TEXTURE2D_DESC
@@ -182,36 +189,6 @@ public sealed class WgcCapture : IDisposable
         public uint DepthPitch;
     }
 
-    private const int DXGI_FORMAT_B8G8R8A8_UNORM = 87;
-    private const int DXGI_FORMAT_R32_UINT = 42;
-    private const int D3D11_USAGE_DEFAULT = 0;
-    private const int D3D11_USAGE_STAGING = 3;
-    private const int D3D11_USAGE_DYNAMIC = 2;
-    private const uint D3D11_CPU_ACCESS_READ = 0x20000;
-    private const uint D3D11_CPU_ACCESS_WRITE = 0x10000;
-    private const uint D3D11_BIND_SHADER_RESOURCE = 0x8;
-    private const uint D3D11_BIND_UNORDERED_ACCESS = 0x80;
-    private const uint D3D11_BIND_CONSTANT_BUFFER = 0x4;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct D3D11_SHADER_RESOURCE_VIEW_DESC
-    {
-        public int Format;
-        public int ViewDimension;
-        public uint MostDetailedMip;
-        public uint MipLevels;
-        public uint Pad0, Pad1;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct D3D11_UNORDERED_ACCESS_VIEW_DESC
-    {
-        public int Format;
-        public int ViewDimension;
-        public uint MipSlice;
-        public uint Pad0, Pad1;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
     private struct D3D11_BUFFER_DESC
     {
@@ -223,13 +200,28 @@ public sealed class WgcCapture : IDisposable
         public uint StructureByteStride;
     }
 
+    // D3D11_SRV_DIMENSION_TEXTURE2D = 4; union is 16 bytes (largest member is Texture2DArray with 4 uints)
     [StructLayout(LayoutKind.Sequential)]
-    private struct GpuConstants
+    private struct D3D11_SHADER_RESOURCE_VIEW_DESC
     {
-        public uint Width;
-        public uint Height;
-        public uint Pad0, Pad1;
+        public int Format;
+        public int ViewDimension;
+        public uint Field0, Field1, Field2, Field3;
     }
+
+    // D3D11_UAV_DIMENSION_TEXTURE2D = 2; union is 12 bytes (Buffer has 3 uints)
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11_UNORDERED_ACCESS_VIEW_DESC
+    {
+        public int Format;
+        public int ViewDimension;
+        public uint Field0, Field1, Field2;
+    }
+
+    private const int DXGI_FORMAT_B8G8R8A8_UNORM = 87;
+    private const int D3D11_USAGE_DEFAULT = 0;
+    private const int D3D11_USAGE_STAGING = 3;
+    private const uint D3D11_CPU_ACCESS_READ = 0x20000;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame;
 
@@ -245,25 +237,21 @@ public sealed class WgcCapture : IDisposable
 
     private IntPtr _stagingTexture;
     private int _stagingTexW, _stagingTexH;
-    private byte[] _buffer;
-    private GCHandle _pinnedBuffer;
-    private readonly object _frameLock = new();
-    private volatile bool _frameReady;
     private volatile bool _closed;
     private int _lastWidth, _lastHeight;
     private int _framesCaptured;
     private volatile bool _disposed;
     private volatile bool _needsPoolRecreate;
 
+    // Compute shader pipeline — created once in Init, never recreated
     private IntPtr _computeShader;
-    private IntPtr _convertedTexture;
-    private IntPtr _convertedSRV;
-    private IntPtr _sourceSRV;
-    private IntPtr _destUAV;
     private IntPtr _constantBuffer;
-    private int _gpuConvertW, _gpuConvertH;
-    private bool _gpuConvertReady;
-    private int _lastConstW, _lastConstH;
+    private IntPtr _convertedTexture;
+    private IntPtr _convertedUav;
+    private IntPtr _convertedStaging;
+    private int _csTexW, _csTexH;
+
+    private DesktopTextureSource _textureTarget;
 
     private static readonly Guid DxgiAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
     private static readonly Guid TexGuid = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
@@ -324,6 +312,7 @@ public sealed class WgcCapture : IDisposable
             }
 
             Log.Msg("[WgcCapture] D3D11 device created");
+            LoadComputeShader();
 
             var dxgiGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
             Marshal.QueryInterface(_d3dDevice, ref dxgiGuid, out IntPtr dxgiDevice);
@@ -487,62 +476,30 @@ public sealed class WgcCapture : IDisposable
                 catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
             }
 
-            EnsureGpuConvertPipeline(w, h);
-            EnsureStagingTexture(w, h);
-
-            if (!_gpuConvertReady)
-            {
-                Log.Msg("[WgcCapture] GPU pipeline not ready, skipping frame");
-                return;
-            }
-
-            using (DesktopBuddyMod.Perf.Time("gpu_convert"))
-                GpuConvertBgraToRgba(srcTexture, w, h);
-            ContextCopyResource(_d3dContext, _stagingTexture, _convertedTexture);
+            EnsureConvertedTexture(w, h);
+            GpuConvert(srcTexture, w, h);
+            EnsureConvertedStaging(w, h);
+            ContextCopyResource(_d3dContext, _convertedStaging, _convertedTexture);
 
             var mapped = new D3D11_MAPPED_SUBRESOURCE();
             int hr;
             using (DesktopBuddyMod.Perf.Time("gpu_readback"))
-                hr = ContextMap(_d3dContext, _stagingTexture, 0, 1, 0, ref mapped);
+                hr = ContextMap(_d3dContext, _convertedStaging, 0, 1, 0, ref mapped);
             if (hr < 0) { Log.Msg($"[WgcCapture] Map failed hr=0x{hr:X8}"); return; }
 
             try
             {
-                int bufSize = w * h * 4;
-                int srcPitch = (int)mapped.RowPitch;
-                int dstStride = w * 4;
-
-                lock (_frameLock)
+                var tex = _textureTarget;
+                if (tex != null && !tex.IsDestroyed)
                 {
-                    EnsureBuffer(bufSize);
-
-                    using (DesktopBuddyMod.Perf.Time("cpu_memcpy"))
-                    {
-                        unsafe
-                        {
-                            byte* src = (byte*)mapped.pData;
-                            fixed (byte* dst = _buffer)
-                            {
-                                if (srcPitch == dstStride)
-                                {
-                                    Buffer.MemoryCopy(src, dst, bufSize, bufSize);
-                                }
-                                else
-                                {
-                                    for (int y = 0; y < h; y++)
-                                        Buffer.MemoryCopy(src + y * srcPitch, dst + y * dstStride, dstStride, dstStride);
-                                }
-                            }
-                        }
-                    }
-
-                    _lastWidth = w; _lastHeight = h;
-                    _frameReady = true; _framesCaptured++;
+                    using (DesktopBuddyMod.Perf.Time("bitmap_copy"))
+                        tex.WriteFrameDirect(mapped.pData, (int)mapped.RowPitch, w, h);
                 }
-                if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame ready: {w}x{h}, GPU compute shader active");
 
+                _lastWidth = w; _lastHeight = h; _framesCaptured++;
+                if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame: {w}x{h}");
             }
-            finally { ContextUnmap(_d3dContext, _stagingTexture, 0); }
+            finally { ContextUnmap(_d3dContext, _convertedStaging, 0); }
         }
         catch (Exception ex)
         {
@@ -557,24 +514,142 @@ public sealed class WgcCapture : IDisposable
         }
     }
 
-    public byte[] TakeFrame(out int width, out int height)
-    {
-        if (!_frameReady)
-        {
-            width = 0;
-            height = 0;
-            return null;
-        }
+    public void SetTextureTarget(DesktopTextureSource tex) => _textureTarget = tex;
 
-        lock (_frameLock)
+    private unsafe bool LoadComputeShader()
+    {
+        try
         {
-            _frameReady = false;
-            width = _lastWidth;
-            height = _lastHeight;
-            return _buffer;
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            byte[] csoBytes;
+            using (var stream = asm.GetManifestResourceStream("DesktopBuddy.Shaders.BgraToRgba.cso"))
+            {
+                if (stream == null) { Log.Msg("[WgcCapture] Shader resource not found"); return false; }
+                csoBytes = new byte[stream.Length];
+                stream.Read(csoBytes, 0, csoBytes.Length);
+            }
+
+            var devVtable = *(IntPtr**)_d3dDevice;
+
+            // Compute shader — loaded once, permanent
+            var createCS = (delegate* unmanaged[Stdcall]<IntPtr, byte*, nuint, IntPtr, out IntPtr, int>)devVtable[ID3D11Device_CreateComputeShader];
+            int hr;
+            fixed (byte* bytecode = csoBytes)
+                hr = createCS(_d3dDevice, bytecode, (nuint)csoBytes.Length, IntPtr.Zero, out _computeShader);
+            if (hr < 0) { Log.Msg($"[WgcCapture] CreateComputeShader hr=0x{hr:X8}"); return false; }
+
+            // Constant buffer: { uint Width; uint Height; } padded to 16 bytes
+            var cbDesc = new D3D11_BUFFER_DESC { ByteWidth = 16, Usage = D3D11_USAGE_DEFAULT, BindFlags = D3D11_BIND_CONSTANT_BUFFER };
+            var createBuf = (delegate* unmanaged[Stdcall]<IntPtr, ref D3D11_BUFFER_DESC, IntPtr, out IntPtr, int>)devVtable[ID3D11Device_CreateBuffer];
+            hr = createBuf(_d3dDevice, ref cbDesc, IntPtr.Zero, out _constantBuffer);
+            if (hr < 0) { Log.Msg($"[WgcCapture] CreateBuffer (cbuf) hr=0x{hr:X8}"); return false; }
+
+            Log.Msg("[WgcCapture] Compute shader pipeline ready");
+            return true;
         }
+        catch (Exception ex) { Log.Msg($"[WgcCapture] LoadComputeShader: {ex.Message}"); return false; }
     }
 
+    private unsafe void EnsureConvertedTexture(int w, int h)
+    {
+        if (_convertedTexture != IntPtr.Zero && _csTexW == w && _csTexH == h) return;
+
+        if (_convertedUav != IntPtr.Zero) { Marshal.Release(_convertedUav); _convertedUav = IntPtr.Zero; }
+        if (_convertedTexture != IntPtr.Zero) { Marshal.Release(_convertedTexture); _convertedTexture = IntPtr.Zero; }
+
+        // R32_TYPELESS texture written by compute shader via R32_UINT UAV
+        var desc = new D3D11_TEXTURE2D_DESC
+        {
+            Width = (uint)w, Height = (uint)h,
+            MipLevels = 1, ArraySize = 1,
+            Format = DXGI_FORMAT_R32_TYPELESS,
+            SampleCount = 1, SampleQuality = 0,
+            Usage = D3D11_USAGE_DEFAULT,
+            BindFlags = D3D11_BIND_UNORDERED_ACCESS,
+        };
+        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _convertedTexture);
+
+        var uavDesc = new D3D11_UNORDERED_ACCESS_VIEW_DESC
+        {
+            Format = DXGI_FORMAT_R32_UINT,
+            ViewDimension = 4,  // D3D11_UAV_DIMENSION_TEXTURE2D
+            Field0 = 0,         // MipSlice = 0
+        };
+        var devVtable = *(IntPtr**)_d3dDevice;
+        var createUav = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, ref D3D11_UNORDERED_ACCESS_VIEW_DESC, out IntPtr, int>)devVtable[ID3D11Device_CreateUnorderedAccessView];
+        int hr = createUav(_d3dDevice, _convertedTexture, ref uavDesc, out _convertedUav);
+        if (hr < 0) throw new System.Runtime.InteropServices.COMException("CreateUnorderedAccessView failed", hr);
+
+        // Upload new dimensions to constant buffer
+        uint* cbData = stackalloc uint[4];
+        cbData[0] = (uint)w; cbData[1] = (uint)h;
+        var ctxVtable = *(IntPtr**)_d3dContext;
+        var updateRes = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, IntPtr, uint*, uint, uint, void>)ctxVtable[ID3D11DeviceContext_UpdateSubresource];
+        updateRes(_d3dContext, _constantBuffer, 0, IntPtr.Zero, cbData, 0, 0);
+
+        _csTexW = w; _csTexH = h;
+        Log.Msg($"[WgcCapture] Compute texture {w}x{h} ready");
+    }
+
+    private void EnsureConvertedStaging(int w, int h)
+    {
+        if (_convertedStaging != IntPtr.Zero && _csTexW == w && _csTexH == h) return;
+        if (_convertedStaging != IntPtr.Zero) { Marshal.Release(_convertedStaging); _convertedStaging = IntPtr.Zero; }
+
+        var desc = new D3D11_TEXTURE2D_DESC
+        {
+            Width = (uint)w, Height = (uint)h,
+            MipLevels = 1, ArraySize = 1,
+            Format = DXGI_FORMAT_R32_TYPELESS,
+            SampleCount = 1, SampleQuality = 0,
+            Usage = D3D11_USAGE_STAGING,
+            BindFlags = 0,
+            CPUAccessFlags = D3D11_CPU_ACCESS_READ,
+            MiscFlags = 0
+        };
+        DeviceCreateTexture2D(_d3dDevice, ref desc, IntPtr.Zero, out _convertedStaging);
+    }
+
+    private unsafe void GpuConvert(IntPtr srcTexture, int w, int h)
+    {
+        if (_computeShader == IntPtr.Zero) return;
+
+        // SRV: BGRA source — hardware swizzles B8G8R8A8 reads to RGBA float4 in shader
+        var srvDesc = new D3D11_SHADER_RESOURCE_VIEW_DESC
+        {
+            Format = DXGI_FORMAT_B8G8R8A8_UNORM,
+            ViewDimension = 4,  // D3D11_SRV_DIMENSION_TEXTURE2D
+            Field0 = 0,         // MostDetailedMip = 0
+            Field1 = 1,         // MipLevels = 1
+        };
+        var devVtable = *(IntPtr**)_d3dDevice;
+        var createSrv = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, ref D3D11_SHADER_RESOURCE_VIEW_DESC, out IntPtr, int>)devVtable[ID3D11Device_CreateShaderResourceView];
+        int hr = createSrv(_d3dDevice, srcTexture, ref srvDesc, out IntPtr srv);
+        if (hr < 0) { Log.Msg($"[WgcCapture] CreateSRV hr=0x{hr:X8}"); return; }
+
+        try
+        {
+            var vtable = *(IntPtr**)_d3dContext;
+
+            var setShader = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, uint, void>)vtable[ID3D11DeviceContext_CSSetShader];
+            setShader(_d3dContext, _computeShader, IntPtr.Zero, 0);
+
+            var setSrv = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)vtable[ID3D11DeviceContext_CSSetShaderResources];
+            setSrv(_d3dContext, 0, 1, &srv);
+
+            IntPtr uav = _convertedUav;
+            var setUav = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, uint*, void>)vtable[ID3D11DeviceContext_CSSetUnorderedAccessViews];
+            setUav(_d3dContext, 0, 1, &uav, null);
+
+            IntPtr cb = _constantBuffer;
+            var setCb = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)vtable[ID3D11DeviceContext_CSSetConstantBuffers];
+            setCb(_d3dContext, 0, 1, &cb);
+
+            var dispatch = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, void>)vtable[ID3D11DeviceContext_Dispatch];
+            dispatch(_d3dContext, (uint)((w + 15) / 16), (uint)((h + 15) / 16), 1);
+        }
+        finally { Marshal.Release(srv); }
+    }
 
     private void EnsureStagingTexture(int w, int h)
     {
@@ -591,7 +666,7 @@ public sealed class WgcCapture : IDisposable
             Height = (uint)h,
             MipLevels = 1,
             ArraySize = 1,
-            Format = DXGI_FORMAT_R32_UINT,
+            Format = DXGI_FORMAT_B8G8R8A8_UNORM,  // native WGC format
             SampleCount = 1,
             SampleQuality = 0,
             Usage = D3D11_USAGE_STAGING,
@@ -604,14 +679,6 @@ public sealed class WgcCapture : IDisposable
         _stagingTexW = w; _stagingTexH = h;
     }
 
-    private void EnsureBuffer(int size)
-    {
-        if (_buffer != null && _buffer.Length == size) return;
-        if (_pinnedBuffer.IsAllocated) _pinnedBuffer.Free();
-        _buffer = new byte[size];
-        _pinnedBuffer = GCHandle.Alloc(_buffer, GCHandleType.Pinned);
-    }
-
     private unsafe void CheckDevice(string context)
     {
         var vtable = *(IntPtr**)_d3dDevice;
@@ -619,166 +686,6 @@ public sealed class WgcCapture : IDisposable
         int hr = fn(_d3dDevice);
         if (hr < 0)
             Log.Msg($"[WgcCapture] DEVICE REMOVED after {context}: hr=0x{hr:X8}");
-    }
-
-    private void EnsureGpuConvertPipeline(int w, int h)
-    {
-        if (_gpuConvertReady && w == _gpuConvertW && h == _gpuConvertH) return;
-
-        ReleaseGpuConvertResources();
-
-        try
-        {
-            if (_computeShader == IntPtr.Zero)
-            {
-                var asm = typeof(WgcCapture).Assembly;
-                using var stream = asm.GetManifestResourceStream("DesktopBuddy.Shaders.BgraToRgba.cso");
-                if (stream == null) { Log.Msg("[WgcCapture] GPU shader not found in resources, falling back to CPU"); return; }
-                var bytecode = new byte[stream.Length];
-                stream.Read(bytecode, 0, bytecode.Length);
-
-                _computeShader = DeviceCreateComputeShader(_d3dDevice, bytecode);
-                Log.Msg($"[WgcCapture] GPU compute shader created ({bytecode.Length} bytes)");
-            }
-
-            var texDesc = new D3D11_TEXTURE2D_DESC
-            {
-                Width = (uint)w, Height = (uint)h,
-                MipLevels = 1, ArraySize = 1,
-                Format = DXGI_FORMAT_R32_UINT,
-                SampleCount = 1, SampleQuality = 0,
-                Usage = D3D11_USAGE_DEFAULT,
-                BindFlags = D3D11_BIND_UNORDERED_ACCESS,
-                CPUAccessFlags = 0, MiscFlags = 0
-            };
-            DeviceCreateTexture2D(_d3dDevice, ref texDesc, IntPtr.Zero, out _convertedTexture);
-            Log.Msg($"[GPU] UAV texture created: 0x{_convertedTexture:X}");
-
-            var uavDesc = new D3D11_UNORDERED_ACCESS_VIEW_DESC
-            {
-                Format = DXGI_FORMAT_R32_UINT,
-                ViewDimension = 4,
-                MipSlice = 0
-            };
-            _destUAV = DeviceCreateUAV(_d3dDevice, _convertedTexture, ref uavDesc);
-            Log.Msg($"[GPU] UAV created: 0x{_destUAV:X}");
-
-            _constantBuffer = DeviceCreateConstantBuffer(_d3dDevice, 16);
-            Log.Msg($"[GPU] Constant buffer created: 0x{_constantBuffer:X}");
-
-            var srvTexDesc = new D3D11_TEXTURE2D_DESC
-            {
-                Width = (uint)w, Height = (uint)h,
-                MipLevels = 1, ArraySize = 1,
-                Format = DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleCount = 1, SampleQuality = 0,
-                Usage = D3D11_USAGE_DEFAULT,
-                BindFlags = D3D11_BIND_SHADER_RESOURCE,
-                CPUAccessFlags = 0, MiscFlags = 0
-            };
-            DeviceCreateTexture2D(_d3dDevice, ref srvTexDesc, IntPtr.Zero, out var srvTexture);
-
-            var srvDesc = new D3D11_SHADER_RESOURCE_VIEW_DESC
-            {
-                Format = DXGI_FORMAT_B8G8R8A8_UNORM,
-                ViewDimension = 4,
-                MostDetailedMip = 0,
-                MipLevels = 1
-            };
-            _sourceSRV = DeviceCreateSRV(_d3dDevice, srvTexture, ref srvDesc);
-            _convertedSRV = srvTexture;
-            Log.Msg($"[GPU] SRV texture created: 0x{srvTexture:X}, SRV: 0x{_sourceSRV:X}");
-
-            _gpuConvertW = w;
-            _gpuConvertH = h;
-            _gpuConvertReady = true;
-            Log.Msg($"[WgcCapture] GPU convert pipeline ready: {w}x{h}");
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[WgcCapture] GPU convert pipeline failed: {ex.Message}, falling back to CPU");
-            ReleaseGpuConvertResources();
-        }
-    }
-
-    private int _gpuDispatchCount;
-
-    private unsafe void GpuConvertBgraToRgba(IntPtr srcTexture, int w, int h)
-    {
-        bool verbose = _gpuDispatchCount < 3;
-        _gpuDispatchCount++;
-
-        if (verbose) Log.Msg($"[GPU] Dispatch #{_gpuDispatchCount}: {w}x{h} src=0x{srcTexture:X} srvTex=0x{_convertedSRV:X} shader=0x{_computeShader:X}");
-
-        ContextCopyResource(_d3dContext, _convertedSRV, srcTexture);
-        if (verbose) { CheckDevice("CopyResource->SRV"); Log.Msg("[GPU] CopyResource to SRV texture OK"); }
-
-        if (w != _lastConstW || h != _lastConstH)
-        {
-            var mapped = new D3D11_MAPPED_SUBRESOURCE();
-            int hr = ContextMap(_d3dContext, _constantBuffer, 0, 4, 0, ref mapped);
-            if (hr < 0) { Log.Msg($"[GPU] ConstantBuffer Map failed hr=0x{hr:X8}"); return; }
-            var constants = (GpuConstants*)mapped.pData;
-            constants->Width = (uint)w;
-            constants->Height = (uint)h;
-            ContextUnmap(_d3dContext, _constantBuffer, 0);
-            _lastConstW = w;
-            _lastConstH = h;
-            if (verbose) Log.Msg("[GPU] Constants updated");
-        }
-
-        var vtable = *(IntPtr**)_d3dContext;
-
-        var csSetShader = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, uint, void>)vtable[ID3D11DeviceContext_CSSetShader];
-        csSetShader(_d3dContext, _computeShader, IntPtr.Zero, 0);
-        if (verbose) Log.Msg("[GPU] CSSetShader OK");
-
-        IntPtr srv = _sourceSRV;
-        var csSetSRV = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)vtable[ID3D11DeviceContext_CSSetShaderResources];
-        csSetSRV(_d3dContext, 0, 1, &srv);
-        if (verbose) Log.Msg("[GPU] CSSetShaderResources OK");
-
-        IntPtr uav = _destUAV;
-        var csSetUAV = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, IntPtr, void>)vtable[ID3D11DeviceContext_CSSetUnorderedAccessViews];
-        csSetUAV(_d3dContext, 0, 1, &uav, IntPtr.Zero);
-        if (verbose) Log.Msg("[GPU] CSSetUnorderedAccessViews OK");
-
-        IntPtr cb = _constantBuffer;
-        var csSetCB = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)vtable[ID3D11DeviceContext_CSSetConstantBuffers];
-        csSetCB(_d3dContext, 0, 1, &cb);
-        if (verbose) Log.Msg("[GPU] CSSetConstantBuffers OK");
-
-        uint groupsX = ((uint)w + 15) / 16, groupsY = ((uint)h + 15) / 16;
-        if (verbose) Log.Msg($"[GPU] Dispatching {groupsX}x{groupsY}x1...");
-        var dispatch = (delegate* unmanaged[Stdcall]<IntPtr, uint, uint, uint, void>)vtable[ID3D11DeviceContext_Dispatch];
-        dispatch(_d3dContext, groupsX, groupsY, 1);
-        if (verbose) { CheckDevice("Dispatch"); Log.Msg("[GPU] Dispatch OK"); }
-
-        IntPtr nullPtr = IntPtr.Zero;
-        csSetSRV(_d3dContext, 0, 1, &nullPtr);
-        csSetUAV(_d3dContext, 0, 1, &nullPtr, IntPtr.Zero);
-        if (verbose) Log.Msg("[GPU] Unbind OK, dispatch complete");
-    }
-
-    private void ReleaseGpuConvertResources(bool disposing = false)
-    {
-        _gpuConvertReady = false;
-        if (disposing)
-        {
-            _destUAV = IntPtr.Zero;
-            _sourceSRV = IntPtr.Zero;
-            _convertedSRV = IntPtr.Zero;
-            _convertedTexture = IntPtr.Zero;
-            _constantBuffer = IntPtr.Zero;
-        }
-        else
-        {
-            if (_destUAV != IntPtr.Zero) { Marshal.Release(_destUAV); _destUAV = IntPtr.Zero; }
-            if (_sourceSRV != IntPtr.Zero) { Marshal.Release(_sourceSRV); _sourceSRV = IntPtr.Zero; }
-            if (_convertedSRV != IntPtr.Zero) { Marshal.Release(_convertedSRV); _convertedSRV = IntPtr.Zero; }
-            if (_convertedTexture != IntPtr.Zero) { Marshal.Release(_convertedTexture); _convertedTexture = IntPtr.Zero; }
-            if (_constantBuffer != IntPtr.Zero) { Marshal.Release(_constantBuffer); _constantBuffer = IntPtr.Zero; }
-        }
     }
 
     private static unsafe void ContextCopyResource(IntPtr context, IntPtr dst, IntPtr src)
@@ -808,53 +715,6 @@ public sealed class WgcCapture : IDisposable
         var fn = (delegate* unmanaged[Stdcall]<IntPtr, ref D3D11_TEXTURE2D_DESC, IntPtr, out IntPtr, int>)vtable[ID3D11Device_CreateTexture2D];
         int hr = fn(device, ref desc, initialData, out texture);
         if (hr < 0) throw new COMException("CreateTexture2D failed", hr);
-    }
-
-    private static unsafe IntPtr DeviceCreateComputeShader(IntPtr device, byte[] bytecode)
-    {
-        var vtable = *(IntPtr**)device;
-        var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, nuint, IntPtr, out IntPtr, int>)vtable[ID3D11Device_CreateComputeShader];
-        fixed (byte* pBytecode = bytecode)
-        {
-            int hr = fn(device, (IntPtr)pBytecode, (nuint)bytecode.Length, IntPtr.Zero, out IntPtr shader);
-            if (hr < 0) throw new COMException($"CreateComputeShader failed hr=0x{hr:X8}", hr);
-            return shader;
-        }
-    }
-
-    private static unsafe IntPtr DeviceCreateSRV(IntPtr device, IntPtr resource, ref D3D11_SHADER_RESOURCE_VIEW_DESC desc)
-    {
-        var vtable = *(IntPtr**)device;
-        var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, ref D3D11_SHADER_RESOURCE_VIEW_DESC, out IntPtr, int>)vtable[ID3D11Device_CreateShaderResourceView];
-        int hr = fn(device, resource, ref desc, out IntPtr srv);
-        if (hr < 0) throw new COMException($"CreateShaderResourceView failed hr=0x{hr:X8}", hr);
-        return srv;
-    }
-
-    private static unsafe IntPtr DeviceCreateUAV(IntPtr device, IntPtr resource, ref D3D11_UNORDERED_ACCESS_VIEW_DESC desc)
-    {
-        var vtable = *(IntPtr**)device;
-        var fn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, ref D3D11_UNORDERED_ACCESS_VIEW_DESC, out IntPtr, int>)vtable[ID3D11Device_CreateUnorderedAccessView];
-        int hr = fn(device, resource, ref desc, out IntPtr uav);
-        if (hr < 0) throw new COMException($"CreateUnorderedAccessView failed hr=0x{hr:X8}", hr);
-        return uav;
-    }
-
-    private static unsafe IntPtr DeviceCreateConstantBuffer(IntPtr device, uint size)
-    {
-        var vtable = *(IntPtr**)device;
-        var desc = new D3D11_BUFFER_DESC
-        {
-            ByteWidth = size,
-            Usage = D3D11_USAGE_DYNAMIC,
-            BindFlags = D3D11_BIND_CONSTANT_BUFFER,
-            CPUAccessFlags = D3D11_CPU_ACCESS_WRITE,
-            MiscFlags = 0, StructureByteStride = 0
-        };
-        var fn = (delegate* unmanaged[Stdcall]<IntPtr, ref D3D11_BUFFER_DESC, IntPtr, out IntPtr, int>)vtable[ID3D11Device_CreateBuffer];
-        int hr = fn(device, ref desc, IntPtr.Zero, out IntPtr buffer);
-        if (hr < 0) throw new COMException($"CreateBuffer failed hr=0x{hr:X8}", hr);
-        return buffer;
     }
 
     private readonly object _disposeLock = new();
@@ -915,7 +775,10 @@ public sealed class WgcCapture : IDisposable
         _item = null;
 
         Log.Msg($"[WgcCapture:Dispose] Releasing GPU resources");
-        ReleaseGpuConvertResources(disposing: false);
+        if (_convertedUav != IntPtr.Zero) { Marshal.Release(_convertedUav); _convertedUav = IntPtr.Zero; }
+        if (_convertedTexture != IntPtr.Zero) { Marshal.Release(_convertedTexture); _convertedTexture = IntPtr.Zero; }
+        if (_convertedStaging != IntPtr.Zero) { Marshal.Release(_convertedStaging); _convertedStaging = IntPtr.Zero; }
+        if (_constantBuffer != IntPtr.Zero) { Marshal.Release(_constantBuffer); _constantBuffer = IntPtr.Zero; }
         if (_computeShader != IntPtr.Zero) { Marshal.Release(_computeShader); _computeShader = IntPtr.Zero; }
         if (_stagingTexture != IntPtr.Zero) { Marshal.Release(_stagingTexture); _stagingTexture = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] GPU resources released");
@@ -937,8 +800,5 @@ public sealed class WgcCapture : IDisposable
         if (_d3dDevice != IntPtr.Zero) { Marshal.Release(_d3dDevice); _d3dDevice = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] D3D device released");
 
-        if (_pinnedBuffer.IsAllocated) _pinnedBuffer.Free();
-        _buffer = null;
-        Log.Msg($"[WgcCapture] Disposed hwnd={_hwnd}");
     }
 }

@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using Elements.Assets;
 using Elements.Core;
 using FrooxEngine;
@@ -7,113 +6,96 @@ using Renderite.Shared;
 
 namespace DesktopBuddy;
 
-/// <summary>
-/// Local-only custom component that owns the desktop frame bitmap and drives GPU upload.
-/// Attach to a slot created via AddLocalSlot — it will never be synced to other users.
-/// Call Initialize(w, h) once after attach, then SetFrame() from the background capture thread.
-/// Upload is triggered automatically on the engine update thread via OnCommonUpdate.
-/// </summary>
-public class DesktopTextureSource : ProceduralTextureBase
+// Local-only component that owns the desktop frame bitmap and pushes it to Renderite.
+// Bypasses ProceduralTextureBase entirely — WriteFrameDirect sends straight to the
+// Renderite render thread from the WGC capture thread, zero engine-update-thread cost per frame.
+public class DesktopTextureSource : DynamicAssetProvider<Texture2D>,
+    ITexture2DProvider, IAssetProvider<ITexture2D>, ITextureProvider, IAssetProvider<ITexture>
 {
-    // Reflection delegates — encapsulated here instead of in DesktopBuddyMod.
-    // Both members are private on ProceduralTextureBase so reflection is still required,
-    // but at least it lives next to the code that uses it.
-    private static readonly Func<ProceduralTextureBase, Bitmap2D> _getTex2D;
-    private static readonly Action<ProceduralTextureBase, TextureUploadHint, AssetIntegrated> _setFromBitmap;
-
-    static DesktopTextureSource()
-    {
-        var tex2DGetter = typeof(ProceduralTextureBase)
-            .GetProperty("tex2D", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?.GetGetMethod(true);
-        if (tex2DGetter != null)
-            _getTex2D = (Func<ProceduralTextureBase, Bitmap2D>)Delegate.CreateDelegate(
-                typeof(Func<ProceduralTextureBase, Bitmap2D>), tex2DGetter);
-
-        var setMethod = typeof(ProceduralTextureBase)
-            .GetMethod("SetFromCurrentBitmap", BindingFlags.NonPublic | BindingFlags.Instance);
-        if (setMethod != null)
-            _setFromBitmap = (Action<ProceduralTextureBase, TextureUploadHint, AssetIntegrated>)
-                Delegate.CreateDelegate(
-                    typeof(Action<ProceduralTextureBase, TextureUploadHint, AssetIntegrated>),
-                    setMethod);
-
-        Log.Msg($"[DesktopTextureSource] Static init: getTex2D={_getTex2D != null}, setFromBitmap={_setFromBitmap != null}");
-    }
-
-    // Width/Height stored as plain C# fields — no sync needed (local-only component).
     public int Width { get; private set; }
     public int Height { get; private set; }
 
-    // Required abstract overrides from ProceduralTextureBase / ProceduralAssetProvider<Texture2D>.
-    // GenerateSize/Format/Mipmaps tell the engine how to allocate the backing Bitmap2D.
-    protected override int2 GenerateSize => new int2(Width, Height);
-    protected override TextureFormat GenerateFormat => TextureFormat.RGBA32;
-    protected override bool GenerateMipmaps => false;
-    // No procedural generation; bitmap is filled externally by SetFrame.
-    protected override void ClearTextureData() { }
-    protected override void GenerateErrorIndication() { }
+    private Bitmap2D _bitmap;
+    private volatile bool _uploadInFlight;
 
-    private volatile bool _frameReady;
-    private Bitmap2D _cachedBitmap;
+    // Explicit covariant asset properties required by the marker interface chain.
+    ITexture2D IAssetProvider<ITexture2D>.Asset => Asset;
+    ITexture IAssetProvider<ITexture>.Asset => Asset;
 
-    /// <summary>
-    /// Must be called on the engine thread immediately after AttachComponent.
-    /// Sets texture dimensions and filter mode. LocalManualUpdate is switched on automatically
-    /// once the engine completes its one initial allocation cycle (IsAssetAvailable).
-    /// </summary>
+    // Called immediately after AttachComponent on the engine thread.
     public void Initialize(int w, int h)
     {
         Width = w;
         Height = h;
-        _cachedBitmap = null;
-        FilterMode.Value = TextureFilterMode.Bilinear;
+        HighPriorityIntegration.Value = true;
         Log.Msg($"[DesktopTextureSource] Initialized at {w}x{h}");
     }
 
-    /// <summary>
-    /// Copy a captured RGBA frame into the backing bitmap.
-    /// Safe to call from any thread (background BitmapCopyLoop).
-    /// Returns false and skips the copy if a frame is already queued or the bitmap isn't ready.
-    /// </summary>
-    public bool SetFrame(byte[] data, int w, int h)
+    // Called exactly once by the engine when this component is first referenced.
+    // Allocates the shared-memory Bitmap2D and queues the initial (blank) frame to Renderite.
+    protected override void UpdateAsset(Texture2D asset)
     {
-        if (_frameReady) return false;
-        if (IsDestroyed) return false;
+        _bitmap?.Buffer?.Dispose();
 
-        var bitmap = _cachedBitmap ??= _getTex2D?.Invoke(this);
-        if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
-        {
-            _cachedBitmap = null;
-            return false;
-        }
+        IBackingBufferAllocator allocator = Engine.RenderSystem as IBackingBufferAllocator;
+        _bitmap = new Bitmap2D(Width, Height, TextureFormat.RGBA32, false,
+            ColorProfile.sRGB, flipY: true, null, allocator);
+        if (allocator != null)
+            _bitmap.RawData.Clear();  // zero-init shared memory (uninitialized otherwise)
 
-        data.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
-        _frameReady = true;
-        return true;
+        // Block future auto-calls — we drive uploads ourselves from the WGC thread.
+        LocalManualUpdate = true;
+
+        _uploadInFlight = true;
+        asset.SetFromBitmap2D(_bitmap, new TextureUploadHint { readable = false },
+            TextureFilterMode.Bilinear, 8,
+            TextureWrapMode.Repeat, TextureWrapMode.Repeat, 0f,
+            _ => { _uploadInFlight = false; AssetCreated(); });
+
+        Log.Msg($"[DesktopTextureSource] Asset created, initial upload queued ({Width}x{Height})");
     }
 
-    /// <summary>
-    /// Engine update tick. After the engine's first allocation cycle (IsAssetAvailable),
-    /// switches to manual mode and pushes queued frames to the GPU.
-    /// </summary>
-    protected override void OnCommonUpdate()
+    // DynamicAssetProvider notification — fires when the engine assigns a new asset instance.
+    // Nothing to do here; UpdateAsset drives the real work.
+    protected override void AssetCreated(Texture2D asset) { }
+
+    protected override void ClearAsset()
     {
-        base.OnCommonUpdate();
+        (_bitmap as IDisposable)?.Dispose();
+        _bitmap = null;
+    }
 
-        if (!IsAssetAvailable) return;
+    // Called from the WGC capture thread each frame.
+    // Copies the mapped staging texture into the shared-memory bitmap then pushes it
+    // directly to Renderite — no engine-update-thread involvement.
+    // Returns false if the asset isn't ready yet or an upload is already in flight.
+    public unsafe bool WriteFrameDirect(IntPtr mappedData, int rowPitch, int w, int h)
+    {
+        if (IsDestroyed || _uploadInFlight) return false;
+        var asset = Asset;
+        if (asset == null) return false;
+        var bitmap = _bitmap;
+        if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h) return false;
 
-        // First time the asset is ready — opt out of the engine's auto-regeneration cycle.
-        if (!LocalManualUpdate)
+        // Lock before memcpy so Renderite can't read while we're writing.
+        _uploadInFlight = true;
+
+        // Shader output is RGBA — straight memcpy, row-by-row for pitch padding.
+        int dstStride = w * 4;
+        byte* src = (byte*)mappedData;
+        fixed (byte* dstBase = bitmap.RawData)
         {
-            LocalManualUpdate = true;
-            return;
+            if (rowPitch == dstStride)
+                Buffer.MemoryCopy(src, dstBase, (long)h * dstStride, (long)h * dstStride);
+            else
+                for (int y = 0; y < h; y++)
+                    Buffer.MemoryCopy(src + (long)y * rowPitch,
+                        dstBase + (long)y * dstStride, dstStride, dstStride);
         }
-
-        if (!_frameReady) return;
-
-        using (DesktopBuddyMod.Perf.Time("texture_upload"))
-            _setFromBitmap?.Invoke(this, default, null);
-        _frameReady = false;
+        asset.SetFromBitmap2D(bitmap, new TextureUploadHint { readable = false },
+            TextureFilterMode.Bilinear, 8,
+            TextureWrapMode.Repeat, TextureWrapMode.Repeat, 0f,
+            _ => _uploadInFlight = false);
+        return true;
     }
 }
