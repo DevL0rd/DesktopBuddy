@@ -37,6 +37,8 @@ public class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
         new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => false);
 
+
+
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
 
@@ -314,22 +316,12 @@ public class DesktopBuddyMod : ResoniteMod
         collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
-        var displaySlot = root.AddSlot("Display");
-        Msg("[StartStreaming] Display slot created");
-
-        var displayVis = displaySlot.AttachComponent<ValueUserOverride<bool>>();
-        displayVis.Target.Target = displaySlot.ActiveSelf_Field;
-        displayVis.Default.Value = false;
-        displayVis.CreateOverrideOnWrite.Value = false;
-        displayVis.SetOverride(root.World.LocalUser, true);
-        Msg("[StartStreaming] Per-user visibility set");
+        var displaySlot = root.AddLocalSlot("Display", false);
+        Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
-        var procTex = texSlot.AttachComponent<SolidColorTexture>();
-        procTex.Size.Value = new int2(w, h);
-        procTex.Format.Value = Renderite.Shared.TextureFormat.RGBA32;
-        procTex.Mipmaps.Value = false;
-        procTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
+        var procTex = texSlot.AttachComponent<DesktopTextureSource>();
+        procTex.Initialize(w, h);
         Msg("[StartStreaming] Texture component created");
 
         var ui = new UIBuilder(displaySlot, w, h, canvasScale);
@@ -693,15 +685,6 @@ public class DesktopBuddyMod : ResoniteMod
         streamVolUi.Style.FlexibleWidth = 1f;
         streamVolUi.Style.FlexibleHeight = 1f;
         var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
-        var volSliderOverride = volSlider.Slot.AttachComponent<ValueUserOverride<float>>();
-        volSliderOverride.Target.Target = volSlider.Value;
-        volSliderOverride.Default.Value = 1f;
-        volSliderOverride.CreateOverrideOnWrite.Value = true;
-
-        var streamVolVis = streamVolRow.AttachComponent<ValueUserOverride<bool>>();
-        streamVolVis.Target.Target = streamVolRow.ActiveSelf_Field;
-        streamVolVis.Default.Value = true;
-        streamVolVis.CreateOverrideOnWrite.Value = false;
 
         var widthField = barSlot.AttachComponent<ValueField<float>>();
         widthField.Value.Value = barCollapsedW;
@@ -769,7 +752,8 @@ public class DesktopBuddyMod : ResoniteMod
                 return;
             }
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
-            keyboardSlot = root.AddSlot("Virtual Keyboard");
+            keyboardSlot = root.AddLocalSlot("Virtual Keyboard", false);
+            session.KeyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
             keyboardSlot.StartTask(async () =>
@@ -804,9 +788,7 @@ public class DesktopBuddyMod : ResoniteMod
             {
                 streamTestMode = !streamTestMode;
                 streamVisRef.SetOverride(root.World.LocalUser, streamTestMode);
-                var displayVisComp = displaySlot.GetComponent<ValueUserOverride<bool>>();
-                if (displayVisComp != null)
-                    displayVisComp.SetOverride(root.World.LocalUser, !streamTestMode);
+                displaySlot.ActiveSelf = !streamTestMode;
                 var img = testStreamBtn.Slot.GetComponent<Image>();
                 if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
                 Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
@@ -1285,9 +1267,7 @@ public class DesktopBuddyMod : ResoniteMod
 
         grabbable = root.AttachComponent<Grabbable>();
         grabbable.Scalable.Value = true;
-        grabbable.OnlyUsers.Add().Target = localUser;
-        grabbable.AllowSteal.Value = false;
-        Msg("[StartStreaming] Grabbable attached (spawner-only)");
+        Msg("[StartStreaming] Grabbable attached");
 
         {
             const int HISTORY_SIZE = 5;
@@ -1533,29 +1513,7 @@ public class DesktopBuddyMod : ResoniteMod
 
     private static int _updateCount;
 
-    private static readonly Func<ProceduralTextureBase, Bitmap2D> _getTex2D;
-    private static readonly Action<ProceduralTextureBase, Renderite.Shared.TextureUploadHint, FrooxEngine.AssetIntegrated> _setFromBitmap;
 
-    static DesktopBuddyMod()
-    {
-        var tex2DGetter = typeof(ProceduralTextureBase)
-            .GetProperty("tex2D", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?.GetGetMethod(true);
-        if (tex2DGetter != null)
-            _getTex2D = (Func<ProceduralTextureBase, Bitmap2D>)Delegate.CreateDelegate(
-                typeof(Func<ProceduralTextureBase, Bitmap2D>), tex2DGetter);
-
-        var setMethod = typeof(ProceduralTextureBase)
-            .GetMethod("SetFromCurrentBitmap", BindingFlags.NonPublic | BindingFlags.Instance);
-        if (setMethod != null)
-            _setFromBitmap = (Action<ProceduralTextureBase, Renderite.Shared.TextureUploadHint, FrooxEngine.AssetIntegrated>)
-                Delegate.CreateDelegate(
-                    typeof(Action<ProceduralTextureBase, Renderite.Shared.TextureUploadHint, FrooxEngine.AssetIntegrated>),
-                    setMethod);
-
-        Msg("[DesktopBuddyMod] Compiled reflection delegates: " +
-            $"getTex2D={_getTex2D != null}, setFromBitmap={_setFromBitmap != null}");
-    }
 
     private static void ConnectEncoder(DesktopSession session, FfmpegEncoder encoder)
     {
@@ -1854,8 +1812,6 @@ public class DesktopBuddyMod : ResoniteMod
             }
             lastCaptureTicks = sw.ElapsedTicks;
 
-            if (session.BitmapReady) { Thread.Sleep(1); continue; }
-
             var streamer = session.Streamer;
             if (streamer == null) continue;
 
@@ -1875,8 +1831,7 @@ public class DesktopBuddyMod : ResoniteMod
             }
             if (frame == null) continue;
 
-            var texSize = texture.Size.Value;
-            if (texSize.x != w || texSize.y != h)
+            if (texture.Width != w || texture.Height != h)
             {
                 session.CapturedWidth = w;
                 session.CapturedHeight = h;
@@ -1884,16 +1839,11 @@ public class DesktopBuddyMod : ResoniteMod
                 continue;
             }
 
-            var bitmap = _getTex2D?.Invoke(texture);
-            if (bitmap == null || bitmap.Size.x != w || bitmap.Size.y != h)
-                continue;
-
             using (Perf.Time("bitmap_copy"))
-                frame.AsSpan(0, w * h * 4).CopyTo(bitmap.RawData);
+                texture.SetFrame(frame, w, h);
 
             session.CapturedWidth = w;
             session.CapturedHeight = h;
-            session.BitmapReady = true;
         }
     }
 
@@ -2031,19 +1981,7 @@ public class DesktopBuddyMod : ResoniteMod
                     continue;
                 }
 
-                if (!session.ManualModeSet)
-                {
-                    session.Texture.LocalManualUpdate = true;
-                    session.ManualModeSet = true;
-                    var texSize = session.Texture.Size.Value;
-                    Msg($"[UpdateLoop] Set LocalManualUpdate=true, texSize={texSize.x}x{texSize.y}");
-                    if (session.Canvas != null && !session.Canvas.IsDestroyed &&
-                        (session.Canvas.Size.Value.x != texSize.x || session.Canvas.Size.Value.y != texSize.y))
-                    {
-                        Msg($"[UpdateLoop] Syncing canvas {session.Canvas.Size.Value.x}x{session.Canvas.Size.Value.y} -> {texSize.x}x{texSize.y}");
-                        session.Canvas.Size.Value = new float2(texSize.x, texSize.y);
-                    }
-                }
+
 
                 if (session.CapturedSizeChanged)
                 {
@@ -2051,19 +1989,15 @@ public class DesktopBuddyMod : ResoniteMod
                     int w = session.CapturedWidth;
                     int h = session.CapturedHeight;
 
-                    if (session.Texture.Size.Value.x != w || session.Texture.Size.Value.y != h)
+                    if (session.Texture.Width != w || session.Texture.Height != h)
                     {
-                        Msg($"[UpdateLoop] Window resize {session.Texture.Size.Value.x}x{session.Texture.Size.Value.y} -> {w}x{h}");
+                        Msg($"[UpdateLoop] Window resize {session.Texture.Width}x{session.Texture.Height} -> {w}x{h}");
 
                         var texSlot = session.Texture.Slot;
                         session.Texture.Destroy();
-                        var newTex = texSlot.AttachComponent<SolidColorTexture>();
-                        newTex.Size.Value = new int2(w, h);
-                        newTex.Format.Value = Renderite.Shared.TextureFormat.RGBA32;
-                        newTex.Mipmaps.Value = false;
-                        newTex.FilterMode.Value = Renderite.Shared.TextureFilterMode.Bilinear;
+                        var newTex = texSlot.AttachComponent<DesktopTextureSource>();
+                        newTex.Initialize(w, h);
                         session.Texture = newTex;
-                        session.ManualModeSet = false;
 
                         if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
                             session.TextureImage.Texture.Target = newTex;
@@ -2133,12 +2067,6 @@ public class DesktopBuddyMod : ResoniteMod
 
                     Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
                 }
-
-                if (!session.BitmapReady) continue;
-                session.BitmapReady = false;
-
-                using (Perf.Time("texture_upload"))
-                    _setFromBitmap?.Invoke(session.Texture, default, null);
 
                 if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
@@ -2538,30 +2466,16 @@ static class SimulatePressPatch
 {
     static bool Prefix(Key key, World origin)
     {
-        bool hasSession = false;
         for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
         {
-            if (DesktopBuddyMod.ActiveSessions[i].Root?.World == origin) { hasSession = true; break; }
-        }
-        if (!hasSession)
-        {
-            return true;
-        }
-
-        if (KeyMapper.KeyToVK.TryGetValue(key, out ushort vk))
-        {
-            if (KeyMapper.IsModifier(key))
+            var s = DesktopBuddyMod.ActiveSessions[i];
+            if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
             {
-                WindowInput.SendVirtualKeyDown(vk);
-            }
-            else
-            {
-                WindowInput.SendVirtualKey(vk);
-                WindowInput.ReleaseAllModifiers();
+                s.KeyboardSource.SendKey(key);
+                return false;
             }
         }
-
-        return false;
+        return true;
     }
 }
 
@@ -2570,22 +2484,15 @@ static class TypeAppendPatch
 {
     static bool Prefix(string typeDelta, World origin)
     {
-        bool hasSession = false;
         for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
         {
-            if (DesktopBuddyMod.ActiveSessions[i].Root?.World == origin) { hasSession = true; break; }
+            var s = DesktopBuddyMod.ActiveSessions[i];
+            if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
+            {
+                s.KeyboardSource.TypeString(typeDelta);
+                return false;
+            }
         }
-        if (!hasSession)
-        {
-            return true;
-        }
-
-        if (!string.IsNullOrEmpty(typeDelta))
-        {
-            WindowInput.SendString(typeDelta);
-            WindowInput.ReleaseAllModifiers();
-        }
-
-        return false;
+        return true;
     }
 }

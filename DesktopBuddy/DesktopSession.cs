@@ -9,19 +9,17 @@ namespace DesktopBuddy;
 public class DesktopSession
 {
     public DesktopStreamer Streamer;
-    public SolidColorTexture Texture;
+    public DesktopTextureSource Texture;
     public RawImage TextureImage;
     public Canvas Canvas;
     public Slot Root;
     public bool UpdateInProgress;
-    public bool ManualModeSet;
     public double TimeSinceLastCapture;
     public double TargetInterval;
 
     public Thread CopyThread;
     public ManualResetEventSlim CopySignal = new(false);
     public volatile bool CopyThreadRunning;
-    public volatile bool BitmapReady;
     public volatile int CapturedWidth;
     public volatile int CapturedHeight;
     public volatile bool CapturedSizeChanged;
@@ -49,6 +47,8 @@ public class DesktopSession
     public double ResizeDebounceUntil;
     public int PendingResizeW, PendingResizeH;
     public BoxCollider Collider;
+
+    public DesktopKeyboardSource KeyboardSource;
 
     public VideoTextureProvider VideoTexture;
     public bool FeedsVirtualCamera;
