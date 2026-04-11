@@ -48,21 +48,14 @@ public class DesktopBuddyMod : ResoniteMod
 
     private class SharedStream
     {
-        public int StreamId;
-        public FfmpegEncoder Encoder;
+        public int StreamId;       // Now the capture slot index (used as /stream/{id})
         public AudioCapture Audio;
         public Uri StreamUrl;
         public int RefCount;
     }
 
-    internal static MjpegServer? StreamServer;
     internal static VirtualCamera VCam;
     internal static VirtualMic VMic;
-    private const int STREAM_PORT = 48080;
-    internal static string? TunnelUrl;
-    private static Process _tunnelProcess;
-    private static string _cfPath;
-    private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
     // Renderer-side capture side-channel
@@ -112,22 +105,8 @@ public class DesktopBuddyMod : ResoniteMod
 
         AudioCapture.LogHandler = Msg;
 
-        try
-        {
-            StreamServer = new MjpegServer(STREAM_PORT);
-            StreamServer.Start();
-            Msg($"Stream server started on port {STREAM_PORT}");
-        }
-        catch (Exception ex)
-        {
-            Msg($"Stream server failed to start: {ex.Message}");
-            StreamServer = null;
-        }
-
-        if (StreamServer != null)
-        {
-            System.Threading.Tasks.Task.Run(() => StartTunnel());
-        }
+        // Streaming + tunnel now handled by the renderer process.
+        // Game reads the tunnel URL from shared MMF via CaptureChannel.ReadTunnelUrl().
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) =>
         {
@@ -137,7 +116,6 @@ public class DesktopBuddyMod : ResoniteMod
                 if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
                     AudioRouter.ResetProcessToDefault(session.ProcessId);
             }
-            KillTunnel();
         };
 
         System.Threading.Tasks.Task.Run(() =>
@@ -398,9 +376,12 @@ public class DesktopBuddyMod : ResoniteMod
         var procTex = texSlot.AttachComponent<DesktopTextureProvider>();
         OurProviders.Add(procTex);
         int captureSlot = -1;
-        if (hwnd != IntPtr.Zero && CaptureChannel != null && CaptureChannel.IsOpen)
+        bool isMonitorCapture = hwnd == IntPtr.Zero && monitorIndex >= 0;
+        if (CaptureChannel != null && CaptureChannel.IsOpen)
         {
-            // Window capture — use magic index + renderer UWC path
+            // Register both window and monitor captures with the channel
+            // Window: hwnd != 0, uses magic DisplayIndex + UWC path
+            // Monitor: hwnd == 0, uses magic DisplayIndex + renderer's monitor handling
             captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
             if (captureSlot < 0)
             {
@@ -411,19 +392,14 @@ public class DesktopBuddyMod : ResoniteMod
             }
             int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
             procTex.DisplayIndex.Value = magicIdx;
-            Msg($"[StartStreaming] Window capture: slot {captureSlot}, DisplayIndex={magicIdx}");
-            // NOTE: The renderer may not have the UWC source ready yet for this magic index.
-            // The UpdateLoop handles retries by re-sending desktopTex.Update() periodically.
-        }
-        else if (hwnd == IntPtr.Zero && monitorIndex >= 0)
-        {
-            // Monitor capture — use real display index, Renderite's DuplicableDisplay handles it
-            procTex.DisplayIndex.Value = monitorIndex;
-            Msg($"[StartStreaming] Monitor capture: DisplayIndex={monitorIndex}");
+            if (isMonitorCapture)
+                Msg($"[StartStreaming] Monitor capture: slot {captureSlot}, DisplayIndex={magicIdx} (monitorIndex={monitorIndex})");
+            else
+                Msg($"[StartStreaming] Window capture: slot {captureSlot}, DisplayIndex={magicIdx}");
         }
         else
         {
-            Msg($"[StartStreaming] WARNING: Cannot set up texture (hwnd={hwnd}, monitorIndex={monitorIndex}, channel={(CaptureChannel?.IsOpen ?? false)})");
+            Msg($"[StartStreaming] WARNING: Cannot set up texture - CaptureChannel unavailable (hwnd={hwnd}, channel={(CaptureChannel?.IsOpen ?? false)})");
         }
         Msg("[StartStreaming] Texture component created");
 
@@ -449,6 +425,8 @@ public class DesktopBuddyMod : ResoniteMod
         Msg("[StartStreaming] Button attached");
 
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
+        if (hwnd == IntPtr.Zero)
+            processId = 0;
         Msg($"[StartStreaming] Process ID: {processId}");
 
         var session = new DesktopSession
@@ -1241,52 +1219,47 @@ public class DesktopBuddyMod : ResoniteMod
             });
         }
 
-        if (StreamServer != null && TunnelUrl != null)
+        var tunnelUrl = CaptureChannel?.ReadTunnelUrl();
+        if (tunnelUrl != null && session.CaptureSlot >= 0 && CaptureChannel != null)
         {
             try
             {
                 SharedStream shared;
+                int slotId = session.CaptureSlot;
                 lock (_sharedStreams)
                 {
                     if (hwnd == IntPtr.Zero || !_sharedStreams.TryGetValue(hwnd, out shared))
                     {
-                        int streamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
-                        var encoder = StreamServer.CreateEncoder(streamId);
-
+                        // Start audio capture locally and pipe via MMF to renderer
                         var audio = new AudioCapture();
                         if (hwnd != IntPtr.Zero)
                             audio.Start(hwnd, AudioCaptureMode.IncludeProcess);
                         else
                             audio.Start(IntPtr.Zero, AudioCaptureMode.ExcludeProcess);
 
-                        var url = new Uri($"{TunnelUrl}/stream/{streamId}");
-                        shared = new SharedStream { StreamId = streamId, Encoder = encoder, Audio = audio, StreamUrl = url, RefCount = 0 };
+                        // Request the renderer to start streaming for this capture slot
+                        CaptureChannel.RequestStream(slotId, session.ProcessId);
+
+                        // Create audio MMF writer to pipe audio PCM to renderer
+                        var audioWriter = new AudioMmfWriter(audio, CaptureChannel.QueueName, slotId);
+                        session.AudioMmfWriter = audioWriter;
+
+                        var url = new Uri($"{tunnelUrl}/stream/{slotId}");
+                        shared = new SharedStream { StreamId = slotId, Audio = audio, StreamUrl = url, RefCount = 0 };
                         if (hwnd != IntPtr.Zero)
                             _sharedStreams[hwnd] = shared;
-                        Msg($"[RemoteStream] Created new shared stream {streamId} for hwnd={hwnd}");
+                        Msg($"[RemoteStream] Requested renderer stream for slot {slotId} hwnd={hwnd}");
                     }
                     else
                     {
-                        Msg($"[RemoteStream] Reusing shared stream {shared.StreamId} for hwnd={hwnd} (refs={shared.RefCount})");
+                        Msg($"[RemoteStream] Reusing shared stream slot {shared.StreamId} for hwnd={hwnd} (refs={shared.RefCount})");
                     }
                     shared.RefCount++;
                 }
                 session.StreamId = shared.StreamId;
-                var nvEncoder = shared.Encoder;
 
                 if (session.SpatialAudioSource != null && shared.Audio != null)
                     session.SpatialAudioSource.SetAudioCapture(shared.Audio);
-
-                bool isFirstForHwnd = shared.RefCount == 1;
-                if (isFirstForHwnd)
-                {
-                    ConnectEncoder(session, nvEncoder);
-                    Msg($"[RemoteStream] This panel drives the encoder for stream {shared.StreamId}");
-                }
-                else
-                {
-                    Msg($"[RemoteStream] This panel shares encoder from stream {shared.StreamId}, no encoding hook");
-                }
 
                 var videoSlot = root.AddSlot("StreamProvider");
                 var videoTex = videoSlot.AttachComponent<VideoTextureProvider>();
@@ -1375,7 +1348,7 @@ public class DesktopBuddyMod : ResoniteMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            Msg($"[RemoteStream] Skipped: CaptureSlot={session.CaptureSlot} tunnelUrl={tunnelUrl ?? "null"}");
         }
 
 
@@ -1612,23 +1585,7 @@ public class DesktopBuddyMod : ResoniteMod
 
 
 
-    private static void ConnectEncoder(DesktopSession session, FfmpegEncoder encoder)
-    {
-        if (encoder == null || session.Streamer == null) return;
-        var contextLock = session.Streamer.D3dContextLock;
-        AudioCapture audioForEncoder = null;
-        lock (_sharedStreams)
-        {
-            if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
-                audioForEncoder = shared.Audio;
-        }
-        var enc = encoder;
-        session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
-        {
-            enc.StartInitializeAsync(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
-            enc.QueueFrame(texture, (uint)fw, (uint)fh);
-        };
-    }
+    // ConnectEncoder removed — encoding now handled by renderer process
 
     /// <summary>
     /// Re-sends the DesktopTexture.Update() message to the renderer for a window capture
@@ -1755,14 +1712,7 @@ public class DesktopBuddyMod : ResoniteMod
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
-        if (session.StreamId > 0)
-        {
-            lock (_sharedStreams)
-            {
-                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) && shared.Encoder != null)
-                    shared.Encoder.Stop();
-            }
-        }
+        // Renderer-side streaming: no local encoder to stop
         int streamId = session.StreamId;
         IntPtr hwnd = session.Hwnd;
         session.Streamer = null;
@@ -1777,8 +1727,9 @@ public class DesktopBuddyMod : ResoniteMod
                 streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
-                bool shouldStopEncoder = false;
-                if (streamId > 0)
+                AudioMmfWriter audioWriterToDispose = null;
+                bool shouldStopStream = false;
+                if (streamId >= 0)
                 {
                     lock (_sharedStreams)
                     {
@@ -1790,26 +1741,26 @@ public class DesktopBuddyMod : ResoniteMod
                             {
                                 _sharedStreams.Remove(hwnd);
                                 audioToDispose = shared.Audio;
-                                shouldStopEncoder = true;
+                                shouldStopStream = true;
                             }
                         }
                         else
                         {
-                            shouldStopEncoder = true;
+                            shouldStopStream = true;
                         }
                     }
 
-                    if (shouldStopEncoder)
+                    if (shouldStopStream && CaptureChannel != null)
                     {
-                        Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
-                        StreamServer?.StopEncoder(streamId);
-                        Msg($"[Cleanup:BG] Encoder {streamId} stopped");
+                        Msg($"[Cleanup:BG] Signaling renderer to stop stream slot {streamId}...");
+                        CaptureChannel.StopStream(streamId);
+                        Msg($"[Cleanup:BG] Stream slot {streamId} stop requested");
                     }
 
                     bool forceGC = Config?.GetValue(ImmediateGC) ?? false;
                     if (forceGC)
                     {
-                        Msg("[Cleanup:BG] Forcing GC after encoder dispose");
+                        Msg("[Cleanup:BG] Forcing GC after cleanup");
                         GC.Collect();
                         GC.WaitForPendingFinalizers();
                     }
@@ -1837,6 +1788,11 @@ public class DesktopBuddyMod : ResoniteMod
                 Msg($"[Cleanup:BG] ERROR: {ex}");
             }
         });
+
+        // Dispose AudioMmfWriter on cleanup
+        session.AudioMmfWriter?.Dispose();
+        session.AudioMmfWriter = null;
+
         Msg($"[Cleanup] === END (bg queued) === stream {streamId}");
     }
 
@@ -1945,6 +1901,7 @@ public class DesktopBuddyMod : ResoniteMod
     private static void UpdateLoop(World world)
     {
         _updateCount++;
+        PollTunnelUrlUpdates();
         double dt = world.Time.Delta;
 
         if (world.IsDestroyed)
@@ -2127,53 +2084,26 @@ public class DesktopBuddyMod : ResoniteMod
                     session.ResizeDebounceUntil = 0;
                     int rw = session.PendingResizeW;
                     int rh = session.PendingResizeH;
-                    Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
+                    Msg($"[UpdateLoop] Resize debounce expired, requesting renderer to restart stream for {rw}x{rh}");
 
                     if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
 
-                    var oldStreamId = session.StreamId;
-                    int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
-                    var newEncoder = StreamServer?.CreateEncoder(newStreamId);
-                    session.StreamId = newStreamId;
-
-                    FfmpegEncoder oldEncoder = null;
-                    lock (_sharedStreams)
+                    // Signal renderer to stop old stream, then request new one
+                    int captureSlot = session.CaptureSlot;
+                    if (captureSlot >= 0 && CaptureChannel != null)
                     {
-                        if (_sharedStreams.TryGetValue(session.Hwnd, out var oldShared))
-                            oldEncoder = oldShared.Encoder;
-                    }
-
-                    var oldStreamer = session.Streamer;
-                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-                    {
-                        try
+                        CaptureChannel.StopStream(captureSlot);
+                        // Brief delay then re-request — renderer will pick up on next poll
+                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                         {
-                            oldEncoder?.Stop();
-                            oldStreamer?.FlushD3dContext();
-                            StreamServer?.StopEncoder(oldStreamId);
-                        }
-                        catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
-                    });
-
-                    lock (_sharedStreams)
-                    {
-                        if (_sharedStreams.TryGetValue(session.Hwnd, out var shared))
-                        {
-                            shared.StreamId = newStreamId;
-                            shared.Encoder = newEncoder;
-                        }
+                            Thread.Sleep(500);
+                            CaptureChannel.RequestStream(captureSlot, session.ProcessId);
+                            Msg($"[Resize:BG] Re-requested stream for slot {captureSlot} after resize");
+                        });
                     }
 
-                    ConnectEncoder(session, newEncoder);
-
-                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && TunnelUrl != null)
-                    {
-                        var newUrl = new Uri($"{TunnelUrl}/stream/{newStreamId}");
-                        Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
-                        session.VideoTexture.URL.Value = newUrl;
-                    }
-
-                    Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
+                    // URL stays the same since it's based on capture slot, not stream ID
+                    Msg($"[UpdateLoop] Stream restart requested for slot {captureSlot} at {rw}x{rh}");
                 }
 
                 if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
@@ -2277,52 +2207,28 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    private static string FindCloudflared()
-    {
-        var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        string[] candidates = {
-            System.IO.Path.Combine(modDir, "..", "cloudflared", "cloudflared.exe"),
-            System.IO.Path.Combine(modDir, "cloudflared", "cloudflared.exe"),
-            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cloudflared", "cloudflared.exe"),
-            "cloudflared"
-        };
-        foreach (var c in candidates)
-        {
-            try
-            {
-                var p = Process.Start(new ProcessStartInfo
-                {
-                    FileName = c, Arguments = "version",
-                    RedirectStandardOutput = true, RedirectStandardError = true,
-                    UseShellExecute = false, CreateNoWindow = true
-                });
-                p?.WaitForExit(3000);
-                if (p?.ExitCode == 0) { Msg($"[Tunnel] Found cloudflared: {c}"); return c; }
-            }
-            catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {c}: {ex.Message}"); }
-        }
-        return null;
-    }
+    // Tunnel management moved to renderer process (CloudflareTunnel.cs).
+    // Game reads the tunnel URL via CaptureChannel.ReadTunnelUrl().
 
-    private static void KillTunnel()
+    /// <summary>
+    /// Polls CaptureChannel for the tunnel URL and updates all active VideoTextureProviders
+    /// if the renderer's tunnel URL changes (e.g., after a tunnel restart).
+    /// Called from the update loop.
+    /// </summary>
+    private static string _lastKnownTunnelUrl;
+    internal static void PollTunnelUrlUpdates()
     {
-        try { if (_tunnelProcess != null && !_tunnelProcess.HasExited) _tunnelProcess.Kill(); }
-        catch (Exception ex) { Msg($"[Tunnel] Kill failed: {ex.Message}"); }
-        _tunnelProcess = null;
-    }
+        if (CaptureChannel == null) return;
+        var url = CaptureChannel.ReadTunnelUrl();
+        if (url == _lastKnownTunnelUrl) return;
+        _lastKnownTunnelUrl = url;
+        if (url == null) return;
 
-    private static void OnTunnelError(string data)
-    {
-    }
-
-    private static void UpdateSessionTunnelUrls()
-    {
-        if (TunnelUrl == null) return;
         foreach (var session in ActiveSessions)
         {
-            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId > 0)
+            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId >= 0)
             {
-                var newUrl = new Uri($"{TunnelUrl}/stream/{session.StreamId}");
+                var newUrl = new Uri($"{url}/stream/{session.StreamId}");
                 var vtp = session.VideoTexture;
                 vtp.World.RunInUpdates(0, () =>
                 {
@@ -2333,100 +2239,6 @@ public class DesktopBuddyMod : ResoniteMod
                     }
                 });
             }
-        }
-    }
-
-    private static void RestartTunnel()
-    {
-        if (_tunnelRestarting) return;
-        _tunnelRestarting = true;
-        System.Threading.Tasks.Task.Run(() =>
-        {
-            try
-            {
-                Msg("[Tunnel] === RESTART ===");
-                KillTunnel();
-                TunnelUrl = null;
-                System.Threading.Thread.Sleep(2000);
-                StartTunnel();
-            }
-            finally { _tunnelRestarting = false; }
-        });
-    }
-
-    private static void StartTunnel()
-    {
-        try
-        {
-            if (_cfPath == null)
-            {
-                _cfPath = FindCloudflared();
-                if (_cfPath == null)
-                {
-                    Msg("[Tunnel] cloudflared not found — tunnel unavailable");
-                    return;
-                }
-            }
-            Msg($"[Tunnel] Starting cloudflared tunnel: {_cfPath}");
-            var psi = new ProcessStartInfo
-            {
-                FileName = _cfPath,
-                Arguments = $"tunnel --config NUL" +
-                    $" --url http://localhost:{STREAM_PORT}" +
-                    $" --proxy-keepalive-timeout 5m" +
-                    $" --proxy-keepalive-connections 100" +
-                    $" --proxy-tcp-keepalive 15s" +
-                    $" --proxy-connect-timeout 30s" +
-                    $" --no-chunked-encoding" +
-                    $" --compression-quality 0" +
-                    $" --grace-period 30s" +
-                    $" --no-autoupdate" +
-                    $" --edge-ip-version 4",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            _tunnelProcess = Process.Start(psi);
-            if (_tunnelProcess == null) { Msg("[Tunnel] Failed to start cloudflared"); return; }
-            var proc = _tunnelProcess;
-            proc.EnableRaisingEvents = true;
-            proc.Exited += (s, e) =>
-            {
-                Msg($"[Tunnel] cloudflared exited (code={proc.ExitCode}), restarting");
-                RestartTunnel();
-            };
-
-            proc.ErrorDataReceived += (s, e) =>
-            {
-                if (e.Data == null) return;
-                Msg($"[Tunnel/stderr] {e.Data}");
-                if (e.Data.Contains("https://") && e.Data.Contains(".trycloudflare.com"))
-                {
-                    int idx = e.Data.IndexOf("https://");
-                    string url = e.Data.Substring(idx).Trim();
-                    int space = url.IndexOf(' ');
-                    if (space > 0) url = url.Substring(0, space);
-                    try { url = new Uri(url).GetLeftPart(UriPartial.Authority); } catch (Exception ex) { Msg($"[Tunnel] URL parse error: {ex.Message}"); }
-                    string oldUrl = TunnelUrl;
-                    TunnelUrl = url;
-                    Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
-                    if (oldUrl != url)
-                        UpdateSessionTunnelUrls();
-                }
-                OnTunnelError(e.Data);
-            };
-            proc.OutputDataReceived += (s, e) =>
-            {
-                if (e.Data == null) return;
-                Msg($"[Tunnel/stdout] {e.Data}");
-            };
-            proc.BeginErrorReadLine();
-            proc.BeginOutputReadLine();
-        }
-        catch (Exception ex)
-        {
-            Msg($"[Tunnel] Error: {ex.Message}");
         }
     }
 
