@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using FrooxEngine;
 using FrooxEngine.UIX;
 
@@ -16,12 +15,6 @@ public class DesktopSession
     public bool UpdateInProgress;
     public double TimeSinceLastCapture;
     public double TargetInterval;
-
-    public Thread CopyThread;
-    public volatile bool CopyThreadRunning;
-    public volatile int CapturedWidth;
-    public volatile int CapturedHeight;
-    public volatile bool CapturedSizeChanged;
 
     public Component LastActiveSource;
 

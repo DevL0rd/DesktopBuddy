@@ -1426,10 +1426,7 @@ public class DesktopBuddyMod : ResoniteMod
         session.TitleText = titleTextRef;
         session.LastTitle = title;
 
-        session.CopyThreadRunning = true;
-        session.CopyThread = new Thread(() => BitmapCopyLoop(session))
-        { Name = $"BitmapCopy:{session.StreamId}", IsBackground = true };
-        session.CopyThread.Start();
+        streamer.SetTextureTarget(procTex);
 
         ScheduleUpdate(root.World);
 
@@ -1549,9 +1546,6 @@ public class DesktopBuddyMod : ResoniteMod
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
-
-        session.CopyThreadRunning = false;
-        session.CopyThread?.Join(500);
 
         if (VMic != null && session.VMicListener != null)
         {
@@ -1821,64 +1815,6 @@ public class DesktopBuddyMod : ResoniteMod
         }
     }
 
-    private static void BitmapCopyLoop(DesktopSession session)
-    {
-        var sw = Stopwatch.StartNew();
-        long lastCaptureTicks = 0;
-        long freq = Stopwatch.Frequency;
-        long twoMsTicks = freq / 2000;
-
-        while (session.CopyThreadRunning)
-        {
-            long intervalTicks = (long)(session.TargetInterval * freq);
-            long now = sw.ElapsedTicks;
-            long remaining = intervalTicks - (now - lastCaptureTicks);
-            if (remaining > 0)
-            {
-                if (remaining > twoMsTicks)
-                    Thread.Sleep((int)((remaining - twoMsTicks) * 1000 / freq));
-                long deadline = lastCaptureTicks + intervalTicks;
-                while (sw.ElapsedTicks < deadline)
-                    Thread.SpinWait(50);
-                if (!session.CopyThreadRunning) break;
-            }
-            lastCaptureTicks = sw.ElapsedTicks;
-
-            var streamer = session.Streamer;
-            if (streamer == null) continue;
-
-            var texture = session.Texture;
-            if (texture == null || texture.IsDestroyed) continue;
-
-            byte[] frame;
-            int w, h;
-            try
-            {
-                frame = streamer.CaptureFrame(out w, out h);
-            }
-            catch (Exception ex)
-            {
-                Msg($"[BitmapCopyLoop] CaptureFrame error: {ex.Message}");
-                continue;
-            }
-            if (frame == null) continue;
-
-            if (texture.Width != w || texture.Height != h)
-            {
-                session.CapturedWidth = w;
-                session.CapturedHeight = h;
-                session.CapturedSizeChanged = true;
-                continue;
-            }
-
-            using (Perf.Time("bitmap_copy"))
-                texture.SetFrame(frame, w, h);
-
-            session.CapturedWidth = w;
-            session.CapturedHeight = h;
-        }
-    }
-
     private static void UpdateLoop(World world)
     {
         _updateCount++;
@@ -1998,7 +1934,6 @@ public class DesktopBuddyMod : ResoniteMod
                                 Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
                                 evt.Session.TrackedChildHwnds.Remove(child.Hwnd);
                                 child.ParentSession = null;
-                                ActiveSessions.Remove(child);
                                 evt.Session.ChildSessions.Remove(child);
                                 {
                                     var cvtp = child.VideoTexture;
@@ -2025,33 +1960,35 @@ public class DesktopBuddyMod : ResoniteMod
 
 
 
-                if (session.CapturedSizeChanged)
+                var streamerForResize = session.Streamer;
+                if (streamerForResize != null)
                 {
-                    session.CapturedSizeChanged = false;
-                    int w = session.CapturedWidth;
-                    int h = session.CapturedHeight;
+                    streamerForResize.RecreatePoolIfNeeded();
+                    int sw = streamerForResize.Width;
+                    int sh = streamerForResize.Height;
 
-                    if (session.Texture.Width != w || session.Texture.Height != h)
+                    if (sw > 0 && sh > 0 && (session.Texture.Width != sw || session.Texture.Height != sh))
                     {
-                        Msg($"[UpdateLoop] Window resize {session.Texture.Width}x{session.Texture.Height} -> {w}x{h}");
+                        Msg($"[UpdateLoop] Window resize {session.Texture.Width}x{session.Texture.Height} -> {sw}x{sh}");
 
                         var texSlot = session.Texture.Slot;
                         session.Texture.Destroy();
                         var newTex = texSlot.AttachComponent<DesktopTextureSource>();
-                        newTex.Initialize(w, h);
+                        newTex.Initialize(sw, sh);
                         session.Texture = newTex;
+                        streamerForResize.SetTextureTarget(newTex);
 
                         if (session.TextureImage != null && !session.TextureImage.IsDestroyed)
                             session.TextureImage.Texture.Target = newTex;
 
                         if (session.Canvas != null && !session.Canvas.IsDestroyed)
-                            session.Canvas.Size.Value = new float2(w, h);
+                            session.Canvas.Size.Value = new float2(sw, sh);
 
-                        session.OnResize?.Invoke(w, h);
-                        session.PendingResizeW = w;
-                        session.PendingResizeH = h;
+                        session.OnResize?.Invoke(sw, sh);
+                        session.PendingResizeW = sw;
+                        session.PendingResizeH = sh;
                         session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
-                        Msg($"[UpdateLoop] Texture recreated at {w}x{h}");
+                        Msg($"[UpdateLoop] Texture recreated at {sw}x{sh}");
                         continue;
                     }
                 }
