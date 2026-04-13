@@ -13,6 +13,7 @@ using Elements.Core;
 using Elements.Assets;
 using SkyFrost.Base;
 using Key = Renderite.Shared.Key;
+using Renderite.Shared;
 
 namespace DesktopBuddy;
 
@@ -37,7 +38,16 @@ public class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
         new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => false);
 
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> CancelInputInDesktopMode =
+        new("cancelInputInDesktopMode", "Cancel all window input (mouse/touch/scroll) when Resonite is running in desktop (non-VR) mode, preventing Windows from stealing your mouse.", () => true);
 
+    /// <summary>Returns true when the local user is in flat/desktop mode (no HMD).</summary>
+    internal static bool IsDesktopMode(World world)
+    {
+        try { return world?.LocalUser?.HeadDevice == HeadOutputDevice.Screen; }
+        catch { return false; }
+    }
 
     internal static readonly List<DesktopSession> ActiveSessions = new();
     private static int _nextStreamId;
@@ -331,7 +341,6 @@ public class DesktopBuddyMod : ResoniteMod
             var forward = headRot * float3.Forward;
             root.GlobalPosition = headPos + forward * 0.8f;
             root.GlobalRotation = floatQ.LookRotation(forward, float3.Up);
-            root.Tag = "Desktop Buddy";
             var destroyer = root.AttachComponent<DestroyOnUserLeave>();
 
             destroyer.TargetUser.Target = localUser;
@@ -391,7 +400,7 @@ public class DesktopBuddyMod : ResoniteMod
         collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
-        var displaySlot = root.AddSlot("Display", false);
+        var displaySlot = root.AddLocalSlot("Display", false);
         Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
@@ -521,7 +530,7 @@ public class DesktopBuddyMod : ResoniteMod
         uint GetTouchId(Component source)
         {
             var handler = FindHandler(source);
-            if (handler != null && handler.Side.Value == Renderite.Shared.Chirality.Right)
+            if (handler != null && handler.Side.Value == Chirality.Right)
                 return 1;
             return 0;
         }
@@ -529,6 +538,7 @@ public class DesktopBuddyMod : ResoniteMod
         btn.LocalPressed += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
+            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             ClaimSource(data.source);
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
@@ -539,6 +549,7 @@ public class DesktopBuddyMod : ResoniteMod
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
+            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
@@ -547,6 +558,7 @@ public class DesktopBuddyMod : ResoniteMod
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
+            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
@@ -555,6 +567,7 @@ public class DesktopBuddyMod : ResoniteMod
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
+            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             float hu = data.normalizedPressPoint.x;
             float hv = 1f - data.normalizedPressPoint.y;
 
@@ -866,7 +879,7 @@ public class DesktopBuddyMod : ResoniteMod
                 return;
             }
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
-            keyboardSlot = root.AddSlot("Virtual Keyboard", false);
+            keyboardSlot = root.AddLocalSlot("Virtual Keyboard", false);
             session.KeyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
@@ -990,7 +1003,7 @@ public class DesktopBuddyMod : ResoniteMod
             cam.FieldOfView.Value = 90f;
             cam.NearClipping.Value = 0.05f;
             cam.FarClipping.Value = 1000f;
-            cam.Clear.Value = Renderite.Shared.CameraClearMode.Color;
+            cam.Clear.Value = CameraClearMode.Color;
             cam.ClearColor.Value = new colorX(0.1f, 0.1f, 0.1f, 1f);
 
             session.VCamSlot = camSlot;
@@ -1033,7 +1046,7 @@ public class DesktopBuddyMod : ResoniteMod
 
             if (spatialAudio)
             {
-                var localAudioSlot = root.AddSlot("LocalAudio", false);
+                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
                 var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
                 session.SpatialAudioSource = audioSource;
 
@@ -1170,7 +1183,7 @@ public class DesktopBuddyMod : ResoniteMod
                             try
                             {
                                 var bitmap = new Bitmap2D(capturedIconData, capturedIw, capturedIh,
-                                    Renderite.Shared.TextureFormat.RGBA32, false, Renderite.Shared.ColorProfile.sRGB, false);
+                                    TextureFormat.RGBA32, false, ColorProfile.sRGB, false);
                                 var uri = await root.Engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
                                 if (uri != null)
                                 {
@@ -1521,6 +1534,7 @@ public class DesktopBuddyMod : ResoniteMod
         ScheduleUpdate(root.World);
 
         if (!isChild)
+            root.Tag = "Desktop Buddy";
             WindowInput.FocusWindow(hwnd);
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
