@@ -391,7 +391,7 @@ public class DesktopBuddyMod : ResoniteMod
         collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
-        var displaySlot = root.AddLocalSlot("Display", false);
+        var displaySlot = root.AddSlot("Display", false);
         Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
@@ -866,7 +866,7 @@ public class DesktopBuddyMod : ResoniteMod
                 return;
             }
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
-            keyboardSlot = root.AddLocalSlot("Virtual Keyboard", false);
+            keyboardSlot = root.AddSlot("Virtual Keyboard", false);
             session.KeyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
@@ -1033,7 +1033,7 @@ public class DesktopBuddyMod : ResoniteMod
 
             if (spatialAudio)
             {
-                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
+                var localAudioSlot = root.AddSlot("LocalAudio", false);
                 var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
                 session.SpatialAudioSource = audioSource;
 
