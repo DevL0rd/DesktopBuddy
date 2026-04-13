@@ -46,7 +46,7 @@ internal sealed class MainForm : Form
     private const string SavedPathKey   = @"Software\DesktopBuddy";
     private const string SavedPathValue = "ManagerPath";
     private const int    FormW          = 760;
-    private const int    FormH          = 1028;
+    private const int    FormH          = 820;
     private const int    Pad            = 20;
     private const int    IW             = FormW - Pad * 2;
     private static readonly TimeSpan CameraScanInterval = TimeSpan.FromSeconds(10);
@@ -66,8 +66,6 @@ internal sealed class MainForm : Form
     private Label       _bepLbl     = null!;
     private Label       _rpDot      = null!;
     private Label       _rpLbl      = null!;
-    private CheckBox    _chkLicense = null!;
-    private CheckBox    _chkClose   = null!;
     private Button      _installBtn = null!;
     private Button      _reportBtn  = null!;
     private RichTextBox _log        = null!;
@@ -129,8 +127,6 @@ internal sealed class MainForm : Form
             {
                 Log($"Auto-install triggered for: {autoInstallPath}");
                 _pathBox.Text = autoInstallPath;
-                _chkLicense.Checked = true;
-                _chkClose.Checked   = true;
                 UpdateInstallBtn();
                 // Run check then immediately install
                 await CheckForUpdatesAsync(userTriggered: false);
@@ -314,40 +310,6 @@ internal sealed class MainForm : Form
         Controls.Add(_modVerLbl);
         y += 26;
 
-        // ── License ───────────────────────────────────────────────
-        y += 10;
-        Controls.Add(SectionLabel("License Agreement", Pad, y));
-        y += 22;
-
-        var licenseBox = new RichTextBox
-        {
-            Location    = new Point(Pad, y),
-            Size        = new Size(IW, 100),
-            BackColor   = C_BgCard,
-            ForeColor   = Color.FromArgb(100, 100, 130),
-            ReadOnly    = true,
-            BorderStyle = BorderStyle.FixedSingle,
-            Font        = new Font("Consolas", 7.5f),
-            ScrollBars  = RichTextBoxScrollBars.Vertical,
-            Text        = LoadLicenseText(),
-        };
-        Controls.Add(licenseBox);
-        y += 108;
-
-        _chkLicense = MakeCheckBox(
-            "I have read and accept the GNU Affero General Public License v3.0",
-            Pad, y);
-        _chkLicense.CheckedChanged += (_, _) => UpdateInstallBtn();
-        Controls.Add(_chkLicense);
-        y += 28;
-
-        _chkClose = MakeCheckBox(
-            "I understand Resonite and processes using the camera driver will be closed during management actions",
-            Pad, y);
-        _chkClose.CheckedChanged += (_, _) => UpdateInstallBtn();
-        Controls.Add(_chkClose);
-        y += 34;
-
         // ── Install / Update button ───────────────────────────────
         y += 8;
         _installBtn = new Button
@@ -470,34 +432,6 @@ internal sealed class MainForm : Form
         Location  = new Point(x, y),
     };
 
-    private CheckBox MakeCheckBox(string text, int x, int y) => new()
-    {
-        Text      = text,
-        Location  = new Point(x, y),
-        Size      = new Size(IW, 24),
-        Font      = F_Small,
-        ForeColor = C_TxSecond,
-        BackColor = Color.Transparent,
-        FlatStyle = FlatStyle.Flat,
-        Cursor    = Cursors.Hand,
-    };
-
-    private static string LoadLicenseText()
-    {
-        try
-        {
-            var asm = typeof(MainForm).Assembly;
-            using var s = asm.GetManifestResourceStream("DesktopBuddyManager.LICENSE")
-                ?? asm.GetManifestResourceNames()
-                    .Where(name => name.EndsWith(".LICENSE", StringComparison.OrdinalIgnoreCase))
-                    .Select(asm.GetManifestResourceStream)
-                    .FirstOrDefault(stream => stream != null);
-            if (s != null) return new StreamReader(s).ReadToEnd();
-        }
-        catch { }
-        return "GNU Affero General Public License v3.0\nSee https://www.gnu.org/licenses/agpl-3.0.html";
-    }
-
     private void UpdateInstallBtn()
     {
         var resonitePath = _pathBox.Text.Trim();
@@ -506,9 +440,7 @@ internal sealed class MainForm : Form
         bool canInstall = !_installing &&
                           !_updateCheckInProgress &&
                           !_closingForUpdate &&
-                          IsResoniteRoot(resonitePath) &&
-                          _chkLicense.Checked &&
-                          _chkClose.Checked;
+                          IsResoniteRoot(resonitePath);
         _installBtn.Enabled = canInstall;
         _installBtn.Text    = _pendingManagerUpdate != null
             ? "Update Manager + Install"
