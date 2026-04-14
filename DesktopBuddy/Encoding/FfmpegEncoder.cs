@@ -199,8 +199,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             SetFfmpegPath();
             if (!_ffmpegPathSet) { _initFailed = true; return false; }
 
-            _width = width & ~31u;
-            _height = height & ~31u;
+            _width = width & ~1u;
+            _height = height & ~1u;
 
             if (_width < 128 || _height < 128)
             {
@@ -492,7 +492,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
         if (_disposed || _initFailed || !_initialized) return;
-        if ((width & ~31u) != _width || (height & ~31u) != _height)
+        if ((width & ~1u) != _width || (height & ~1u) != _height)
         {
             if (_totalFrames == 0)
                 Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch init={_width}x{_height} frame={width}x{height}");
