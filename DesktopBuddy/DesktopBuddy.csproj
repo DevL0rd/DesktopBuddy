@@ -32,7 +32,7 @@
   <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.3.3" />
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34" />
-    <PackageReference Include="FFmpeg.AutoGen" Version="7.1.1" />
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0.1" />
   </ItemGroup>
 
   <!-- Reference DLLs from lib/ (repo-local, works in CI) -->

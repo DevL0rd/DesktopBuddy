@@ -982,7 +982,7 @@ internal sealed class MainForm : Form
         }
         System.Threading.Thread.Sleep(1500);
 
-        if (!CopyFiles(resonitePath)) return;
+        CopyFiles(resonitePath);
 
         if (!IsSoftCamRegistered())
             RegisterSoftCam(resonitePath);

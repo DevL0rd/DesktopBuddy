@@ -110,7 +110,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     {
         var modDir = Path.GetDirectoryName(typeof(FfmpegEncoder).Assembly.Location) ?? "";
         var ffmpegDir = Path.GetFullPath(Path.Combine(modDir, "..", "ffmpeg"));
-        if (File.Exists(Path.Combine(ffmpegDir, "avcodec-61.dll")))
+        if (File.Exists(Path.Combine(ffmpegDir, "avcodec-62.dll")))
             return ffmpegDir;
         return null;
     }
@@ -281,10 +281,14 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
                 }
 
+                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: acquiring D3D lock...");
                 lock (_d3dContextLock)
                 {
+                    Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: lock acquired, calling...");
                     ret = ffmpeg.avcodec_open2(_codecCtx, codec, &opts);
+                    Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: returned {ret} ({(ret < 0 ? FfmpegError(ret) : "ok")})");
                 }
+                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: lock released");
                 ffmpeg.av_dict_free(&opts);
 
                 if (ret >= 0) { codecName = name; _needsVideoProcessor = name.Contains("amf"); break; }
@@ -358,9 +362,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         d3d11DevCtx->device = (ID3D11Device*)d3dDevice;
 
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: acquiring D3D lock...");
         lock (_d3dContextLock)
         {
+            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: calling...");
             int ret = ffmpeg.av_hwdevice_ctx_init(_hwDeviceCtx);
+            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: returned {ret}");
             if (ret < 0) throw new Exception($"av_hwdevice_ctx_init failed: {FfmpegError(ret)}");
         }
 
@@ -376,9 +383,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         framesCtx->height = (int)_height;
         framesCtx->initial_pool_size = 0;
 
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: acquiring D3D lock...");
         lock (_d3dContextLock)
         {
+            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");
             int ret2 = ffmpeg.av_hwframe_ctx_init(_hwFramesCtx);
+            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: returned {ret2}");
             if (ret2 < 0) throw new Exception($"av_hwframe_ctx_init failed: {FfmpegError(ret2)}");
         }
 

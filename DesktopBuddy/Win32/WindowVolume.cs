@@ -10,6 +10,7 @@ internal static class WindowVolume
     private static readonly Guid IID_IAudioSessionManager2 = new("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
     private static readonly Guid IID_IAudioEndpointVolume = new("5CDF2C82-841E-4546-9722-0CF74078229A");
     private static readonly Guid IID_ISimpleAudioVolume = new("87CE5498-68D6-44E5-9215-6DA47EF883D8");
+    private static readonly Guid IID_IAudioSessionControl2 = new("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D");
 
     [DllImport("ole32.dll")]
     private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint clsCtx, ref Guid iid, out IntPtr obj);
@@ -43,13 +44,17 @@ internal static class WindowVolume
 
             for (int i = 0; i < count; i++)
             {
-                IntPtr sessionCtl = IntPtr.Zero, simpleVol = IntPtr.Zero;
+                IntPtr sessionCtl = IntPtr.Zero, sessionCtl2 = IntPtr.Zero, simpleVol = IntPtr.Zero;
                 try
                 {
                     hr = VTable<GetSessionDelegate>(sessionEnum, 4)(sessionEnum, i, out sessionCtl);
                     if (hr < 0 || sessionCtl == IntPtr.Zero) continue;
 
-                    hr = VTable<GetProcessIdDelegate>(sessionCtl, 14)(sessionCtl, out uint pid);
+                    var iidCtl2 = IID_IAudioSessionControl2;
+                    hr = Marshal.QueryInterface(sessionCtl, ref iidCtl2, out sessionCtl2);
+                    if (hr < 0 || sessionCtl2 == IntPtr.Zero) continue;
+
+                    hr = VTable<GetProcessIdDelegate>(sessionCtl2, 14)(sessionCtl2, out uint pid);
                     if (hr < 0 || pid == 0) continue;
 
                     bool match = pid == processId;
@@ -72,6 +77,7 @@ internal static class WindowVolume
                 finally
                 {
                     if (simpleVol != IntPtr.Zero) Marshal.Release(simpleVol);
+                    if (sessionCtl2 != IntPtr.Zero) Marshal.Release(sessionCtl2);
                     if (sessionCtl != IntPtr.Zero) Marshal.Release(sessionCtl);
                 }
             }
