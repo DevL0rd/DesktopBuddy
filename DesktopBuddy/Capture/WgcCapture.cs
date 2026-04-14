@@ -726,6 +726,9 @@ public sealed class WgcCapture : IDisposable
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
+        
+        try { _session?.Dispose(); } catch { }
+        try { _framePool?.Dispose(); } catch { }
         _session = null;
         _framePool = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
@@ -746,6 +749,8 @@ public sealed class WgcCapture : IDisposable
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
+            try { _session?.Dispose(); } catch { }
+            try { _framePool?.Dispose(); } catch { }
             _session = null;
             _framePool = null;
         }
