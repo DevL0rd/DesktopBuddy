@@ -199,8 +199,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             SetFfmpegPath();
             if (!_ffmpegPathSet) { _initFailed = true; return false; }
 
-            _width = width & ~1u;
-            _height = height & ~1u;
+            _width = width & ~31u;
+            _height = height & ~31u;
 
             if (_width < 128 || _height < 128)
             {
@@ -281,14 +281,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
                 }
 
-                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: acquiring D3D lock...");
-                lock (_d3dContextLock)
-                {
-                    Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: lock acquired, calling...");
-                    ret = ffmpeg.avcodec_open2(_codecCtx, codec, &opts);
-                    Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: returned {ret} ({(ret < 0 ? FfmpegError(ret) : "ok")})");
-                }
-                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: lock released");
+                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: calling...");
+                ret = ffmpeg.avcodec_open2(_codecCtx, codec, &opts);
+                Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: returned {ret} ({(ret < 0 ? FfmpegError(ret) : "ok")})");
                 ffmpeg.av_dict_free(&opts);
 
                 if (ret >= 0) { codecName = name; _needsVideoProcessor = name.Contains("amf"); break; }
@@ -362,14 +357,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         d3d11DevCtx->device = (ID3D11Device*)d3dDevice;
 
-        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: acquiring D3D lock...");
-        lock (_d3dContextLock)
-        {
-            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: calling...");
-            int ret = ffmpeg.av_hwdevice_ctx_init(_hwDeviceCtx);
-            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: returned {ret}");
-            if (ret < 0) throw new Exception($"av_hwdevice_ctx_init failed: {FfmpegError(ret)}");
-        }
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: calling...");
+        int ret = ffmpeg.av_hwdevice_ctx_init(_hwDeviceCtx);
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: returned {ret}");
+        if (ret < 0) throw new Exception($"av_hwdevice_ctx_init failed: {FfmpegError(ret)}");
 
         Log.Msg($"[FfmpegEnc:{_streamId}] D3D11VA hardware context initialized with device 0x{d3dDevice:X}");
 
@@ -383,14 +374,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         framesCtx->height = (int)_height;
         framesCtx->initial_pool_size = 0;
 
-        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: acquiring D3D lock...");
-        lock (_d3dContextLock)
-        {
-            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");
-            int ret2 = ffmpeg.av_hwframe_ctx_init(_hwFramesCtx);
-            Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: returned {ret2}");
-            if (ret2 < 0) throw new Exception($"av_hwframe_ctx_init failed: {FfmpegError(ret2)}");
-        }
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");
+        int ret2 = ffmpeg.av_hwframe_ctx_init(_hwFramesCtx);
+        Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: returned {ret2}");
+        if (ret2 < 0) throw new Exception($"av_hwframe_ctx_init failed: {FfmpegError(ret2)}");
 
         _codecCtx->hw_frames_ctx = ffmpeg.av_buffer_ref(_hwFramesCtx);
         Log.Msg($"[FfmpegEnc:{_streamId}] Hardware frames context initialized: {_width}x{_height} {swFormat}");
@@ -505,7 +492,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
         if (_disposed || _initFailed || !_initialized) return;
-        if ((width & ~1u) != _width || (height & ~1u) != _height)
+        if ((width & ~31u) != _width || (height & ~31u) != _height)
         {
             if (_totalFrames == 0)
                 Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch init={_width}x{_height} frame={width}x{height}");
@@ -871,23 +858,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _streamId = streamId;
     }
 
-    private const int Ctx_ClearState = 110;
-    private const int Ctx_Flush = 111;
-
-    private void FlushAndClearD3DContext()
-    {
-        if (_deviceContext == IntPtr.Zero) return;
-        try
-        {
-            var vtable = *(IntPtr**)_deviceContext;
-            var clearFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[Ctx_ClearState];
-            clearFn(_deviceContext);
-            var flushFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[Ctx_Flush];
-            flushFn(_deviceContext);
-            Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: D3D11 ClearState+Flush OK");
-        }
-        catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: D3D11 flush error: {ex.Message}"); }
-    }
 
     public void Dispose()
     {
@@ -925,8 +895,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             try { if (_audioPkt != null) { var p = _audioPkt; ffmpeg.av_packet_free(&p); _audioPkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioPkt free error: {ex.Message}"); _audioPkt = null; }
             try { if (_hwFrame != null) { var f = _hwFrame; ffmpeg.av_frame_free(&f); _hwFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrame free error: {ex.Message}"); _hwFrame = null; }
             try { if (_audioFrame != null) { var f = _audioFrame; ffmpeg.av_frame_free(&f); _audioFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioFrame free error: {ex.Message}"); _audioFrame = null; }
-
-            FlushAndClearD3DContext();
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing VP resources");
             try
