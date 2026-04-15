@@ -49,6 +49,11 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
+  <ItemGroup>
+    <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
+  </ItemGroup>
+
   <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->
   <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins" ContinueOnError="true" Retries="0" />

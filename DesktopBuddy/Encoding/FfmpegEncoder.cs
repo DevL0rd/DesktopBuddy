@@ -109,9 +109,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public static string FindFfmpegDlls()
     {
         var modDir = Path.GetDirectoryName(typeof(FfmpegEncoder).Assembly.Location) ?? "";
-        var ffmpegDir = Path.GetFullPath(Path.Combine(modDir, "..", "ffmpeg"));
-        if (File.Exists(Path.Combine(ffmpegDir, "avcodec-62.dll")))
-            return ffmpegDir;
+        var rmlLibsDir = Path.GetFullPath(Path.Combine(modDir, "..", "rml_libs"));
+        if (File.Exists(Path.Combine(rmlLibsDir, "avcodec-62.dll")))
+            return rmlLibsDir;
         return null;
     }
 

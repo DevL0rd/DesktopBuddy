@@ -27,25 +27,28 @@ internal sealed class RendererDepsService
         using var http = CreateHttpClient();
 
         // 1. RenderiteHook
-        if (!File.Exists(Path.Combine(resonitePath, "rml_mods", "RenderiteHook.dll")))
+        var rmlModsDir = Path.Combine(resonitePath, "rml_mods");
+        var renderiteHookPath = Path.Combine(rmlModsDir, "RenderiteHook.dll");
+        if (!File.Exists(renderiteHookPath))
         {
-            log("Installing RenderiteHook...");
+            log("RenderiteHook: not found — downloading...");
             await InstallRenderiteHookAsync(http, resonitePath, log);
         }
         else
         {
-            log("RenderiteHook: already installed");
+            log($"RenderiteHook: already installed ({renderiteHookPath})");
         }
 
         // 2. BepInEx.Renderer
-        if (!Directory.Exists(Path.Combine(resonitePath, "Renderer", "BepInEx", "core")))
+        var bepInExCorePath = Path.Combine(resonitePath, "Renderer", "BepInEx", "core");
+        if (!Directory.Exists(bepInExCorePath))
         {
-            log("Installing BepInEx.Renderer...");
+            log("BepInEx.Renderer: not found — downloading...");
             await InstallBepInExRendererAsync(http, resonitePath, log);
         }
         else
         {
-            log("BepInEx.Renderer: already installed");
+            log($"BepInEx.Renderer: already installed ({bepInExCorePath})");
         }
 
         // 3. DesktopBuddyRenderer plugin
@@ -164,24 +167,19 @@ internal sealed class RendererDepsService
 
     private static void InstallRendererPlugin(string resonitePath, Action<string> log)
     {
-        // The DesktopBuddyRenderer.dll is embedded alongside other payload resources
-        var asm = typeof(RendererDepsService).Assembly;
-        const string resourceName = "payload/Renderer/BepInEx/plugins/DesktopBuddyRenderer.dll";
+        // After the relay-install copy, DesktopBuddyRenderer.dll is already on disk
+        // at Renderer/BepInEx/plugins/DesktopBuddyRenderer.dll inside resonitePath.
+        var destDir  = Path.Combine(resonitePath, "Renderer", "BepInEx", "plugins");
+        var destPath = Path.Combine(destDir, "DesktopBuddyRenderer.dll");
 
-        using var stream = asm.GetManifestResourceStream(resourceName);
-        if (stream == null)
+        if (File.Exists(destPath))
         {
-            log("DesktopBuddyRenderer: not embedded in this build (skipped)");
+            log($"DesktopBuddyRenderer: already present at {destPath}");
             return;
         }
 
-        var destDir = Path.Combine(resonitePath, "Renderer", "BepInEx", "plugins");
-        Directory.CreateDirectory(destDir);
-        var destPath = Path.Combine(destDir, "DesktopBuddyRenderer.dll");
-
-        using var file = File.Create(destPath);
-        stream.CopyTo(file);
-        log("DesktopBuddyRenderer: installed");
+        log($"DesktopBuddyRenderer: not found at {destPath}");
+        log("DesktopBuddyRenderer: skipped (re-run after a fresh install/update to populate it)");
     }
 
     private static async Task<(string? url, string? name)> GetLatestReleaseZipAsync(HttpClient http, string apiUrl)

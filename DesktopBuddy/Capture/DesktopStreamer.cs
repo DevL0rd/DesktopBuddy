@@ -52,8 +52,6 @@ public sealed class DesktopStreamer : IDisposable
         return true;
     }
 
-    public void SetTextureTarget(DesktopTextureSource tex) => _wgc?.SetTextureTarget(tex);
-
     public void RecreatePoolIfNeeded()
     {
         if (_wgc == null) return;

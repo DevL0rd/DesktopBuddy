@@ -4,13 +4,24 @@ A Resonite mod that spawns world-space desktop/window viewers with touch input, 
 
 ## Quick Start
 
+### Option A — Manager (recommended)
+
 1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) with [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader)
-2. Download the latest `DesktopBuddy.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases)
-3. Extract into your Resonite root folder (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`)
-4. Launch Resonite
-5. On first launch, you will get **two UAC prompts** (admin permission requests) to register the virtual camera and install the virtual microphone driver. **Accept both.**
-6. **Restart your PC** after the first run — the virtual microphone driver requires a reboot to become active
-7. Launch Resonite again and you're done! Open the context menu and select **Desktop** to get started
+2. Download `DesktopBuddyManager.exe` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases) (inside the `.zip`, or download standalone if provided)
+3. Place `DesktopBuddyManager.exe` in your Resonite root folder (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`)
+4. Run `DesktopBuddyManager.exe` **as administrator**
+5. The manager will auto-detect your Resonite install, or browse to it manually
+6. Click **Install / Update** — it will download the latest release zip, extract all files, register the virtual camera, and install the virtual microphone driver
+7. **Restart your PC** when prompted — the virtual microphone driver requires a reboot
+8. Launch Resonite and open the context menu → **Desktop** to get started
+
+### Option B — Manual zip extract
+
+1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) with [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader)
+2. Download the latest `DesktopBuddy-Alpha-*.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases)
+3. Extract the zip **directly into your Resonite root folder** (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`) — the zip is already structured to match
+4. Run `DesktopBuddyManager.exe` **as administrator** to register the virtual camera and install the virtual microphone driver
+5. Launch Resonite and open the context menu → **Desktop** to get started
 
 ## First-Run Setup (Automatic)
 
@@ -107,7 +118,7 @@ scripts/build.bat -r
 Builds the mod and restarts Resonite. The build process:
 1. Compiles the HLSL compute shader (if `fxc.exe` available)
 2. Builds the mod DLL with ILRepack (merges all managed dependencies)
-3. Deploys to Resonite: `rml_mods/`, `ffmpeg/`, `cloudflared/`, `softcam/`, `vbcable/`
+3. Deploys to Resonite: `rml_mods/DesktopBuddy.dll`, `rml_libs/` (ffmpeg, softcam, cloudflared)
 
 Add `-d` for desktop mode: `scripts/build.bat -r -d`
 
@@ -117,13 +128,25 @@ Add `-d` for desktop mode: `scripts/build.bat -r -d`
 scripts/package.bat
 ```
 
-Creates `DesktopBuddy.zip` containing:
+Creates `DesktopBuddy-Alpha-<date>_<sha>.zip` ready to extract into the Resonite root:
 
-- `rml_mods/DesktopBuddy.dll` — the mod (all managed deps merged)
-- `ffmpeg/` — FFmpeg shared libraries (MPEG-TS muxing)
-- `cloudflared/` — Cloudflare Tunnel binary (remote streaming)
-- `softcam/` — Virtual camera DirectShow filter (32-bit + 64-bit)
-- `vbcable/` — VB-Cable virtual audio driver and installer
+```
+DesktopBuddy-Alpha-*.zip
+  DesktopBuddyManager.exe              ← manager lives at Resonite root
+  rml_mods/
+    DesktopBuddy.dll                   ← mod (all managed deps merged)
+    DesktopBuddy.sha                   ← build SHA for update checks
+  rml_libs/
+    avcodec-62.dll … (FFmpeg DLLs)    ← runtime native libs
+    softcam64.dll                      ← virtual camera filter
+    cloudflared.exe                    ← Cloudflare Tunnel binary
+  Renderer/BepInEx/plugins/
+    DesktopBuddyRenderer.dll
+  vbcable/
+    VBCABLE_Setup_x64.exe + drivers    ← virtual audio cable installer
+```
+
+Extract to `<Resonite root>\` and run `DesktopBuddyManager.exe` as administrator.
 
 ## Third-Party Components
 

@@ -101,6 +101,13 @@ internal sealed class MainForm : Form
         Font            = F_Base;
         DoubleBuffered  = true;
 
+        // Init log file — use temp until we know the Resonite path
+        var tempLog = Path.Combine(Path.GetTempPath(), "DesktopBuddyManager.log");
+        Logger.Init(tempLog);
+        Logger.Write($"DesktopBuddyManager started (build {ManagerUpdateService.CurrentBuildSha})");
+        if (autoInstallPath != null)
+            Logger.Write($"--auto-install arg: {autoInstallPath}");
+
         BuildUI();
 
         _timer = new System.Windows.Forms.Timer { Interval = 3000 };
@@ -120,6 +127,12 @@ internal sealed class MainForm : Form
         Shown += async (_, _) =>
         {
             await DetectResonitePathAsync(logWhenMissing: true);
+
+            // Re-init log in the Resonite root now that we know the path
+            var resonitePath = _pathBox.Text.Trim();
+            if (IsResoniteRoot(resonitePath))
+                Logger.Init(Path.Combine(resonitePath, "DesktopBuddyManager.log"));
+
             _timer.Start();
             _autoUpdateTimer.Start();
 
@@ -127,6 +140,8 @@ internal sealed class MainForm : Form
             {
                 Log($"Auto-install triggered for: {autoInstallPath}");
                 _pathBox.Text = autoInstallPath;
+                // Re-init log in the correct location
+                Logger.Init(Path.Combine(autoInstallPath, "DesktopBuddyManager.log"));
                 UpdateInstallBtn();
                 // Run check then immediately install
                 await CheckForUpdatesAsync(userTriggered: false);
@@ -772,10 +787,16 @@ internal sealed class MainForm : Form
         return key != null;
     }
 
-    private static bool IsSoftCamRegistered()
+    private static bool IsSoftCamRegistered(string? resonitePath = null)
     {
-        using var key = Registry.ClassesRoot.OpenSubKey($@"CLSID\{SoftCamClsid}");
-        return key != null;
+        using var key = Registry.ClassesRoot.OpenSubKey($@"CLSID\{SoftCamClsid}\InprocServer32");
+        if (key == null) return false;
+        if (resonitePath == null) return true; // just existence check (status panel)
+
+        // Verify the registered DLL path still points to our rml_libs location
+        var registered = key.GetValue(null) as string ?? "";
+        var expected = Path.Combine(resonitePath, "rml_libs", "softcam64.dll");
+        return string.Equals(registered.Trim('"'), expected, StringComparison.OrdinalIgnoreCase);
     }
 
     private StatusSnapshot CollectStatusSnapshot(bool forceCameraScan)
@@ -869,54 +890,91 @@ internal sealed class MainForm : Form
         {
             try
             {
-                // Always check for updates before installing
-                ManagerUpdateResult? freshUpdate = null;
+                ManagerUpdateResult? update = null;
                 try
                 {
-                    freshUpdate = await _updateService.CheckForUpdateAsync();
+                    update = await _updateService.CheckForUpdateAsync();
                 }
                 catch (Exception ex)
                 {
-                    Log($"Pre-install update check failed (continuing): {ex.Message}");
+                    Log($"Update check failed (continuing): {ex.Message}");
                 }
 
-                if (freshUpdate?.HasUpdate == true)
+                // Decide whether we need a relay install (update available OR first install)
+                bool needsRelay = update?.HasUpdate == true;
+                if (!needsRelay)
                 {
-                    // Manager update found — download new manager, relaunch with --auto-install, exit
-                    Log($"Manager update found ({freshUpdate.Tag}). Downloading before install...");
-                    var oldExePath = Environment.ProcessPath ?? AppContext.BaseDirectory;
-                    try
+                    var modSha = ManagerUpdateService.GetInstalledModSha(resonitePath);
+                    Log($"Installed mod SHA: {modSha}");
+                    if (modSha is "not installed")
                     {
-                        var newPath = await _updateService.DownloadUpdateAsync(freshUpdate);
-                        SaveSelectedPath();
-                        Log($"Launching updated manager with auto-install: {newPath}");
-                        var psi = new ProcessStartInfo
-                        {
-                            FileName         = newPath,
-                            Arguments        = $"--delete-old \"{oldExePath}\" --auto-install \"{resonitePath}\"",
-                            WorkingDirectory = Path.GetDirectoryName(newPath),
-                            UseShellExecute  = true,
-                        };
-                        Process.Start(psi);
-                        BeginInvoke(new Action(() =>
-                        {
-                            Close();
-                            Application.ExitThread();
-                            Environment.Exit(0);
-                        }));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"Manager update download failed, proceeding with current version: {ex.Message}");
-                        Invoke(() => _installBtn.Text = "Installing...");
-                        RunDoInstall(resonitePath);
+                        Log("Mod not installed — will relay-install current build.");
+                        needsRelay = true;
                     }
                 }
-                else
+
+                if (needsRelay)
                 {
-                    Invoke(() => _installBtn.Text = "Installing...");
-                    RunDoInstall(resonitePath);
+                    // 1. Look for a local zip next to this exe that matches the current build SHA.
+                    //    This handles local test builds where package.bat produced both files.
+                    string? zipPath = null;
+                    var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? "";
+                    var currentSha = ManagerUpdateService.CurrentBuildSha;
+                    Log($"Looking for local zip in: {exeDir} (SHA {currentSha})");
+
+                    var localZip = Directory.GetFiles(exeDir, "*.zip")
+                        .FirstOrDefault(f => Path.GetFileName(f).Contains(currentSha, StringComparison.OrdinalIgnoreCase));
+
+                    if (localZip != null)
+                    {
+                        Log($"Found local zip: {localZip} — using it instead of downloading.");
+                        zipPath = localZip;
+                    }
+                    else if (update != null)
+                    {
+                        Log($"No local zip found. Downloading release zip ({update.Tag})...");
+                        try
+                        {
+                            Invoke(() => _installBtn.Text = "Downloading...");
+                            zipPath = await _updateService.DownloadZipAsync(update);
+                            Log($"Downloaded to: {zipPath}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Download failed, running setup only: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        Log("No local zip and update check failed — running setup only.");
+                    }
+
+                    if (zipPath != null)
+                    {
+                        try
+                        {
+                            SaveSelectedPath();
+                            Log($"Launching relay install from zip: {zipPath}");
+                            ManagerUpdateService.LaunchRelayInstall(resonitePath, zipPath);
+                            BeginInvoke(new Action(() =>
+                            {
+                                _closingForUpdate = true;
+                                Close();
+                                Application.ExitThread();
+                                Environment.Exit(0);
+                            }));
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Relay failed, running setup only: {ex.Message}");
+                        }
+                    }
                 }
+
+                // Already up to date (or relay not possible) — run post-copy setup steps in place.
+                Invoke(() => _installBtn.Text = "Installing...");
+                RunDoInstall(resonitePath);
             }
             finally
             {
@@ -947,47 +1005,28 @@ internal sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// Post-copy setup: registers virtual devices, configures ACLs, installs renderer deps.
+    /// File copying is handled by the relay flow in Program.cs.
+    /// </summary>
     private void DoInstall(string resonitePath)
     {
         Log("================================");
-        Log("  Starting installation");
+        Log("  Starting setup");
         Log($"  Target: {resonitePath}");
         Log("================================");
+        Log($"  rml_mods exists : {Directory.Exists(Path.Combine(resonitePath, "rml_mods"))}");
+        Log($"  rml_libs exists : {Directory.Exists(Path.Combine(resonitePath, "rml_libs"))}");
+        Log($"  Renderer exists : {Directory.Exists(Path.Combine(resonitePath, "Renderer"))}");
+        Log($"  vbcable exists  : {Directory.Exists(Path.Combine(resonitePath, "vbcable"))}");
+        Log($"  softcam64.dll   : {File.Exists(Path.Combine(resonitePath, "rml_libs", "softcam64.dll"))}");
+        Log($"  DesktopBuddy.dll: {File.Exists(Path.Combine(resonitePath, "rml_mods", "DesktopBuddy.dll"))}");
+        Log($"  RendererPlugin  : {File.Exists(Path.Combine(resonitePath, "Renderer", "BepInEx", "plugins", "DesktopBuddyRenderer.dll"))}");
 
-        foreach (var p in Process.GetProcessesByName("Resonite"))
-        {
-            try   { p.Kill(); Log($"Closed Resonite (PID {p.Id})"); }
-            catch { }
-            finally { p.Dispose(); }
-        }
-        foreach (var name in new[] { "Renderite.Host", "Renderite.Renderer", "cloudflared",
-                                     "chrome", "Discord", "DiscordPTB", "DiscordCanary" })
-        {
-            foreach (var p in Process.GetProcessesByName(name))
-            {
-                try   { p.Kill(); Log($"Closed {name} (PID {p.Id})"); }
-                catch { }
-                finally { p.Dispose(); }
-            }
-        }
-        foreach (var p in FindSoftcamProcesses())
-        {
-            try
-            {
-                using var process = Process.GetProcessById(p.Id);
-                process.Kill();
-                Log($"Closed {p.Name} (PID {p.Id})");
-            }
-            catch { }
-        }
-        System.Threading.Thread.Sleep(1500);
-
-        CopyFiles(resonitePath);
-
-        if (!IsSoftCamRegistered())
+        if (!IsSoftCamRegistered(resonitePath))
             RegisterSoftCam(resonitePath);
         else
-            Log("SoftCam: already registered");
+            Log("SoftCam: already registered at correct path");
 
         if (!IsVBCableInstalled())
             InstallVBCable(resonitePath);
@@ -1014,56 +1053,25 @@ internal sealed class MainForm : Form
         catch { }
 
         Log("================================");
-        Log("  Installation complete");
+        Log("  Setup complete");
         Log("  A restart may be required");
         Log("================================");
 
         Invoke(() => MessageBox.Show(
-            "Installation complete!\n\nA system restart may be required for all virtual devices to function.",
+            "Setup complete!\n\nA system restart may be required for all virtual devices to function.",
             "Done", MessageBoxButtons.OK, MessageBoxIcon.Information));
-    }
-
-    private bool CopyFiles(string resonitePath)
-    {
-        const string prefix = "payload/";
-        var asm       = typeof(MainForm).Assembly;
-        var resources = asm.GetManifestResourceNames()
-                           .Where(n => n.StartsWith(prefix, StringComparison.Ordinal))
-                           .ToArray();
-
-        if (resources.Length == 0)
-        {
-            Log("ERROR: No payload embedded - this is a build error.");
-            Invoke(() => MessageBox.Show(
-                "No payload files found inside this manager.\nThis is a build error - please report it.",
-                "Build Error", MessageBoxButtons.OK, MessageBoxIcon.Error));
-            return false;
-        }
-
-        Log($"Extracting {resources.Length} files...");
-        foreach (var name in resources)
-        {
-            var rel  = name[prefix.Length..].Replace('/', Path.DirectorySeparatorChar);
-            var dest = Path.Combine(resonitePath, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-
-            using var stream = asm.GetManifestResourceStream(name)!;
-            using var file   = File.Create(dest);
-            stream.CopyTo(file);
-            Log($"  {name[prefix.Length..]}");
-        }
-
-        Log("Files extracted.");
-        return true;
     }
 
     private void RegisterSoftCam(string resonitePath)
     {
         Log("Registering SoftCam DirectShow filter...");
+        bool found = false;
         foreach (var dll in new[] { "softcam64.dll", "softcam.dll" })
         {
-            var path = Path.Combine(resonitePath, "softcam", dll);
+            var path = Path.Combine(resonitePath, "rml_libs", dll);
+            Log($"  checking: {path} — exists={File.Exists(path)}");
             if (!File.Exists(path)) continue;
+            found = true;
             try
             {
                 var p = Process.Start(new ProcessStartInfo
@@ -1076,6 +1084,8 @@ internal sealed class MainForm : Form
             }
             catch (Exception ex) { Log($"  regsvr32 {dll}: {ex.Message}"); }
         }
+        if (!found)
+            Log("  softcam DLL not found in rml_libs — SoftCam not registered");
     }
 
     private void InstallVBCable(string resonitePath)
@@ -1124,6 +1134,28 @@ internal sealed class MainForm : Form
         Log("Configuring HTTP URL ACL for stream server...");
         try
         {
+            // Check if the ACL already exists before adding
+            var checkOutput = new System.Text.StringBuilder();
+            var check = Process.Start(new ProcessStartInfo
+            {
+                FileName = "netsh",
+                Arguments = $"http show urlacl url={url}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            });
+            if (check != null)
+            {
+                checkOutput.Append(check.StandardOutput.ReadToEnd());
+                check.WaitForExit(10000);
+            }
+
+            if (checkOutput.ToString().Contains("48080", StringComparison.OrdinalIgnoreCase))
+            {
+                Log("  HTTP URL ACL already configured.");
+                return;
+            }
+
             var p = Process.Start(new ProcessStartInfo
             {
                 FileName = "netsh",
@@ -1132,7 +1164,7 @@ internal sealed class MainForm : Form
                 CreateNoWindow = true,
             });
             p?.WaitForExit(10000);
-            Log($"  netsh urlacl exit: {p?.ExitCode}");
+            Log(p?.ExitCode == 0 ? "  HTTP URL ACL added." : $"  netsh urlacl exit: {p?.ExitCode} (may need to run as administrator)");
         }
         catch (Exception ex) { Log($"  netsh urlacl error: {ex.Message}"); }
     }
@@ -1159,6 +1191,7 @@ internal sealed class MainForm : Form
 
     private void Log(string msg)
     {
+        Logger.Write(msg);
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}";
         if (InvokeRequired) Invoke(() => Append(line));
         else                Append(line);

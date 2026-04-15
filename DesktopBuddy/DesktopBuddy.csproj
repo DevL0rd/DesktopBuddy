@@ -75,28 +75,19 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Compile HLSL shader if fxc.exe is available, otherwise use pre-compiled .cso from repo -->
-  <Target Name="CompileShaders" BeforeTargets="BeforeBuild" Condition="Exists('C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\fxc.exe')">
-    <Exec Command="&quot;C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\fxc.exe&quot; /T cs_5_0 /E CSMain /O3 /Fo &quot;$(MSBuildThisFileDirectory)Shaders\BgraToRgba.cso&quot; &quot;$(MSBuildThisFileDirectory)Shaders\BgraToRgba.hlsl&quot;" />
-  </Target>
-
+  <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
-    <EmbeddedResource Include="Shaders\BgraToRgba.cso" LogicalName="DesktopBuddy.Shaders.BgraToRgba.cso" />
+    <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
   </ItemGroup>
 
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
   <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <FfmpegDlls Include="$(MSBuildThisFileDirectory)..\ffmpeg\*.dll" />
-      <SoftcamDlls Include="$(MSBuildThisFileDirectory)..\softcam\*.dll" />
-      <VBCableFiles Include="$(MSBuildThisFileDirectory)..\vbcable\*" />
+      <RmlLibs Include="$(MSBuildThisFileDirectory)..\rml_libs\*" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(FfmpegDlls)" DestinationFolder="$(ResonitePath)\ffmpeg" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(SoftcamDlls)" DestinationFolder="$(ResonitePath)\softcam" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(VBCableFiles)" DestinationFolder="$(ResonitePath)\vbcable" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\cloudflared\cloudflared.exe" DestinationFolder="$(ResonitePath)\cloudflared" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(RmlLibs)" DestinationFolder="$(ResonitePath)\rml_libs" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

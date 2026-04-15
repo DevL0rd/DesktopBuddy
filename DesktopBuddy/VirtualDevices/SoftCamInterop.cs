@@ -25,9 +25,9 @@ internal static class SoftCamInterop
         var modDir = Path.GetDirectoryName(typeof(SoftCamInterop).Assembly.Location) ?? "";
         string[] candidates =
         {
-            Path.Combine(modDir, "..", "softcam", "softcam64.dll"),
-            Path.Combine(modDir, "softcam", "softcam64.dll"),
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "softcam", "softcam64.dll"),
+            Path.Combine(modDir, "..", "rml_libs", "softcam64.dll"),
+            Path.Combine(modDir, "rml_libs", "softcam64.dll"),
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rml_libs", "softcam64.dll"),
         };
         foreach (var c in candidates)
         {
