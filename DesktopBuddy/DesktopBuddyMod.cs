@@ -39,6 +39,10 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<bool> CancelInputInDesktopMode =
         new("cancelInputInDesktopMode", "Cancel all window input (mouse/touch/scroll) when Resonite is running in desktop (non-VR) mode, preventing Windows from stealing your mouse.", () => true);
 
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> CheckForUpdates =
+        new("checkForUpdates", "Check for updates and show a notification when a new version is available on startup.", () => true);
+
     internal static bool IsDesktopMode(World world)
     {
         try { return world?.LocalUser?.HeadDevice == HeadOutputDevice.Screen; }

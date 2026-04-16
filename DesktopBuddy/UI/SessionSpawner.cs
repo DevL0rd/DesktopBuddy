@@ -919,7 +919,7 @@ public partial class DesktopBuddyMod
             Msg($"[BackPanel] Created with title '{title}'");
         }
 
-        if (!_updateShown && !isChild)
+        if (!_updateShown && !isChild && Config!.GetValue(CheckForUpdates))
         {
             _updateShown = true;
             var capturedRoot = root;
