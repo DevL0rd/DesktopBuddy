@@ -131,13 +131,38 @@ public static class WindowInput
         }
     }
 
-    private static POINT UvToScreen(IntPtr hWnd, float u, float v, int clientW, int clientH)
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szDevice;
+    }
+
+    private static POINT UvToScreen(IntPtr hWnd, float u, float v, int clientW, int clientH, IntPtr monitorHandle = default)
     {
         int px = (int)(u * clientW);
         int py = (int)(v * clientH);
         var pt = new POINT { X = px, Y = py };
         if (hWnd != IntPtr.Zero)
+        {
             ClientToScreen(hWnd, ref pt);
+        }
+        else if (monitorHandle != IntPtr.Zero)
+        {
+            var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+            if (GetMonitorInfo(monitorHandle, ref mi))
+            {
+                pt.X += mi.rcMonitor.Left;
+                pt.Y += mi.rcMonitor.Top;
+            }
+        }
         return pt;
     }
 
@@ -147,16 +172,16 @@ public static class WindowInput
             SetForegroundWindow(hWnd);
     }
 
-    public static void SendHover(IntPtr hWnd, float u, float v, int clientW, int clientH)
+    public static void SendHover(IntPtr hWnd, float u, float v, int clientW, int clientH, IntPtr monitorHandle = default)
     {
-        var pt = UvToScreen(hWnd, u, v, clientW, clientH);
+        var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
         SetCursorPos(pt.X, pt.Y);
     }
 
-    public static void SendTouchDown(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0)
+    public static void SendTouchDown(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
         if (!EnsureTouchInit()) return;
-        var pt = UvToScreen(hWnd, u, v, clientW, clientH);
+        var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
         if (touchId < MAX_TOUCH_CONTACTS)
         {
             _lastPosition[touchId] = pt;
@@ -189,10 +214,10 @@ public static class WindowInput
         }
     }
 
-    public static void SendTouchMove(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0)
+    public static void SendTouchMove(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
         if (!_touchInitialized) return;
-        var pt = UvToScreen(hWnd, u, v, clientW, clientH);
+        var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
         if (touchId < MAX_TOUCH_CONTACTS) _lastPosition[touchId] = pt;
 
         var contact = new POINTER_TOUCH_INFO();
@@ -221,10 +246,10 @@ public static class WindowInput
         }
     }
 
-    public static void SendTouchUp(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0)
+    public static void SendTouchUp(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
         if (!_touchInitialized) return;
-        var pt = (touchId < MAX_TOUCH_CONTACTS) ? _lastPosition[touchId] : UvToScreen(hWnd, u, v, clientW, clientH);
+        var pt = (touchId < MAX_TOUCH_CONTACTS) ? _lastPosition[touchId] : UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
 
         var contact = new POINTER_TOUCH_INFO();
         contact.pointerInfo.pointerType = PT_TOUCH;
@@ -244,9 +269,9 @@ public static class WindowInput
         }
     }
 
-    public static void SendScroll(IntPtr hWnd, float u, float v, int clientW, int clientH, int wheelDelta)
+    public static void SendScroll(IntPtr hWnd, float u, float v, int clientW, int clientH, int wheelDelta, IntPtr monitorHandle = default)
     {
-        var pt = UvToScreen(hWnd, u, v, clientW, clientH);
+        var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
         SetCursorPos(pt.X, pt.Y);
         mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheelDelta, IntPtr.Zero);
     }
