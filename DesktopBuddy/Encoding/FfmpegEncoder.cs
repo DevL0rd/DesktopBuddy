@@ -70,6 +70,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
 
+    private volatile bool _rtspBroken;
+
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
 
@@ -237,7 +239,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->height = (int)_height;
                 _codecCtx->time_base = new AVRational { num = 1, den = 90000 };
                 _codecCtx->framerate = new AVRational { num = (int)_fps, den = 1 };
-                _codecCtx->gop_size = (int)_fps / 3;
+                long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
                 _codecCtx->max_b_frames = 0;
                 _codecCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_D3D11;
                 _codecCtx->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY | ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -246,15 +248,17 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 if (isAmf)
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 10_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->gop_size = (int)_fps;
+                    _codecCtx->keyint_min = (int)_fps;
+                    _codecCtx->bit_rate = bitrate;
+                    _codecCtx->rc_buffer_size = (int)bitrate;
                 }
                 else
                 {
-                    _codecCtx->bit_rate = 8_000_000;
-                    _codecCtx->rc_max_rate = 12_000_000;
-                    _codecCtx->rc_buffer_size = 8_000_000;
+                    _codecCtx->gop_size = (int)_fps / 3;
+                    _codecCtx->bit_rate = bitrate;
+                    _codecCtx->rc_max_rate = (long)(bitrate * 1.2);
+                    _codecCtx->rc_buffer_size = (int)bitrate;
                 }
 
                 var swFormat = isAmf
@@ -274,9 +278,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 }
                 else if (isAmf)
                 {
-                    ffmpeg.av_dict_set(&opts, "usage", "ultralowlatency", 0);
-                    ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
-                    ffmpeg.av_dict_set(&opts, "rc", "vbr_peak", 0);
+                    ffmpeg.av_dict_set(&opts, "usage", "lowlatency_high_quality", 0);
+                    ffmpeg.av_dict_set(&opts, "rc", "cbr", 0);
                     ffmpeg.av_dict_set(&opts, "header_insertion_mode", "idr", 0);
                     ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
                 }
@@ -317,8 +320,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             if (_needsVideoProcessor)
                 SetupVideoProcessor(d3dDevice, _width, _height);
 
-            _ringBuffer = new byte[RING_SIZE];
-            _ringWritePos = 0;
+            if (_rtspUrl == null)
+            {
+                _ringBuffer = new byte[RING_SIZE];
+                _ringWritePos = 0;
+            }
             _initialized = true;
 
             _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -385,6 +391,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     private void SetupMuxer()
     {
+        if (_rtspUrl != null)
+        {
+            SetupRtspMuxer();
+            return;
+        }
+
         _selfHandle = GCHandle.Alloc(this);
 
         AVFormatContext* fmtCtx = null;
@@ -422,6 +434,79 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         if (ret < 0) throw new Exception($"avformat_write_header failed: {FfmpegError(ret)}");
 
         Log.Msg($"[FfmpegEnc:{_streamId}] MPEG-TS muxer ready (in-process, no external ffmpeg)");
+    }
+
+    private void SetupRtspMuxer()
+    {
+        AVFormatContext* fmtCtx = null;
+        int ret = ffmpeg.avformat_alloc_output_context2(&fmtCtx, null, "rtsp", _rtspUrl);
+        if (ret < 0 || fmtCtx == null) throw new Exception($"avformat_alloc_output_context2 (rtsp) failed: {FfmpegError(ret)}");
+        _fmtCtx = fmtCtx;
+        _fmtCtx->flags |= ffmpeg.AVFMT_FLAG_NOBUFFER;
+
+        _stream = ffmpeg.avformat_new_stream(_fmtCtx, null);
+        if (_stream == null) throw new Exception("avformat_new_stream (rtsp) failed");
+
+        ffmpeg.avcodec_parameters_from_context(_stream->codecpar, _codecCtx);
+        _stream->time_base = _codecCtx->time_base;
+
+        if (_audioCapture != null && _audioCapture.IsCapturing)
+        {
+            SetupAudioStream();
+        }
+
+        AVDictionary* opts = null;
+        ffmpeg.av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+        ret = ffmpeg.avformat_write_header(_fmtCtx, &opts);
+        ffmpeg.av_dict_free(&opts);
+        if (ret < 0) throw new Exception($"avformat_write_header (rtsp) failed: {FfmpegError(ret)}");
+
+        Log.Msg($"[FfmpegEnc:{_streamId}] RTSP muxer ready: {_rtspUrl}");
+    }
+
+    private void RtspReconnect()
+    {
+        Log.Msg($"[FfmpegEnc:{_streamId}] RTSP broken, reconnecting in 3s...");
+        Thread.Sleep(3000);
+        if (_disposed) return;
+
+        lock (_muxerLock)
+        {
+            try
+            {
+                if (_fmtCtx != null)
+                {
+                    try { ffmpeg.av_write_trailer(_fmtCtx); } catch { }
+                    if (_fmtCtx->pb != null)
+                    {
+                        var pb = _fmtCtx->pb;
+                        ffmpeg.avio_closep(&pb);
+                        _fmtCtx->pb = null;
+                    }
+                    ffmpeg.avformat_free_context(_fmtCtx);
+                    _fmtCtx = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[FfmpegEnc:{_streamId}] RTSP cleanup error: {ex.Message}");
+                _fmtCtx = null;
+            }
+
+            _stream = null;
+            _audioStream = null;
+
+            try
+            {
+                SetupRtspMuxer();
+                _rtspBroken = false;
+                Log.Msg($"[FfmpegEnc:{_streamId}] RTSP reconnected");
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[FfmpegEnc:{_streamId}] RTSP reconnect failed: {ex.Message}");
+            }
+        }
     }
 
     private void SetupAudioStream()
@@ -520,6 +605,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
         while (!_disposed)
         {
+            if (_rtspBroken && _rtspUrl != null)
+            {
+                RtspReconnect();
+                continue;
+            }
+
             _encodeEvent.WaitOne(100);
             if (_disposed) break;
 
@@ -612,20 +703,26 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                     lock (_muxerLock)
                     {
-                        if (isKey)
+                        if (_rtspBroken) break;
+                        if (isKey && _rtspUrl == null)
                         {
                             ffmpeg.avio_flush(_fmtCtx->pb);
                             Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
                         }
                         ret = ffmpeg.av_write_frame(_fmtCtx, _pkt);
-                        if (ret < 0) Log.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
+                        if (ret < 0)
+                        {
+                            Log.Msg($"[FfmpegEnc:{_streamId}] av_write_frame (video) failed: {FfmpegError(ret)}");
+                            if (_rtspUrl != null) _rtspBroken = true;
+                        }
                     }
 
                     ffmpeg.av_packet_unref(_pkt);
                 }
             }
 
-            lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
+            if (_rtspUrl == null)
+                lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
         }
 
         _totalFrames++;
@@ -688,7 +785,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 _audioPkt->stream_index = _audioStream->index;
                 ffmpeg.av_packet_rescale_ts(_audioPkt, _audioCodecCtx->time_base, _audioStream->time_base);
-                lock (_muxerLock) ffmpeg.av_write_frame(_fmtCtx, _audioPkt);
+                lock (_muxerLock)
+                {
+                    if (!_rtspBroken)
+                        ffmpeg.av_write_frame(_fmtCtx, _audioPkt);
+                }
                 ffmpeg.av_packet_unref(_audioPkt);
             }
 
@@ -853,9 +954,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         return Marshal.PtrToStringAnsi((IntPtr)buf) ?? $"error {error}";
     }
 
-    public FfmpegEncoder(int streamId)
+    private readonly string _rtspUrl;
+
+    public FfmpegEncoder(int streamId, string rtspUrl = null)
     {
         _streamId = streamId;
+        _rtspUrl = rtspUrl;
     }
 
 
@@ -925,7 +1029,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         {
             if (_fmtCtx != null)
             {
-                if (_fmtCtx->pb != null)
+                if (_rtspUrl != null)
+                {
+                    if (_fmtCtx->pb != null)
+                    {
+                        var pb = _fmtCtx->pb;
+                        ffmpeg.avio_closep(&pb);
+                        _fmtCtx->pb = null;
+                    }
+                }
+                else if (_fmtCtx->pb != null)
                 {
                     var pb = _fmtCtx->pb;
                     ffmpeg.avio_context_free(&pb);
