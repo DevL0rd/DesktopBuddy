@@ -158,6 +158,7 @@ public sealed class WgcCapture : IDisposable
     private GraphicsCaptureItem _item;
     private Direct3D11CaptureFramePool _framePool;
     private GraphicsCaptureSession _session;
+    private IDisposable _lastSurfaceObj;
 
     private volatile bool _closed;
     private int _framesCaptured;
@@ -356,8 +357,9 @@ public sealed class WgcCapture : IDisposable
             return;
         }
 
-        IntPtr surfaceAbi = MarshalInterface<IDirect3DSurface>.FromManaged(frame.Surface);
-        frame.Dispose();
+        var surfaceObj = frame.Surface;
+        IntPtr surfaceAbi = MarshalInterface<IDirect3DSurface>.FromManaged(surfaceObj);
+
         if (surfaceAbi == IntPtr.Zero) return;
 
         var dxgiAccessGuid = DxgiAccessGuid;
@@ -394,7 +396,15 @@ public sealed class WgcCapture : IDisposable
         {
             Log.Msg($"[WgcCapture] OnFrameArrived error: {ex.Message}");
         }
-        finally { Marshal.Release(srcTexture); }
+        finally 
+        { 
+            Marshal.Release(srcTexture); 
+            frame.Dispose();
+
+            // Securely dispose the previous frame's WinRT wrapper now that the GPU has finished reading it
+            try { _lastSurfaceObj?.Dispose(); } catch { }
+            _lastSurfaceObj = (IDisposable)surfaceObj;
+        }
         }
         catch (Exception ex)
         {
@@ -435,6 +445,9 @@ public sealed class WgcCapture : IDisposable
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
 
+        try { _lastSurfaceObj?.Dispose(); } catch { }
+        _lastSurfaceObj = null;
+
         try { _session?.Dispose(); } catch { }
         try { _framePool?.Dispose(); } catch { }
         _session = null;
@@ -457,28 +470,47 @@ public sealed class WgcCapture : IDisposable
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
+            try { _lastSurfaceObj?.Dispose(); } catch { }
+            _lastSurfaceObj = null;
+
             try { _session?.Dispose(); } catch { }
             try { _framePool?.Dispose(); } catch { }
             _session = null;
             _framePool = null;
         }
+        
+        // Start delayed asynchronous native teardown
+        // Wait 2 seconds to allow Desktop Window Manager (DWM) to asynchronously conclude
+        // session shutdown, THEN safely dispose the internal WinRT proxies and D3D references.
+        // This completely prevents both immediate DWM crashes AND delayed background GC crashes.
+        var wDevice = _winrtDevice;
+        var rItem = _item;
+        var dCtx = _d3dContext;
+        var dDev = _d3dDevice;
+        
         _item = null;
-
         _winrtDevice = null;
-        bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
-        if (forceGC)
-        {
-            Log.Msg($"[WgcCapture:Dispose] Forcing GC to finalize orphaned WinRT wrappers");
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
-        else
-        {
-            Log.Msg($"[WgcCapture:Dispose] Immediate GC disabled, WinRT wrappers will finalize later");
-        }
+        _d3dContext = IntPtr.Zero;
+        _d3dDevice = IntPtr.Zero;
 
-        if (_d3dContext != IntPtr.Zero) { Marshal.Release(_d3dContext); _d3dContext = IntPtr.Zero; }
-        if (_d3dDevice != IntPtr.Zero) { Marshal.Release(_d3dDevice); _d3dDevice = IntPtr.Zero; }
-        Log.Msg($"[WgcCapture:Dispose] D3D device released");
+        System.Threading.Tasks.Task.Run(async () => 
+        {
+            await System.Threading.Tasks.Task.Delay(2000);
+            
+            try { (wDevice as IDisposable)?.Dispose(); } catch { }
+            if (rItem != null) GC.SuppressFinalize(rItem);
+            
+            bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
+            if (forceGC)
+            {
+                Log.Msg($"[WgcCapture:Dispose] Forcing GC to finalize any last orphaned WinRT wrappers");
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            
+            if (dCtx != IntPtr.Zero) { Marshal.Release(dCtx); }
+            if (dDev != IntPtr.Zero) { Marshal.Release(dDev); }
+            Log.Msg($"[WgcCapture:Dispose] Delayed native D3D device teardown complete");
+        });
     }
 }
