@@ -71,6 +71,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private GCHandle _selfHandle;
 
     private volatile bool _rtspBroken;
+    private IntPtr _keepAliveTexture;
+    private uint _keepAliveW, _keepAliveH;
+    private long _lastEncodeTicks;
 
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
@@ -248,8 +251,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
                 if (isAmf)
                 {
-                    _codecCtx->gop_size = (int)_fps;
-                    _codecCtx->keyint_min = (int)_fps;
+                    _codecCtx->gop_size = (int)_fps / 2;
+                    _codecCtx->keyint_min = (int)_fps / 2;
                     _codecCtx->bit_rate = bitrate;
                     _codecCtx->rc_buffer_size = (int)bitrate;
                 }
@@ -617,11 +620,37 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             var tex = Interlocked.Exchange(ref _pendingTexture, IntPtr.Zero);
             var w = _pendingWidth;
             var h = _pendingHeight;
-            if (tex == IntPtr.Zero) continue;
+
+            if (tex == IntPtr.Zero)
+            {
+                if (_rtspUrl != null && _keepAliveTexture != IntPtr.Zero && _lastEncodeTicks != 0)
+                {
+                    double idleSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _lastEncodeTicks) / System.Diagnostics.Stopwatch.Frequency;
+                    if (idleSec >= 5.0)
+                    {
+                        Marshal.AddRef(_keepAliveTexture);
+                        tex = _keepAliveTexture;
+                        w = _keepAliveW;
+                        h = _keepAliveH;
+                    }
+                }
+                if (tex == IntPtr.Zero) continue;
+            }
 
             try
             {
                 EncodeFrameInternalLocked(tex, w, h);
+                _lastEncodeTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
+                if (_rtspUrl != null)
+                {
+                    var prev = _keepAliveTexture;
+                    Marshal.AddRef(tex);
+                    _keepAliveTexture = tex;
+                    _keepAliveW = w;
+                    _keepAliveH = h;
+                    if (prev != IntPtr.Zero) Marshal.Release(prev);
+                }
             }
             catch (Exception ex)
             {
@@ -633,6 +662,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
 
         }
+        if (_keepAliveTexture != IntPtr.Zero) { Marshal.Release(_keepAliveTexture); _keepAliveTexture = IntPtr.Zero; }
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread stopped");
     }
 
@@ -1023,6 +1053,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         }
         finally { if (gotLock) Monitor.Exit(ctxLock); }
         _audioCapture = null;
+        if (_keepAliveTexture != IntPtr.Zero) { try { Marshal.Release(_keepAliveTexture); } catch { } _keepAliveTexture = IntPtr.Zero; }
 
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing format context");
         try

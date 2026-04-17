@@ -227,7 +227,7 @@ public partial class DesktopBuddyMod
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.FocusWindow(hwnd);
-            WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
+            WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
         };
 
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
@@ -236,7 +236,7 @@ public partial class DesktopBuddyMod
             if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
+            WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
         };
 
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
@@ -245,7 +245,7 @@ public partial class DesktopBuddyMod
             if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source));
+            WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
         };
 
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
@@ -257,7 +257,7 @@ public partial class DesktopBuddyMod
 
             if (IsActiveSource(data.source))
             {
-                WindowInput.SendHover(hwnd, hu, hv, streamer.Width, streamer.Height);
+                WindowInput.SendHover(hwnd, hu, hv, streamer.Width, streamer.Height, streamer.MonitorHandle);
             }
 
             var mouse = root.World.InputInterface.Mouse;
@@ -269,7 +269,7 @@ public partial class DesktopBuddyMod
                     ClaimSource(data.source);
                     WindowInput.FocusWindow(hwnd);
                     int wheelDelta = scrollY > 0 ? 120 : -120;
-                    WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
+                    WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle);
                 }
             }
 
@@ -293,7 +293,7 @@ public partial class DesktopBuddyMod
                             ClaimSource(data.source);
                             WindowInput.FocusWindow(hwnd);
                             int wheelDelta = (int)(axisY * 120f);
-                            WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta);
+                            WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle);
                         }
                     }
                     else
@@ -983,6 +983,7 @@ public partial class DesktopBuddyMod
                     shared.RefCount++;
                 }
                 session.StreamId = shared.StreamId;
+                session.Encoder = shared.Encoder;
                 var nvEncoder = shared.Encoder;
 
                 if (session.SpatialAudioSource != null && shared.Audio != null)
