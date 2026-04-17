@@ -938,7 +938,8 @@ public partial class DesktopBuddyMod
             });
         }
 
-        if (StreamServer != null && TunnelUrl != null)
+        bool useMediaMtx = IsMediaMtxEnabled;
+        if (useMediaMtx || (StreamServer != null && TunnelUrl != null))
         {
             try
             {
@@ -948,7 +949,21 @@ public partial class DesktopBuddyMod
                     if (hwnd == IntPtr.Zero || !_sharedStreams.TryGetValue(hwnd, out shared))
                     {
                         int streamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
-                        var encoder = StreamServer.CreateEncoder(streamId);
+                        FfmpegEncoder encoder;
+                        Uri url;
+
+                        if (useMediaMtx)
+                        {
+                            var rtspUrl = GetMediaMtxRtspUrl(streamId);
+                            encoder = new FfmpegEncoder(streamId, rtspUrl);
+                            url = new Uri(rtspUrl);
+                            Msg($"[RemoteStream] Using MediaMTX RTSP: {rtspUrl}");
+                        }
+                        else
+                        {
+                            encoder = StreamServer.CreateEncoder(streamId);
+                            url = new Uri($"{TunnelUrl}/stream/{streamId}");
+                        }
 
                         var audio = new AudioCapture();
                         if (hwnd != IntPtr.Zero)
@@ -956,7 +971,6 @@ public partial class DesktopBuddyMod
                         else
                             audio.Start(IntPtr.Zero, AudioCaptureMode.ExcludeProcess);
 
-                        var url = new Uri($"{TunnelUrl}/stream/{streamId}");
                         shared = new SharedStream { StreamId = streamId, Encoder = encoder, Audio = audio, StreamUrl = url, RefCount = 0 };
                         if (hwnd != IntPtr.Zero)
                             _sharedStreams[hwnd] = shared;
@@ -1072,7 +1086,7 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();

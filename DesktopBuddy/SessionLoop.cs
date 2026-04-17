@@ -305,7 +305,21 @@ public partial class DesktopBuddyMod
 
                     var oldStreamId = session.StreamId;
                     int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
-                    var newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                    bool useMediaMtx = IsMediaMtxEnabled;
+                    FfmpegEncoder newEncoder;
+                    Uri newUrl;
+
+                    if (useMediaMtx)
+                    {
+                        var rtspUrl = GetMediaMtxRtspUrl(newStreamId);
+                        newEncoder = new FfmpegEncoder(newStreamId, rtspUrl);
+                        newUrl = new Uri(rtspUrl);
+                    }
+                    else
+                    {
+                        newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                        newUrl = TunnelUrl != null ? new Uri($"{TunnelUrl}/stream/{newStreamId}") : null;
+                    }
                     session.StreamId = newStreamId;
 
                     FfmpegEncoder oldEncoder = null;
@@ -322,7 +336,10 @@ public partial class DesktopBuddyMod
                         {
                             oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
-                            StreamServer?.StopEncoder(oldStreamId);
+                            if (!useMediaMtx)
+                                StreamServer?.StopEncoder(oldStreamId);
+                            else
+                                oldEncoder?.Dispose();
                         }
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
                     });
@@ -333,14 +350,15 @@ public partial class DesktopBuddyMod
                         {
                             shared.StreamId = newStreamId;
                             shared.Encoder = newEncoder;
+                            if (newUrl != null)
+                                shared.StreamUrl = newUrl;
                         }
                     }
 
                     ConnectEncoder(session, newEncoder);
 
-                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && TunnelUrl != null)
+                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && newUrl != null)
                     {
-                        var newUrl = new Uri($"{TunnelUrl}/stream/{newStreamId}");
                         Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
                         session.VideoTexture.URL.Value = newUrl;
                     }
