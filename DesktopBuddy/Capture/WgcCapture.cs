@@ -164,8 +164,6 @@ public sealed class WgcCapture : IDisposable
     private volatile bool _disposed;
     
     private System.Threading.Thread _pollingThread;
-    private int _framesCaptured;
-    private volatile bool _disposed;
     private volatile bool _needsPoolRecreate;
 
     private static readonly Guid DxgiAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
