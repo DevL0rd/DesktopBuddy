@@ -160,6 +160,8 @@ public sealed class WgcCapture : IDisposable
     private GraphicsCaptureSession _session;
     private IDisposable _lastSurfaceObj;
 
+    private static readonly System.Collections.Concurrent.ConcurrentBag<object> _immortalWinRtObjects = new();
+
     private volatile bool _closed;
     private int _framesCaptured;
     private volatile bool _disposed;
@@ -537,8 +539,11 @@ public sealed class WgcCapture : IDisposable
         
         if (rItem != null) 
         {
-            try { (rItem as IDisposable)?.Dispose(); } catch { }
+            // GraphicsCaptureItem doesn't implement IDisposable, so we cannot dispose its internal IObjectReference.
+            // To prevent the GC from finalizing the internal COM reference on the MTA thread and causing an Access Violation,
+            // we must keep the wrapper alive forever.
             GC.SuppressFinalize(rItem);
+            _immortalWinRtObjects.Add(rItem);
         }
 
         System.Threading.Tasks.Task.Run(async () => 
