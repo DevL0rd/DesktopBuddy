@@ -402,9 +402,12 @@ public sealed class WgcCapture : IDisposable
         { 
             Marshal.Release(srcTexture); 
             frame.Dispose();
+            GC.SuppressFinalize(frame);
 
             // Securely dispose the previous frame's WinRT wrapper now that the GPU has finished reading it
-            try { _lastSurfaceObj?.Dispose(); } catch { }
+            var lso = _lastSurfaceObj;
+            try { lso?.Dispose(); } catch { }
+            if (lso != null) GC.SuppressFinalize(lso);
             _lastSurfaceObj = (IDisposable)surfaceObj;
         }
         }
@@ -447,12 +450,20 @@ public sealed class WgcCapture : IDisposable
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
 
-        try { _lastSurfaceObj?.Dispose(); } catch { }
+        var lso = _lastSurfaceObj;
+        var s = _session;
+        var f = _framePool;
+
+        try { lso?.Dispose(); } catch { }
+        if (lso != null) GC.SuppressFinalize(lso);
         _lastSurfaceObj = null;
 
-        try { _session?.Dispose(); } catch { }
-        try { _framePool?.Dispose(); } catch { }
+        try { s?.Dispose(); } catch { }
+        if (s != null) GC.SuppressFinalize(s);
         _session = null;
+
+        try { f?.Dispose(); } catch { }
+        if (f != null) GC.SuppressFinalize(f);
         _framePool = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
     }
@@ -472,12 +483,20 @@ public sealed class WgcCapture : IDisposable
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
 
-            try { _lastSurfaceObj?.Dispose(); } catch { }
+            var lso = _lastSurfaceObj;
+            var s = _session;
+            var f = _framePool;
+
+            try { lso?.Dispose(); } catch { }
+            if (lso != null) GC.SuppressFinalize(lso);
             _lastSurfaceObj = null;
 
-            try { _session?.Dispose(); } catch { }
-            try { _framePool?.Dispose(); } catch { }
+            try { s?.Dispose(); } catch { }
+            if (s != null) GC.SuppressFinalize(s);
             _session = null;
+
+            try { f?.Dispose(); } catch { }
+            if (f != null) GC.SuppressFinalize(f);
             _framePool = null;
         }
         
