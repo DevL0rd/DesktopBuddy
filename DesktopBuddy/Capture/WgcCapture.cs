@@ -500,7 +500,7 @@ public sealed class WgcCapture : IDisposable
 
         System.Threading.Tasks.Task.Run(async () => 
         {
-            await System.Threading.Tasks.Task.Delay(2000);
+            await System.Threading.Tasks.Task.Delay(3000);
             
             bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
             if (forceGC)
