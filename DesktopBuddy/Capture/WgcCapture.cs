@@ -335,86 +335,101 @@ public sealed class WgcCapture : IDisposable
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
     {
         if (_disposed) return;
-        lock (_disposeLock)
-        {
-        if (_disposed) return;
         try
         {
         var frame = sender.TryGetNextFrame();
         if (frame == null) return;
 
-        var size = frame.ContentSize;
-        int w = size.Width;
-        int h = size.Height;
-        if (w <= 0 || h <= 0) { frame.Dispose(); return; }
-
-        if (_needsPoolRecreate) { frame.Dispose(); return; }
-
-        if (w != Width || h != Height)
-        {
-            Log.Msg($"[WgcCapture] Resize {Width}x{Height} -> {w}x{h}");
-            Width = w; Height = h;
-            _needsPoolRecreate = true;
-            frame.Dispose();
-            return;
-        }
-
-        var surfaceObj = frame.Surface;
-        IntPtr surfaceAbi = MarshalInterface<IDirect3DSurface>.FromManaged(surfaceObj);
-
-        if (surfaceAbi == IntPtr.Zero) return;
-
-        var dxgiAccessGuid = DxgiAccessGuid;
-        int qiHr = Marshal.QueryInterface(surfaceAbi, ref dxgiAccessGuid, out IntPtr dxgiAccessPtr);
-        Marshal.Release(surfaceAbi);
-        if (qiHr < 0 || dxgiAccessPtr == IntPtr.Zero) return;
-
-        IntPtr srcTexture;
-        unsafe
-        {
-            var vtable = *(IntPtr**)dxgiAccessPtr;
-            var fn = (delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, int>)vtable[3];
-            Guid localTexGuid = TexGuid;
-            IntPtr tex;
-            int getHr = fn(dxgiAccessPtr, &localTexGuid, &tex);
-            srcTexture = tex;
-            if (getHr < 0) { Marshal.Release(dxgiAccessPtr); return; }
-        }
-        Marshal.Release(dxgiAccessPtr);
-
         try
         {
-            using (DesktopBuddyMod.Perf.Time("queue_frame"))
+            var size = frame.ContentSize;
+            int w = size.Width;
+            int h = size.Height;
+            if (w <= 0 || h <= 0) return;
+
+            if (_needsPoolRecreate) return;
+
+            if (w != Width || h != Height)
             {
-                var gpuCb = OnGpuFrame;
-                try { gpuCb?.Invoke(_d3dDevice, srcTexture, w, h); }
-                catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
+                Log.Msg($"[WgcCapture] Resize {Width}x{Height} -> {w}x{h}");
+                Width = w; Height = h;
+                _needsPoolRecreate = true;
+                return;
             }
 
-            _framesCaptured++;
-            if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame: {w}x{h}");
+            var surfaceObj = frame.Surface;
+            try
+            {
+                IntPtr surfaceAbi = MarshalInterface<IDirect3DSurface>.FromManaged(surfaceObj);
+                if (surfaceAbi == IntPtr.Zero) return;
+
+                var dxgiAccessGuid = DxgiAccessGuid;
+                int qiHr = Marshal.QueryInterface(surfaceAbi, ref dxgiAccessGuid, out IntPtr dxgiAccessPtr);
+                Marshal.Release(surfaceAbi);
+                if (qiHr < 0 || dxgiAccessPtr == IntPtr.Zero) return;
+
+                IntPtr srcTexture = IntPtr.Zero;
+                try
+                {
+                    unsafe
+                    {
+                        var vtable = *(IntPtr**)dxgiAccessPtr;
+                        var fn = (delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, int>)vtable[3];
+                        Guid localTexGuid = TexGuid;
+                        IntPtr tex;
+                        int getHr = fn(dxgiAccessPtr, &localTexGuid, &tex);
+                        if (getHr >= 0) srcTexture = tex;
+                    }
+                }
+                finally
+                {
+                    Marshal.Release(dxgiAccessPtr);
+                }
+
+                if (srcTexture == IntPtr.Zero) return;
+
+                try
+                {
+                    using (DesktopBuddyMod.Perf.Time("queue_frame"))
+                    {
+                        var gpuCb = OnGpuFrame;
+                        try { gpuCb?.Invoke(_d3dDevice, srcTexture, w, h); }
+                        catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
+                    }
+
+                    _framesCaptured++;
+                    if (_framesCaptured == 1) Log.Msg($"[WgcCapture] First frame: {w}x{h}");
+                }
+                finally 
+                { 
+                    Marshal.Release(srcTexture); 
+                }
+
+                var lso = _lastSurfaceObj;
+                try { lso?.Dispose(); } catch { }
+                if (lso != null) GC.SuppressFinalize(lso);
+                
+                _lastSurfaceObj = (IDisposable)surfaceObj;
+                surfaceObj = null;
+            }
+            finally
+            {
+                if (surfaceObj != null)
+                {
+                    try { ((IDisposable)surfaceObj).Dispose(); } catch { }
+                    GC.SuppressFinalize(surfaceObj);
+                }
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            Log.Msg($"[WgcCapture] OnFrameArrived error: {ex.Message}");
-        }
-        finally 
-        { 
-            Marshal.Release(srcTexture); 
             frame.Dispose();
             GC.SuppressFinalize(frame);
-
-            // Securely dispose the previous frame's WinRT wrapper now that the GPU has finished reading it
-            var lso = _lastSurfaceObj;
-            try { lso?.Dispose(); } catch { }
-            if (lso != null) GC.SuppressFinalize(lso);
-            _lastSurfaceObj = (IDisposable)surfaceObj;
         }
         }
         catch (Exception ex)
         {
             Log.Msg($"[WgcCapture] OnFrameArrived OUTER error: {ex.Message}\n{ex.StackTrace}");
-        }
         }
     }
 
@@ -514,8 +529,17 @@ public sealed class WgcCapture : IDisposable
         _d3dContext = IntPtr.Zero;
         _d3dDevice = IntPtr.Zero;
 
-        if (wDevice != null) GC.SuppressFinalize(wDevice);
-        if (rItem != null) GC.SuppressFinalize(rItem);
+        if (wDevice != null) 
+        {
+            try { (wDevice as IDisposable)?.Dispose(); } catch { }
+            GC.SuppressFinalize(wDevice);
+        }
+        
+        if (rItem != null) 
+        {
+            try { (rItem as IDisposable)?.Dispose(); } catch { }
+            GC.SuppressFinalize(rItem);
+        }
 
         System.Threading.Tasks.Task.Run(async () => 
         {
@@ -524,9 +548,7 @@ public sealed class WgcCapture : IDisposable
             bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
             if (forceGC)
             {
-                Log.Msg($"[WgcCapture:Dispose] Forcing GC to finalize any last orphaned WinRT wrappers");
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                Log.Msg($"[WgcCapture:Dispose] Skipping forced GC collection (now safely handled)");
             }
             
             if (dCtx != IntPtr.Zero) { Marshal.Release(dCtx); }
