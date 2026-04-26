@@ -316,12 +316,15 @@ public partial class DesktopBuddyMod
                     }
 
                     var oldStreamer = session.Streamer;
-                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                    System.Threading.Tasks.Task.Run(async () =>
                     {
                         try
                         {
                             oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
+                            
+                            // Delay violently closing the HTTP socket to prevent libVLC/Renderite.Host.exe crashes
+                            await System.Threading.Tasks.Task.Delay(2000);
                             StreamServer?.StopEncoder(oldStreamId);
                         }
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
@@ -556,14 +559,18 @@ public partial class DesktopBuddyMod
         IntPtr hwnd = session.Hwnd;
         session.Streamer = null;
 
+        Msg($"[Cleanup] Stopping streamer capture synchronously...");
+        streamer?.FlushD3dContext();
+        streamer?.StopCapture();
+        streamer?.Dispose();
+        Msg($"[Cleanup] Streamer disposed synchronously");
+
         Msg($"[Cleanup] Queuing background dispose for stream {streamId}");
-        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        System.Threading.Tasks.Task.Run(async () =>
         {
             try
             {
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
-
-                streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
                 bool shouldStopEncoder = false;
@@ -590,6 +597,9 @@ public partial class DesktopBuddyMod
 
                     if (shouldStopEncoder)
                     {
+                        Msg($"[Cleanup:BG] Delaying encoder {streamId} stop to allow remote libVLC to disconnect cleanly...");
+                        await System.Threading.Tasks.Task.Delay(2000);
+
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
                         StreamServer?.StopEncoder(streamId);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
@@ -603,14 +613,6 @@ public partial class DesktopBuddyMod
                         GC.WaitForPendingFinalizers();
                     }
                 }
-
-                Msg($"[Cleanup:BG] Stopping capture...");
-                streamer?.StopCapture();
-                Msg($"[Cleanup:BG] Capture stopped");
-
-                Msg($"[Cleanup:BG] Disposing streamer...");
-                streamer?.Dispose();
-                Msg($"[Cleanup:BG] Streamer disposed");
 
                 if (audioToDispose != null)
                 {

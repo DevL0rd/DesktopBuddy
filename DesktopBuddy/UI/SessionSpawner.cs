@@ -90,8 +90,13 @@ public partial class DesktopBuddyMod
         collider.Offset.Value = float3.Zero;
         Msg("[StartStreaming] Collider added to root");
 
-        var displaySlot = root.AddLocalSlot("Display", false);
-        Msg("[StartStreaming] Display slot (local) created");
+        var displaySlot = root.AddSlot("Display");
+        var displayVis = displaySlot.AttachComponent<ValueUserOverride<bool>>();
+        displayVis.Target.Target = displaySlot.ActiveSelf_Field;
+        displayVis.Default.Value = false;
+        displayVis.CreateOverrideOnWrite.Value = false;
+        displayVis.SetOverride(root.World.LocalUser, true);
+        Msg("[StartStreaming] Display slot (networked but hidden) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
         var procTex = texSlot.AttachComponent<DesktopTextureProvider>();
@@ -563,7 +568,13 @@ public partial class DesktopBuddyMod
                 return;
             }
             Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
-            keyboardSlot = root.AddLocalSlot("Virtual Keyboard", false);
+            keyboardSlot = root.AddSlot("Virtual Keyboard");
+            var kbVis = keyboardSlot.AttachComponent<ValueUserOverride<bool>>();
+            kbVis.Target.Target = keyboardSlot.ActiveSelf_Field;
+            kbVis.Default.Value = false;
+            kbVis.CreateOverrideOnWrite.Value = false;
+            kbVis.SetOverride(root.World.LocalUser, true);
+            keyboardSlot.ActiveSelf = false;
             session.KeyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
@@ -730,7 +741,12 @@ public partial class DesktopBuddyMod
 
             if (spatialAudio)
             {
-                var localAudioSlot = root.AddLocalSlot("LocalAudio", false);
+                var localAudioSlot = root.AddSlot("LocalAudio");
+                var audVis = localAudioSlot.AttachComponent<ValueUserOverride<bool>>();
+                audVis.Target.Target = localAudioSlot.ActiveSelf_Field;
+                audVis.Default.Value = false;
+                audVis.CreateOverrideOnWrite.Value = false;
+                audVis.SetOverride(root.World.LocalUser, true);
                 var audioSource = localAudioSlot.AttachComponent<DesktopAudioSource>();
                 session.SpatialAudioSource = audioSource;
 
