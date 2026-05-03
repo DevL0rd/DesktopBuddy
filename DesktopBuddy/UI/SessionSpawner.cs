@@ -818,6 +818,7 @@ public partial class DesktopBuddyMod
             backSlot.LocalScale = float3.One * canvasScale;
 
             var backCanvas = backSlot.AttachComponent<Canvas>();
+            backCanvas.Collider.RawTarget.Enabled = false;
             backCanvasRef = backCanvas;
             backCanvas.Size.Value = new float2(w, h);
             var backUi = new UIBuilder(backCanvas);
