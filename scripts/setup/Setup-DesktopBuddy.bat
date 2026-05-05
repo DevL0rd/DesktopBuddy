@@ -2,6 +2,7 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
+set "RESONITE_PATH=%SCRIPT_DIR%.."
 
 net session >nul 2>&1
 if %errorlevel% neq 0 (
@@ -10,7 +11,7 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%Setup-DesktopBuddy.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%Setup-DesktopBuddy.ps1" -ResonitePath "%RESONITE_PATH%" %*
 pause
 
 endlocal

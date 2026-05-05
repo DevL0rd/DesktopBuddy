@@ -17,8 +17,8 @@ if not defined ZIP_NAME (
 set "STAGE=%TEMP%\DesktopBuddyPackage\!ZIP_NAME!"
 set "OUT_ZIP=%ROOT_DIR%\!ZIP_NAME!.zip"
 set "INSTALL_SOURCE=%ROOT_DIR%\INSTALL.txt"
-set "SETUP_BAT=%ROOT_DIR%\Setup-DesktopBuddy.bat"
-set "SETUP_PS1=%ROOT_DIR%\Setup-DesktopBuddy.ps1"
+set "SETUP_BAT=%ROOT_DIR%\scripts\setup\Setup-DesktopBuddy.bat"
+set "SETUP_PS1=%ROOT_DIR%\scripts\setup\Setup-DesktopBuddy.ps1"
 
 if not exist "%MOD_DLL%" (
     echo ERROR: DesktopBuddy.dll not found. Run scripts\build.bat first.
@@ -63,8 +63,9 @@ mkdir "%STAGE%\vbcable"
 xcopy /e /q "%ROOT_DIR%\vbcable\*" "%STAGE%\vbcable\" >nul
 
 REM Setup scripts
-copy "%SETUP_BAT%" "%STAGE%\Setup-DesktopBuddy.bat" >nul
-copy "%SETUP_PS1%" "%STAGE%\Setup-DesktopBuddy.ps1" >nul
+mkdir "%STAGE%\setup"
+copy "%SETUP_BAT%" "%STAGE%\setup\Setup-DesktopBuddy.bat" >nul
+copy "%SETUP_PS1%" "%STAGE%\setup\Setup-DesktopBuddy.ps1" >nul
 
 REM Install instructions included in the release zip
 powershell -NoProfile -Command "(Get-Content -Raw '%INSTALL_SOURCE%').Replace('{{ZIP_NAME}}', '%ZIP_NAME%') | Set-Content -NoNewline '%STAGE%\INSTALL.txt'"

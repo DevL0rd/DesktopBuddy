@@ -10,7 +10,7 @@
 1. Install [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download `{{ZIP_NAME}}.zip` from the release.
 3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. Run `Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
 5. Launch Resonite and open the context menu, then **Desktop**.
 
 The setup script installs/configures the required DesktopBuddy pieces:
