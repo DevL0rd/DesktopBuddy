@@ -222,7 +222,7 @@ public partial class DesktopBuddyMod
         btn.LocalPressed += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
-            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
+            if (IsDesktopMode(root.World)) return;
             ClaimSource(data.source);
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
@@ -233,7 +233,7 @@ public partial class DesktopBuddyMod
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
-            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
+            if (IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
@@ -242,7 +242,7 @@ public partial class DesktopBuddyMod
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
-            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
+            if (IsDesktopMode(root.World)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
@@ -251,7 +251,7 @@ public partial class DesktopBuddyMod
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
-            if ((Config?.GetValue(CancelInputInDesktopMode) ?? false) && IsDesktopMode(root.World)) return;
+            if (IsDesktopMode(root.World)) return;
             float hu = data.normalizedPressPoint.x;
             float hv = 1f - data.normalizedPressPoint.y;
 
