@@ -14,14 +14,14 @@ A Resonite mod that spawns world-space desktop/window viewers with touch input, 
 1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) and [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download the latest `DesktopBuddy-Alpha-*.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases).
 3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. Run `Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
 5. Launch Resonite and open the context menu, then **Desktop**.
 
 The zip is already structured for the Resonite root. There is no DesktopBuddy Manager anymore.
 
 ## Setup Script
 
-`Setup-DesktopBuddy.bat` launches `Setup-DesktopBuddy.ps1` with administrator privileges and performs the setup work that used to live in DesktopBuddy Manager:
+`setup\Setup-DesktopBuddy.bat` launches `setup\Setup-DesktopBuddy.ps1` with administrator privileges and performs the setup work that used to live in DesktopBuddy Manager:
 
 - Registers SoftCam so the virtual camera appears as **DesktopBuddy - Camera**
 - Installs VB-Cable so the virtual microphone appears as **CABLE Output**
@@ -38,7 +38,7 @@ Run it again after updates if any of those dependencies are missing or out of pl
 
 - Confirm `DesktopBuddy.dll` is in `<Resonite root>\rml_mods\`.
 - Confirm Resonite Mod Loader is installed and working.
-- Start from a vanilla Resonite renderer and run `Setup-DesktopBuddy.bat`; other modloaders and unrelated renderer mods are currently unsupported.
+- Start from a vanilla Resonite renderer and run `setup\Setup-DesktopBuddy.bat`; other modloaders and unrelated renderer mods are currently unsupported.
 
 **Virtual camera "DesktopBuddy - Camera" not showing**
 
@@ -131,8 +131,9 @@ Creates `DesktopBuddy-Alpha-<date>_<sha>.zip` ready to extract into the Resonite
 ```text
 DesktopBuddy-Alpha-*.zip
   INSTALL.txt
-  Setup-DesktopBuddy.bat
-  Setup-DesktopBuddy.ps1
+  setup/
+    Setup-DesktopBuddy.bat
+    Setup-DesktopBuddy.ps1
   rml_mods/
     DesktopBuddy.dll
     DesktopBuddy.sha

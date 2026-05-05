@@ -5,6 +5,7 @@ using Windows.Graphics;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
+using Windows.Foundation;
 
 namespace DesktopBuddy;
 
@@ -158,6 +159,7 @@ public sealed class WgcCapture : IDisposable
     private GraphicsCaptureItem _item;
     private Direct3D11CaptureFramePool _framePool;
     private GraphicsCaptureSession _session;
+    private TypedEventHandler<GraphicsCaptureItem, object> _itemClosedHandler;
 
     private volatile bool _closed;
     private int _framesCaptured;
@@ -252,7 +254,8 @@ public sealed class WgcCapture : IDisposable
 
             if (_item == null) { Log.Msg("[WgcCapture] CaptureItem is null"); return false; }
 
-            _item.Closed += (sender, args) => { _closed = true; };
+            _itemClosedHandler = (_, _) => { _closed = true; };
+            _item.Closed += _itemClosedHandler;
 
             Width = _item.Size.Width;
             Height = _item.Size.Height;
@@ -308,11 +311,18 @@ public sealed class WgcCapture : IDisposable
         var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
         Marshal.Release(factoryPtr);
 
-        var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-        var ptr = interop.CreateForWindow(hwnd, ref itemGuid);
-        var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
-        Marshal.Release(ptr);
-        return item;
+        try
+        {
+            var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+            var ptr = interop.CreateForWindow(hwnd, ref itemGuid);
+            var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
+            Marshal.Release(ptr);
+            return item;
+        }
+        finally
+        {
+            Marshal.FinalReleaseComObject(interop);
+        }
     }
 
     private static GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
@@ -322,11 +332,18 @@ public sealed class WgcCapture : IDisposable
         var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
         Marshal.Release(factoryPtr);
 
-        var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-        var ptr = interop.CreateForMonitor(hmon, ref itemGuid);
-        var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
-        Marshal.Release(ptr);
-        return item;
+        try
+        {
+            var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+            var ptr = interop.CreateForMonitor(hmon, ref itemGuid);
+            var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
+            Marshal.Release(ptr);
+            return item;
+        }
+        finally
+        {
+            Marshal.FinalReleaseComObject(interop);
+        }
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
@@ -434,11 +451,14 @@ public sealed class WgcCapture : IDisposable
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
+        try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Item closed unhook error: {ex.Message}"); }
 
-        try { _session?.Dispose(); } catch { }
-        try { _framePool?.Dispose(); } catch { }
+        // Do not explicitly dispose CsWinRT capture wrappers here. The crash evidence
+        // points at WinRT.IObjectReference finalizers, so let the projection release
+        // its wrappers during the controlled GC in Dispose while the raw D3D refs live.
         _session = null;
         _framePool = null;
+        _itemClosedHandler = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
     }
 
@@ -456,29 +476,46 @@ public sealed class WgcCapture : IDisposable
             Log.Msg($"[WgcCapture:Dispose] Unhooking events");
             try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
+            try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; }
+            catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Item closed unhook error: {ex.Message}"); }
 
-            try { _session?.Dispose(); } catch { }
-            try { _framePool?.Dispose(); } catch { }
             _session = null;
             _framePool = null;
         }
+        _itemClosedHandler = null;
         _item = null;
+        OnGpuFrame = null;
 
         _winrtDevice = null;
-        bool forceGC = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ImmediateGC) ?? true;
-        if (forceGC)
-        {
-            Log.Msg($"[WgcCapture:Dispose] Forcing GC to finalize orphaned WinRT wrappers");
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
-        else
-        {
-            Log.Msg($"[WgcCapture:Dispose] Immediate GC disabled, WinRT wrappers will finalize later");
-        }
+        Log.Msg($"[WgcCapture:Dispose] Finalizing WinRT wrappers before D3D release");
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
 
         if (_d3dContext != IntPtr.Zero) { Marshal.Release(_d3dContext); _d3dContext = IntPtr.Zero; }
         if (_d3dDevice != IntPtr.Zero) { Marshal.Release(_d3dDevice); _d3dDevice = IntPtr.Zero; }
         Log.Msg($"[WgcCapture:Dispose] D3D device released");
+
+        SchedulePostReleaseGcProbe(_hwnd);
+    }
+
+    private static void SchedulePostReleaseGcProbe(IntPtr hwnd)
+    {
+        Log.Msg($"[WgcCapture:Dispose] Scheduling delayed post-release GC probe hwnd={hwnd}");
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                System.Threading.Thread.Sleep(2000);
+                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe starting hwnd={hwnd}");
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe finished hwnd={hwnd}");
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe managed error hwnd={hwnd}: {ex}");
+            }
+        });
     }
 }

@@ -1,5 +1,5 @@
 param(
-    [string]$ResonitePath = $PSScriptRoot,
+    [string]$ResonitePath = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [switch]$DryRun,
     [switch]$SkipRendererDeps
 )
@@ -28,7 +28,7 @@ function Test-Admin {
 function Assert-ResoniteRoot {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath (Join-Path $Path "Resonite.exe"))) {
-        throw "Resonite.exe was not found in '$Path'. Run this script from the Resonite root, or pass -ResonitePath."
+        throw "Resonite.exe was not found in '$Path'. Run this script from the extracted DesktopBuddy package, or pass -ResonitePath."
     }
 }
 
