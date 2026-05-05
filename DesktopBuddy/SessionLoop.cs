@@ -305,14 +305,31 @@ public partial class DesktopBuddyMod
 
                     var oldStreamId = session.StreamId;
                     int newStreamId = System.Threading.Interlocked.Increment(ref _nextStreamId);
-                    var newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                    bool useMediaMtx = IsMediaMtxEnabled;
+                    FfmpegEncoder newEncoder;
+                    Uri newUrl;
+
+                    if (useMediaMtx)
+                    {
+                        var rtspUrl = GetMediaMtxRtspUrl(newStreamId);
+                        newEncoder = new FfmpegEncoder(newStreamId, rtspUrl);
+                        newUrl = new Uri(rtspUrl);
+                    }
+                    else
+                    {
+                        newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                        newUrl = TunnelUrl != null ? new Uri($"{TunnelUrl}/stream/{newStreamId}") : null;
+                    }
                     session.StreamId = newStreamId;
 
-                    FfmpegEncoder oldEncoder = null;
-                    lock (_sharedStreams)
+                    FfmpegEncoder oldEncoder = session.Encoder;
+                    if (oldEncoder == null)
                     {
-                        if (_sharedStreams.TryGetValue(session.Hwnd, out var oldShared))
-                            oldEncoder = oldShared.Encoder;
+                        lock (_sharedStreams)
+                        {
+                            if (_sharedStreams.TryGetValue(session.Hwnd, out var oldShared))
+                                oldEncoder = oldShared.Encoder;
+                        }
                     }
 
                     var oldStreamer = session.Streamer;
@@ -322,7 +339,10 @@ public partial class DesktopBuddyMod
                         {
                             oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
-                            StreamServer?.StopEncoder(oldStreamId);
+                            if (!useMediaMtx)
+                                StreamServer?.StopEncoder(oldStreamId);
+                            else
+                                oldEncoder?.Dispose();
                         }
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
                     });
@@ -333,14 +353,16 @@ public partial class DesktopBuddyMod
                         {
                             shared.StreamId = newStreamId;
                             shared.Encoder = newEncoder;
+                            if (newUrl != null)
+                                shared.StreamUrl = newUrl;
                         }
                     }
 
+                    session.Encoder = newEncoder;
                     ConnectEncoder(session, newEncoder);
 
-                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && TunnelUrl != null)
+                    if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && newUrl != null)
                     {
-                        var newUrl = new Uri($"{TunnelUrl}/stream/{newStreamId}");
                         Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
                         session.VideoTexture.URL.Value = newUrl;
                     }
@@ -566,6 +588,7 @@ public partial class DesktopBuddyMod
                 streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
+                FfmpegEncoder encoderToDispose = null;
                 bool shouldStopEncoder = false;
                 if (streamId > 0)
                 {
@@ -579,11 +602,13 @@ public partial class DesktopBuddyMod
                             {
                                 _sharedStreams.Remove(hwnd);
                                 audioToDispose = shared.Audio;
+                                encoderToDispose = shared.Encoder;
                                 shouldStopEncoder = true;
                             }
                         }
                         else
                         {
+                            encoderToDispose = session.Encoder;
                             shouldStopEncoder = true;
                         }
                     }
@@ -591,6 +616,11 @@ public partial class DesktopBuddyMod
                     if (shouldStopEncoder)
                     {
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
+                        if (encoderToDispose != null)
+                        {
+                            encoderToDispose.Stop();
+                            encoderToDispose.Dispose();
+                        }
                         StreamServer?.StopEncoder(streamId);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
