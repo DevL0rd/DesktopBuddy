@@ -1,11 +1,11 @@
-name: Build & Release
+name: Release Zip
 
 on:
   push:
     branches: [main]
 
 jobs:
-  build:
+  release:
     runs-on: windows-latest
     permissions:
       contents: write
@@ -18,7 +18,7 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
-      - name: Build
+      - name: Build release DLLs
         shell: cmd
         run: scripts\build.bat
 
@@ -29,42 +29,29 @@ jobs:
           $short = git rev-parse --short HEAD
           $dt    = (Get-Date -AsUTC).ToString("yyyy.MM.dd_HH.mm.ss")
           $name  = "DesktopBuddy-Alpha-${dt}_${short}"
-          echo "short=$short"  >> $env:GITHUB_OUTPUT
-          echo "name=$name"    >> $env:GITHUB_OUTPUT
+          echo "short=$short" >> $env:GITHUB_OUTPUT
+          echo "name=$name" >> $env:GITHUB_OUTPUT
 
-      - name: Package
+      - name: Package zip
         shell: cmd
         env:
           ZIP_NAME: ${{ steps.buildinfo.outputs.name }}
         run: scripts\package.bat
+
+      - name: Render release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $body = (Get-Content -Raw INSTALL.txt).Replace('{{ZIP_NAME}}', '${{ steps.buildinfo.outputs.name }}')
+          $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -NoNewline -Path $path -Value $body
+          echo "path=$path" >> $env:GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.buildinfo.outputs.name }}
           name: ${{ steps.buildinfo.outputs.name }}
-          body: |
-            ## DesktopBuddy
-
-            ### Option A — Standalone manager (easiest)
-
-            1. Download `${{ steps.buildinfo.outputs.name }}-DesktopBuddyManager.exe` below
-            2. Run it **as administrator** from anywhere — it will detect your Resonite install, download this release's zip, extract all files, and run setup
-            3. **Restart your PC** if prompted — the virtual microphone driver may require a reboot
-
-            ### Option B — Manual zip install
-
-            1. Download `${{ steps.buildinfo.outputs.name }}.zip` below
-            2. Extract directly into your Resonite root folder (e.g. `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`) — the zip is already structured to match
-            3. Run `DesktopBuddyManager.exe` **as administrator** from the Resonite root to register the virtual camera, install the virtual microphone driver, and install renderer dependencies
-            4. **Restart your PC** if prompted
-
-            ---
-            Already have the manager? Just click **Install / Update** — it will download this zip automatically.
-
-            The virtual camera appears as **"DesktopBuddy - Camera"** and the virtual microphone as **"CABLE Output"** in Discord, Zoom, Chrome, OBS, etc.
-
-            > Having issues? Use the support report button in the manager, then see the [troubleshooting guide](https://github.com/DevL0rd/DesktopBuddy#troubleshooting) in the README.
+          body_path: ${{ steps.notes.outputs.path }}
           files: |
             ${{ steps.buildinfo.outputs.name }}.zip
-            ${{ steps.buildinfo.outputs.name }}-DesktopBuddyManager.exe

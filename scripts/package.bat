@@ -16,6 +16,9 @@ if not defined ZIP_NAME (
 
 set "STAGE=%TEMP%\DesktopBuddyPackage\!ZIP_NAME!"
 set "OUT_ZIP=%ROOT_DIR%\!ZIP_NAME!.zip"
+set "INSTALL_SOURCE=%ROOT_DIR%\INSTALL.txt"
+set "SETUP_BAT=%ROOT_DIR%\Setup-DesktopBuddy.bat"
+set "SETUP_PS1=%ROOT_DIR%\Setup-DesktopBuddy.ps1"
 
 if not exist "%MOD_DLL%" (
     echo ERROR: DesktopBuddy.dll not found. Run scripts\build.bat first.
@@ -25,17 +28,22 @@ if not exist "%RENDERER_DLL%" (
     echo ERROR: DesktopBuddyRenderer.dll not found. Run scripts\build.bat first.
     exit /b 1
 )
-
-echo Packaging manager...
-dotnet publish "%ROOT_DIR%\DesktopBuddyManager\DesktopBuddyManager.csproj" -r win-x64 --self-contained false -p:PublishSingleFile=true -o "%ROOT_DIR%\DesktopBuddyManager\publish" /nologo /verbosity:quiet
-if errorlevel 1 ( echo ERROR: Manager publish failed. & exit /b 1 )
+if not exist "%INSTALL_SOURCE%" (
+    echo ERROR: INSTALL.txt not found.
+    exit /b 1
+)
+if not exist "%SETUP_BAT%" (
+    echo ERROR: Setup-DesktopBuddy.bat not found.
+    exit /b 1
+)
+if not exist "%SETUP_PS1%" (
+    echo ERROR: Setup-DesktopBuddy.ps1 not found.
+    exit /b 1
+)
 
 echo Building zip layout in: %STAGE%
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 mkdir "%STAGE%"
-
-REM DesktopBuddyManager.exe at root
-copy "%ROOT_DIR%\DesktopBuddyManager\publish\DesktopBuddyManager.exe" "%STAGE%\DesktopBuddyManager.exe" >nul
 
 REM rml_mods: mod DLL + sha
 mkdir "%STAGE%\rml_mods"
@@ -54,6 +62,14 @@ REM VBCable installer (keeps its own subfolder so .inf/.sys are next to the exe)
 mkdir "%STAGE%\vbcable"
 xcopy /e /q "%ROOT_DIR%\vbcable\*" "%STAGE%\vbcable\" >nul
 
+REM Setup scripts
+copy "%SETUP_BAT%" "%STAGE%\Setup-DesktopBuddy.bat" >nul
+copy "%SETUP_PS1%" "%STAGE%\Setup-DesktopBuddy.ps1" >nul
+
+REM Install instructions included in the release zip
+powershell -NoProfile -Command "(Get-Content -Raw '%INSTALL_SOURCE%').Replace('{{ZIP_NAME}}', '%ZIP_NAME%') | Set-Content -NoNewline '%STAGE%\INSTALL.txt'"
+if errorlevel 1 ( echo ERROR: INSTALL.txt generation failed. & exit /b 1 )
+
 REM Zip it
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 powershell -NoProfile -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%OUT_ZIP%'"
@@ -62,16 +78,9 @@ if errorlevel 1 ( echo ERROR: Zip creation failed. & exit /b 1 )
 REM Cleanup staging
 rmdir /s /q "%STAGE%"
 
-REM Also publish standalone DesktopBuddyManager.exe for direct download
-set "OUT_EXE=%ROOT_DIR%\!ZIP_NAME!-DesktopBuddyManager.exe"
-if exist "!OUT_EXE!" del "!OUT_EXE!"
-copy "%ROOT_DIR%\DesktopBuddyManager\publish\DesktopBuddyManager.exe" "!OUT_EXE!" >nul
-
 echo.
 echo Done:
-echo   !ZIP_NAME!.zip                     (extract to Resonite root)
-echo   !ZIP_NAME!-DesktopBuddyManager.exe (standalone - downloads zip on first run)
-echo Run DesktopBuddyManager.exe as administrator.
+echo   !ZIP_NAME!.zip (extract to Resonite root)
 
 ENDLOCAL
 

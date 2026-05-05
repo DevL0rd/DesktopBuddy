@@ -11,6 +11,9 @@
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
     <RendererManagedPath>$(MSBuildThisFileDirectory)..\lib\renderer</RendererManagedPath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
+    <ResoniteRendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</ResoniteRendererManagedPath>
+    <ResoniteRendererPluginPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Plugins\x86_64</ResoniteRendererPluginPath>
+    <BepInExCorePath>$(ResonitePath)\Renderer\BepInEx\core</BepInExCorePath>
   </PropertyGroup>
 
   <!-- BepInEx 5.x + Harmony (reference-only) -->
@@ -48,6 +51,25 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
+  <Target Name="RefreshRendererLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
+    <ItemGroup>
+      <BepInExReferenceLibs Include="$(BepInExCorePath)\BepInEx.dll" />
+      <BepInExReferenceLibs Include="$(BepInExCorePath)\0Harmony.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.CoreModule.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Unity.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Shared.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Assembly-CSharp.dll" />
+      <RendererReferenceLibs Include="$(ResoniteRendererPluginPath)\uWindowCapture.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(LibPath)" />
+    <MakeDir Directories="$(RendererManagedPath)" />
+    <Copy SourceFiles="@(BepInExReferenceLibs)" DestinationFolder="$(LibPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RendererReferenceLibs)" DestinationFolder="$(RendererManagedPath)" SkipUnchangedFiles="true" />
+    <Message Text="[lib] Refreshed renderer reference DLLs from $(ResonitePath)" Importance="high" />
+  </Target>
 
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
