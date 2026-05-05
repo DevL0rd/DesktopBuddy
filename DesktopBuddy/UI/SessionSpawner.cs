@@ -1262,7 +1262,12 @@ public partial class DesktopBuddyMod
             Msg($"[ChildWindow] Failed to get child window rect hwnd={childHwnd}");
             return;
         }
-        if (cw <= 0 || ch <= 0) return;
+        if (cw < MinChildCaptureWidth || ch < MinChildCaptureHeight)
+        {
+            Msg($"[ChildWindow] Ignoring tiny popup before spawn: hwnd={childHwnd} title='{childTitle}' size={cw}x{ch}");
+            parentSession.TrackedChildHwnds.Add(childHwnd);
+            return;
+        }
 
         string title = childTitle;
         if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
