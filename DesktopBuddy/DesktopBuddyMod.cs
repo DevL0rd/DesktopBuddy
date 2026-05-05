@@ -39,6 +39,49 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<bool> CancelInputInDesktopMode =
         new("cancelInputInDesktopMode", "Cancel all window input (mouse/touch/scroll) when Resonite is running in desktop (non-VR) mode, preventing Windows from stealing your mouse.", () => true);
 
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> CheckForUpdates =
+        new("checkForUpdates", "Check for updates and show a notification when a new version is available on startup.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> Bitrate =
+        new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> UseMediaMtx =
+        new("useMediaMtx", "Use an external MediaMTX server for streaming instead of the built-in cloudflared tunnel.", () => false);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> MediaMtxHost =
+        new("mediaMtxHost", "MediaMTX server address (IP or hostname).", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> MediaMtxPort =
+        new("mediaMtxPort", "MediaMTX RTSP port.", () => 8554);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> MediaMtxStreamName =
+        new("mediaMtxStreamName", "MediaMTX stream name (path component of the RTSP URL). Leave blank to auto-generate a random name per session.", () => "");
+
+    internal static bool IsMediaMtxEnabled =>
+        Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
+
+    private static string _mediaMtxStreamBase;
+
+    internal static string GetMediaMtxRtspUrl(int streamId)
+    {
+        string host = Config!.GetValue(MediaMtxHost).Trim();
+        int port = Config.GetValue(MediaMtxPort);
+        string name = Config.GetValue(MediaMtxStreamName)?.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            if (_mediaMtxStreamBase == null)
+                _mediaMtxStreamBase = "desktopbuddy-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            name = _mediaMtxStreamBase;
+        }
+        return $"rtsp://{host}:{port}/{name}_{streamId}";
+    }
+
     internal static bool IsDesktopMode(World world)
     {
         try { return world?.LocalUser?.HeadDevice == HeadOutputDevice.Screen; }
@@ -115,21 +158,28 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         AudioCapture.LogHandler = Msg;
 
-        try
+        if (IsMediaMtxEnabled)
         {
-            StreamServer = new MjpegServer(STREAM_PORT);
-            StreamServer.Start();
-            Msg($"Stream server started on port {STREAM_PORT}");
+            Msg($"[MediaMTX] RTSP mode enabled, skipping local stream server and cloudflared tunnel");
         }
-        catch (Exception ex)
+        else
         {
-            Msg($"Stream server failed to start: {ex.Message}");
-            StreamServer = null;
-        }
+            try
+            {
+                StreamServer = new MjpegServer(STREAM_PORT);
+                StreamServer.Start();
+                Msg($"Stream server started on port {STREAM_PORT}");
+            }
+            catch (Exception ex)
+            {
+                Msg($"Stream server failed to start: {ex.Message}");
+                StreamServer = null;
+            }
 
-        if (StreamServer != null)
-        {
-            System.Threading.Tasks.Task.Run(() => StartTunnel());
+            if (StreamServer != null)
+            {
+                System.Threading.Tasks.Task.Run(() => StartTunnel());
+            }
         }
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) =>

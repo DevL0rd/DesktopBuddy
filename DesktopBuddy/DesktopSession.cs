@@ -44,6 +44,7 @@ public class DesktopSession
 
     public DesktopKeyboardSource KeyboardSource;
 
+    public FfmpegEncoder Encoder;
     public VideoTextureProvider VideoTexture;
     public bool FeedsVirtualCamera;
     public Slot VCamSlot;
