@@ -22,6 +22,8 @@ public partial class DesktopBuddyMod : ResoniteMod
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
     internal static ModConfiguration? Config;
+    internal const int MinChildCaptureWidth = 128;
+    internal const int MinChildCaptureHeight = 128;
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> FrameRate =

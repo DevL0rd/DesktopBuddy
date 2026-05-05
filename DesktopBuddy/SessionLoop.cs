@@ -85,8 +85,15 @@ public partial class DesktopBuddyMod
                         {
                             if (win.Handle == session.Hwnd) continue;
                             if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
-                            if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2) && cw2 > 10 && ch2 > 10)
+                            if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2))
                             {
+                                if (cw2 < MinChildCaptureWidth || ch2 < MinChildCaptureHeight)
+                                {
+                                    session.TrackedChildHwnds.Add(win.Handle);
+                                    Msg($"[ChildWindow] Ignoring tiny popup: hwnd={win.Handle} title='{win.Title}' size={cw2}x{ch2}");
+                                    continue;
+                                }
+
                                 session.TrackedChildHwnds.Add(win.Handle);
                                 _windowEvents.Enqueue(new WindowEvent
                                 {
