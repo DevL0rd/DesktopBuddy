@@ -74,6 +74,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private IntPtr _keepAliveTexture;
     private uint _keepAliveW, _keepAliveH;
     private long _lastEncodeTicks;
+    private const int KEEP_ALIVE_FPS = 4;
+    private const int KEEP_ALIVE_INTERVAL_MS = 1000 / KEEP_ALIVE_FPS;
+    private const double KEEP_ALIVE_IDLE_SECONDS = KEEP_ALIVE_INTERVAL_MS / 1000.0;
 
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
@@ -150,27 +153,34 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (!aligned)
             {
-                long kfPos = Interlocked.Read(ref _lastKeyframeRingPos);
-                if (kfPos > 0 && kfPos >= _ringWritePos - RING_SIZE && kfPos < _ringWritePos)
+                if (readPos == 0 && _ringWritePos < RING_SIZE)
                 {
-                    readPos = kfPos;
-                    available = _ringWritePos - readPos;
                     aligned = true;
                 }
                 else
                 {
-                    for (long s = readPos; s < _ringWritePos - MPEGTS_PACKET_SIZE; s++)
+                    long kfPos = Interlocked.Read(ref _lastKeyframeRingPos);
+                    if (kfPos > 0 && kfPos >= _ringWritePos - RING_SIZE && kfPos < _ringWritePos)
                     {
-                        byte b = _ringBuffer[(int)(s % RING_SIZE)];
-                        if (b == MPEGTS_SYNC)
+                        readPos = kfPos;
+                        available = _ringWritePos - readPos;
+                        aligned = true;
+                    }
+                    else
+                    {
+                        for (long s = readPos; s < _ringWritePos - MPEGTS_PACKET_SIZE; s++)
                         {
-                            byte next = _ringBuffer[(int)((s + MPEGTS_PACKET_SIZE) % RING_SIZE)];
-                            if (next == MPEGTS_SYNC)
+                            byte b = _ringBuffer[(int)(s % RING_SIZE)];
+                            if (b == MPEGTS_SYNC)
                             {
-                                readPos = s;
-                                available = _ringWritePos - readPos;
-                                aligned = true;
-                                break;
+                                byte next = _ringBuffer[(int)((s + MPEGTS_PACKET_SIZE) % RING_SIZE)];
+                                if (next == MPEGTS_SYNC)
+                                {
+                                    readPos = s;
+                                    available = _ringWritePos - readPos;
+                                    aligned = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -433,7 +443,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             SetupAudioStream();
         }
 
-        ret = ffmpeg.avformat_write_header(_fmtCtx, null);
+        AVDictionary* muxerOpts = null;
+        ffmpeg.av_dict_set(&muxerOpts, "mpegts_flags", "pat_pmt_at_frames", 0);
+        ret = ffmpeg.avformat_write_header(_fmtCtx, &muxerOpts);
+        ffmpeg.av_dict_free(&muxerOpts);
         if (ret < 0) throw new Exception($"avformat_write_header failed: {FfmpegError(ret)}");
 
         Log.Msg($"[FfmpegEnc:{_streamId}] MPEG-TS muxer ready (in-process, no external ffmpeg)");
@@ -614,7 +627,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 continue;
             }
 
-            _encodeEvent.WaitOne(100);
+            _encodeEvent.WaitOne(KEEP_ALIVE_INTERVAL_MS);
             if (_disposed) break;
 
             var tex = Interlocked.Exchange(ref _pendingTexture, IntPtr.Zero);
@@ -623,10 +636,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (tex == IntPtr.Zero)
             {
-                if (_rtspUrl != null && _keepAliveTexture != IntPtr.Zero && _lastEncodeTicks != 0)
+                if (_keepAliveTexture != IntPtr.Zero && _lastEncodeTicks != 0)
                 {
                     double idleSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _lastEncodeTicks) / System.Diagnostics.Stopwatch.Frequency;
-                    if (idleSec >= 5.0)
+                    if (idleSec >= KEEP_ALIVE_IDLE_SECONDS)
                     {
                         Marshal.AddRef(_keepAliveTexture);
                         tex = _keepAliveTexture;
@@ -642,15 +655,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 EncodeFrameInternalLocked(tex, w, h);
                 _lastEncodeTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
-                if (_rtspUrl != null)
-                {
-                    var prev = _keepAliveTexture;
-                    Marshal.AddRef(tex);
-                    _keepAliveTexture = tex;
-                    _keepAliveW = w;
-                    _keepAliveH = h;
-                    if (prev != IntPtr.Zero) Marshal.Release(prev);
-                }
+                var prev = _keepAliveTexture;
+                Marshal.AddRef(tex);
+                _keepAliveTexture = tex;
+                _keepAliveW = w;
+                _keepAliveH = h;
+                if (prev != IntPtr.Zero) Marshal.Release(prev);
             }
             catch (Exception ex)
             {

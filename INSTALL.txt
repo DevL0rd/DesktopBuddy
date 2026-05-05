@@ -1,0 +1,27 @@
+# DesktopBuddy
+
+> **WARNING**
+> DesktopBuddy currently supports **Resonite Mod Loader only** on a **vanilla Resonite renderer install**.
+> The setup script installs DesktopBuddy's required renderer dependencies.
+> Other modloaders and unrelated renderer mods are not supported right now. This will be fixed soon.
+
+## Manual Zip Install
+
+1. Install [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
+2. Download `{{ZIP_NAME}}.zip` from the release.
+3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
+4. Run `Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+5. Launch Resonite and open the context menu, then **Desktop**.
+
+The setup script installs/configures the required DesktopBuddy pieces:
+
+- SoftCam virtual camera registration
+- VB-Cable virtual microphone driver
+- VB-Cable loopback registry setting
+- HTTP URL ACL for the stream server on port `48080`
+- RenderiteHook and BepInEx.Renderer dependencies
+- DesktopBuddy renderer plugin presence check
+
+The virtual camera appears as **DesktopBuddy - Camera** and the virtual microphone as **CABLE Output** in Discord, Zoom, Chrome, OBS, and similar apps.
+
+See the [README](https://github.com/DevL0rd/DesktopBuddy#readme) for troubleshooting.

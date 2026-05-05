@@ -27,6 +27,7 @@
   <PropertyGroup>
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
+    <ResoniteLibrariesPath>$(ResonitePath)\Libraries</ResoniteLibrariesPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -74,6 +75,24 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
+  <Target Name="RefreshLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
+    <ItemGroup>
+      <ResoniteReferenceLibs Include="$(ResonitePath)\FrooxEngine.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\Elements.Core.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\Elements.Assets.dll" />
+      <ResoniteReferenceLibs Include="$(ResoniteLibrariesPath)\ResoniteModLoader.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\SkyFrost.Base.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\SkyFrost.Base.Models.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\Renderite.Shared.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\Awwdio.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\FrooxEngine.Store.dll" />
+    </ItemGroup>
+    <MakeDir Directories="$(LibPath)" />
+    <Copy SourceFiles="@(ResoniteReferenceLibs)" DestinationFolder="$(LibPath)" SkipUnchangedFiles="true" />
+    <Message Text="[lib] Refreshed game-side reference DLLs from $(ResonitePath)" Importance="high" />
+  </Target>
 
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
