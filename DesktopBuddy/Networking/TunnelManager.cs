@@ -100,7 +100,7 @@ public partial class DesktopBuddyMod
             var psi = new ProcessStartInfo
             {
                 FileName = _cfPath,
-                Arguments = $"tunnel" +
+                Arguments = $"tunnel --config NUL" +
                     $" --url http://localhost:{STREAM_PORT}" +
                     $" --proxy-keepalive-timeout 5m" +
                     $" --proxy-keepalive-connections 100" +
