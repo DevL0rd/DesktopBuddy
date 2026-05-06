@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -51,7 +50,7 @@ public partial class DesktopBuddyMod
         }
     }
 
-    private static void StartStreaming(Slot root, IntPtr hwnd, string title, bool isChild = false, IntPtr monitorHandle = default, DesktopSession parentSession = null, int monitorIndex = -1)
+    private static void StartStreaming(Slot root, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd} monitorIndex={monitorIndex})");
 
@@ -68,11 +67,11 @@ public partial class DesktopBuddyMod
                 streamer.Dispose();
                 return;
             }
-            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, isChild, streamer, parentSession, monitorIndex));
+            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, streamer, monitorIndex));
         });
     }
 
-    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, bool isChild, DesktopStreamer streamer, DesktopSession parentSession = null, int monitorIndex = -1)
+    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, DesktopStreamer streamer, int monitorIndex = -1)
     {
         if (root == null || root.IsDestroyed)
         {
@@ -100,10 +99,12 @@ public partial class DesktopBuddyMod
         Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
-        var procTex = texSlot.AttachComponent<DesktopTextureProvider>();
+        var procTex = TextureProviderSettings.ClampWrap(texSlot.AttachComponent<DesktopTextureProvider>());
         OurProviders.Add(procTex);
         int captureSlot = -1;
-        if (hwnd != IntPtr.Zero && CaptureChannel != null && CaptureChannel.IsOpen)
+        bool useRendererCapture = CaptureChannel != null && CaptureChannel.IsOpen &&
+            (hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
+        if (useRendererCapture)
         {
             captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
             if (captureSlot < 0)
@@ -115,12 +116,18 @@ public partial class DesktopBuddyMod
             }
             int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
             procTex.DisplayIndex.Value = magicIdx;
-            Msg($"[StartStreaming] Window capture: slot {captureSlot}, DisplayIndex={magicIdx}");
+            Msg($"[StartStreaming] Renderer WGC capture: slot {captureSlot}, DisplayIndex={magicIdx}, hwnd=0x{hwnd.ToInt64():X}, monitor=0x{streamer.MonitorHandle.ToInt64():X}");
+            int capturedSlot = captureSlot;
+            root.World.RunInUpdates(120, () =>
+            {
+                if (CaptureChannel != null && !CaptureChannel.IsSessionRunning(capturedSlot))
+                    Msg($"[StartStreaming] WARNING: Renderer capture slot {capturedSlot} did not report running after 120 updates");
+            });
         }
         else if (hwnd == IntPtr.Zero && monitorIndex >= 0)
         {
             procTex.DisplayIndex.Value = monitorIndex;
-            Msg($"[StartStreaming] Monitor capture: DisplayIndex={monitorIndex}");
+            Msg($"[StartStreaming] WARNING: Renderer capture channel unavailable; falling back to built-in monitor DisplayIndex={monitorIndex}");
         }
         else
         {
@@ -134,7 +141,7 @@ public partial class DesktopBuddyMod
         ui.NestInto(displayBg.RectTransform);
 
         var rawImage = ui.RawImage(procTex);
-        rawImage.UVRect.Value = new Rect(float2.Zero, new float2(1f, -1f));
+        rawImage.UVRect.Value = new Rect(new float2(0f, 1f), new float2(1f, -1f));
         Msg("[StartStreaming] Canvas + RawImage created");
 
         var mat = displaySlot.AttachComponent<UI_UnlitMaterial>();
@@ -167,25 +174,8 @@ public partial class DesktopBuddyMod
             LastKnownH = h,
         };
         ActiveSessions.Add(session);
-        if (parentSession != null)
-        {
-            session.ParentSession = parentSession;
-            parentSession.ChildSessions.Add(session);
-            Msg($"[ChildWindow] Linked to parent, parent now tracking {parentSession.ChildSessions.Count} children");
-        }
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
-
-        if (!isChild && processId != 0)
-        {
-            foreach (var existing in WindowEnumerator.GetProcessWindows(processId))
-            {
-                if (existing.Handle != hwnd)
-                    session.TrackedChildHwnds.Add(existing.Handle);
-            }
-            if (session.TrackedChildHwnds.Count > 0)
-                Msg($"[StartStreaming] Pre-existing child windows ignored: {session.TrackedChildHwnds.Count}");
-        }
 
         bool IsActiveSource(Component source)
         {
@@ -328,16 +318,35 @@ public partial class DesktopBuddyMod
         barMat.ZWrite.Value = ZWrite.On;
         barMat.OffsetUnits.Value = 100f;
 
+        var barBackSlot = root.AddSlot("TopBarBackPanel");
+        barBackSlot.LocalScale = float3.One * canvasScale;
+        barBackSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
+
+        var barBackCanvas = barBackSlot.AttachComponent<Canvas>();
+        barBackCanvas.Collider.RawTarget.Enabled = false;
+
+        var barBackMat = barBackSlot.AttachComponent<UI_UnlitMaterial>();
+        barBackMat.BlendMode.Value = BlendMode.Alpha;
+        barBackMat.Sidedness.Value = Sidedness.Double;
+        barBackMat.ZWrite.Value = ZWrite.On;
+        barBackMat.OffsetUnits.Value = 100f;
+
         var barUi = new UIBuilder(barCanvas);
         var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
         barBg.Material.Target = barMat;
-        var roundedSprite = barSlot.AttachComponent<SpriteProvider>();
+        var roundedSprite = TextureProviderSettings.ClampWrap(barSlot.AttachComponent<SpriteProvider>());
         roundedSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         roundedSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
         roundedSprite.FixedSize.Value = 16f;
         barBg.Sprite.Target = roundedSprite;
         barBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
         barBg.Tint.Value = new colorX(0.1f, 0.1f, 0.12f, 1f);
+
+        var barBackUi = new UIBuilder(barBackCanvas);
+        var barBackBg = barBackUi.Image(new colorX(0.08f, 0.08f, 0.1f, 1f));
+        barBackBg.Material.Target = barBackMat;
+        barBackBg.Sprite.Target = roundedSprite;
+        barBackBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
 
         var barMask = barBg.Slot.AttachComponent<Mask>();
         barMask.ShowMaskGraphic.Value = true;
@@ -359,7 +368,7 @@ public partial class DesktopBuddyMod
         var imageSpaceSlot = barUi.Empty("Image Space");
         imageSpaceSlot.AttachComponent<Mask>();
         var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
-        var avatarMaskSprite = imageSpaceSlot.AttachComponent<SpriteProvider>();
+        var avatarMaskSprite = TextureProviderSettings.ClampWrap(imageSpaceSlot.AttachComponent<SpriteProvider>());
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         avatarMaskSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
         avatarMaskSprite.FixedSize.Value = 18f;
@@ -372,7 +381,7 @@ public partial class DesktopBuddyMod
 
         var cloudUserInfo = barSlot.AttachComponent<CloudUserInfo>();
         var defaultImg = new Uri("resdb:///bb7d7f1414e0c0a44b4684ecd2a5dc2086c18b3f70c9ed53d467fe96af94e9a9.png");
-        var avatarTex = barSlot.AttachComponent<StaticTexture2D>();
+        var avatarTex = TextureProviderSettings.ClampWrap(barSlot.AttachComponent<StaticTexture2D>());
         var imgMux = barSlot.AttachComponent<ValueMultiplexer<Uri>>();
         cloudUserInfo.UserId.ForceSet(localUser.UserID);
         imgMux.Target.Target = avatarTex.URL;
@@ -384,7 +393,8 @@ public partial class DesktopBuddyMod
         urlCopy.Target.Target = imgMux.Values.GetField(1);
         if (localUser.UserID != null) imgMux.Index.ForceSet(1);
 
-        barUi.Image(avatarTex);
+        var avatarImage = barUi.Image(avatarTex);
+        var avatarButton = avatarImage.Slot.AttachComponent<Button>();
         barUi.NestOut();
 
         string userName = localUser?.UserName ?? "Unknown";
@@ -399,7 +409,7 @@ public partial class DesktopBuddyMod
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
 
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = 7f * 30f + 6f * 6f + 13f + 30f + 100f;
+        float expandContentW = 4f * 30f + 6f * 6f + 13f + 30f + 100f;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         void StyleButton(Button btn)
@@ -422,6 +432,21 @@ public partial class DesktopBuddyMod
                 cd.HighlightColor.Value = new colorX(1f, 1f, 1f, 0.15f);
                 cd.PressColor.Value = new colorX(1f, 1f, 1f, 0.08f);
             }
+
+            var image = btn.Slot.GetComponent<Image>();
+            if (image != null)
+            {
+                image.Tint.Value = colorX.Clear;
+                image.Sprite.Target = null;
+            }
+        }
+
+        DesktopBuddyButtonActions AttachSharedAction(Button btn, DesktopBuddyButtonAction action)
+        {
+            var actions = btn.Slot.AttachComponent<DesktopBuddyButtonActions>();
+            actions.ConfigureAction(action);
+            btn.SendSlotEvents.Value = true;
+            return actions;
         }
 
         barUi.Style.MinWidth = 36f;
@@ -448,11 +473,14 @@ public partial class DesktopBuddyMod
 
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
-        barUi.Style.MinWidth = -1f;
-        barUi.Style.MinHeight = -1f;
+        barUi.Style.MinWidth = expandContentW;
+        barUi.Style.PreferredWidth = expandContentW;
+        barUi.Style.MinHeight = 48f;
+        barUi.Style.PreferredHeight = 48f;
         var expandPanel = barUi.Empty("ExpandPanel");
+        expandPanel.ActiveSelf = false;
         var ep = new UIBuilder(expandPanel);
-        var epLayout = ep.HorizontalLayout(6f, childAlignment: Alignment.MiddleLeft);
+        var epLayout = ep.HorizontalLayout(6f, padding: 6f, childAlignment: Alignment.MiddleLeft);
         epLayout.ForceExpandWidth.Value = false;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
@@ -464,23 +492,23 @@ public partial class DesktopBuddyMod
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = -1f;
 
-        var kbBtn = ep.Button("⌨");      StyleButton(kbBtn);
-        var pasteBtn = ep.Button("📋");   StyleButton(pasteBtn);
-        var testStreamBtn = ep.Button("👁"); StyleButton(testStreamBtn);
-        var resyncBtn = ep.Button("🔄");  StyleButton(resyncBtn);
+        var kbBtn = ep.Button("⌨️"); StyleButton(kbBtn);
         var anchorBtn = ep.Button("⚓");   StyleButton(anchorBtn);
         var privateBtn = ep.Button("🔒"); StyleButton(privateBtn);
-        var githubBtn = ep.Button("🔗");  StyleButton(githubBtn);
-        githubBtn.SendSlotEvents.Value = true;
-        var hyperlink = githubBtn.Slot.AttachComponent<Hyperlink>();
-        hyperlink.URL.Value = new Uri("https://github.com/DevL0rd/DesktopBuddy");
-        hyperlink.Reason.Value = "DesktopBuddy GitHub";
 
         ep.Style.MinWidth = 1f;
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
         ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+
+        ep.Style.MinWidth = 30f;
+        ep.Style.PreferredWidth = 30f;
+        ep.Style.MinHeight = 40f;
+        ep.Style.PreferredHeight = 40f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = -1f;
+        var resyncBtn = ep.Button("🔄");  StyleButton(resyncBtn);
 
         ep.Style.MinWidth = 24f;
         ep.Style.PreferredWidth = 24f;
@@ -511,43 +539,20 @@ public partial class DesktopBuddyMod
         widthSmooth.Value.Target = widthField.Value;
         widthSmooth.WriteBack.Value = false;
 
-        bool barExpanded = true;
         float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
+        widthField.Value.Value = barCollapsedW;
+        widthSmooth.TargetValue.Value = barCollapsedW;
+        var toggleActions = AttachSharedAction(toggleBtn, DesktopBuddyButtonAction.ToggleBar);
+        toggleActions.ConfigureBar(root, barSlot, barBackSlot, barCanvas, barBackCanvas, widthField, widthSmooth,
+            canvasScale, worldHalfW, barYPos, barH, barCollapsedW, barExpandedW, expandPanel);
 
-        float _lastBarW = barExpandedW;
-        widthField.Value.Value = barExpandedW;
-        widthSmooth.TargetValue.Value = barExpandedW;
-        void BarUpdateLoop()
-        {
-            if (root.IsDestroyed || barSlot.IsDestroyed) return;
-            float cw = widthField.Value.Value;
-            if (cw != _lastBarW)
-            {
-                _lastBarW = cw;
-                barCanvas.Size.Value = new float2(cw, barH);
-                barSlot.LocalPosition = new float3(
-                    -worldHalfW + cw / 2f * canvasScale,
-                    barYPos, 0f);
-            }
-            float target = widthSmooth.TargetValue.Value;
-            if (Math.Abs(cw - target) > 0.5f)
-                root.World.RunInUpdates(1, BarUpdateLoop);
-        }
-        barCanvas.Size.Value = new float2(barExpandedW, barH);
+        barCanvas.Size.Value = new float2(barCollapsedW, barH);
+        barBackCanvas.Size.Value = new float2(barCollapsedW, barH);
         barSlot.LocalPosition = new float3(
-            -worldHalfW + barExpandedW / 2f * canvasScale,
+            -worldHalfW + barCollapsedW / 2f * canvasScale,
             barYPos, 0f);
-        root.World.RunInUpdates(1, BarUpdateLoop);
-
-        toggleBtn.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            barExpanded = !barExpanded;
-            widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
-            root.World.RunInUpdates(1, BarUpdateLoop);
-        };
-
-        if (isChild)
-            barSlot.ActiveSelf = false;
+        barBackSlot.LocalPosition = barSlot.LocalPosition + new float3(0f, 0f, 0.001f);
+        root.World.RunInUpdates(1, toggleActions.BarUpdateLoop);
 
         Msg($"[TopBar] Created, user '{userName}'");
 
@@ -594,50 +599,13 @@ public partial class DesktopBuddyMod
             });
         };
 
-        bool streamTestMode = false;
         ValueUserOverride<bool> streamVisRef = null;
         VideoTextureProvider videoTexRef = null;
-        var testActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f);
-        testStreamBtn.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            Msg("[TestStream] Button pressed");
-            if (streamVisRef != null && !streamVisRef.IsDestroyed)
-            {
-                streamTestMode = !streamTestMode;
-                streamVisRef.SetOverride(root.World.LocalUser, streamTestMode);
-                displaySlot.ActiveSelf = !streamTestMode;
-                var img = testStreamBtn.Slot.GetComponent<Image>();
-                if (img != null) img.Tint.Value = streamTestMode ? testActiveColor : colorX.Clear;
-                Msg($"[TestStream] Test mode: {streamTestMode} (stream={streamTestMode}, preview={!streamTestMode})");
-            }
-            else
-            {
-                Msg("[TestStream] No stream available");
-            }
-        };
 
-        resyncBtn.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            Msg("[Resync] Button pressed");
-            if (videoTexRef != null && !videoTexRef.IsDestroyed)
-            {
-                var savedUrl = videoTexRef.URL.Value;
-                Msg($"[Resync] Forcing full reload: {savedUrl}");
-                videoTexRef.URL.Value = null;
-                root.World.RunInUpdates(10, () =>
-                {
-                    if (videoTexRef != null && !videoTexRef.IsDestroyed)
-                    {
-                        videoTexRef.URL.Value = savedUrl;
-                        Msg($"[Resync] URL restored: {savedUrl}");
-                    }
-                });
-            }
-            else
-            {
-                Msg("[Resync] No stream available");
-            }
-        };
+        var previewActions = AttachSharedAction(avatarButton, DesktopBuddyButtonAction.TogglePreview);
+        previewActions.ConfigurePreview(displaySlot);
+
+        var resyncActions = AttachSharedAction(resyncBtn, DesktopBuddyButtonAction.ResyncStream);
 
         bool isAnchored = false;
         var anchorActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f);
@@ -662,7 +630,6 @@ public partial class DesktopBuddyMod
             if (img != null) img.Tint.Value = isAnchored ? anchorActiveColor : colorX.Clear;
         };
 
-        if (!isChild)
         {
             var camSlot = root.AddSlot("VirtualCamera");
             camSlot.LocalPosition = new float3(0f, worldHalfH + 0.02f, -0.001f);
@@ -750,12 +717,6 @@ public partial class DesktopBuddyMod
                 session.SpatialAudioOutput = spatialOutput;
             }
         }
-
-        pasteBtn.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            Msg("[Paste] Button pressed");
-            WindowInput.SendPaste();
-        };
 
         bool isPrivate = false;
         string savedStreamUrl = null;
@@ -854,7 +815,7 @@ public partial class DesktopBuddyMod
                     backUi.Style.PreferredHeight = iconSize;
                     backUi.Style.FlexibleHeight = -1f;
 
-                    var iconTex = backSlot.AttachComponent<StaticTexture2D>();
+                    var iconTex = TextureProviderSettings.ClampWrap(backSlot.AttachComponent<StaticTexture2D>());
                     var iconMat = backSlot.AttachComponent<UI_UnlitMaterial>();
                     iconMat.Texture.Target = iconTex;
                     iconMat.OffsetFactor.Value = -1f;
@@ -919,7 +880,7 @@ public partial class DesktopBuddyMod
             Msg($"[BackPanel] Created with title '{title}'");
         }
 
-        if (!_updateShown && !isChild && Config!.GetValue(CheckForUpdates))
+        if (!_updateShown && Config!.GetValue(CheckForUpdates))
         {
             _updateShown = true;
             var capturedRoot = root;
@@ -939,7 +900,7 @@ public partial class DesktopBuddyMod
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        bool allowRemoteStream = !isChild && (useMediaMtx || (StreamServer != null && TunnelUrl != null));
+        bool allowRemoteStream = useMediaMtx || (StreamServer != null && TunnelUrl != null);
         if (allowRemoteStream)
         {
             try
@@ -1002,7 +963,7 @@ public partial class DesktopBuddyMod
                 }
 
                 var videoSlot = root.AddSlot("StreamProvider");
-                var videoTex = videoSlot.AttachComponent<VideoTextureProvider>();
+                var videoTex = TextureProviderSettings.ClampWrap(videoSlot.AttachComponent<VideoTextureProvider>());
                 videoTex.URL.Value = shared.StreamUrl;
                 videoTex.Stream.Value = true;
                 videoTex.Volume.Value = 0f;
@@ -1038,6 +999,8 @@ public partial class DesktopBuddyMod
                 streamVis.CreateOverrideOnWrite.Value = false;
                 streamVis.SetOverride(root.World.LocalUser, false);
                 streamVisRef = streamVis;
+                previewActions.ConfigureStream(streamVis, videoTex);
+                resyncActions.ConfigureStream(streamVis, videoTex);
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
@@ -1088,10 +1051,7 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            if (isChild)
-                Msg("[RemoteStream] Skipped for child popup; local panel only");
-            else
-                Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();
@@ -1206,6 +1166,7 @@ public partial class DesktopBuddyMod
             worldHalfW = newW / 2f * canvasScale;
             worldHalfH = newH / 2f * canvasScale;
             barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
+            toggleActions.UpdateLayout(worldHalfW, barYPos);
 
             if (session.Collider != null && !session.Collider.IsDestroyed)
                 session.Collider.Size.Value = new float3(newW * canvasScale, newH * canvasScale, 0.001f);
@@ -1218,7 +1179,7 @@ public partial class DesktopBuddyMod
 
             if (barSlot != null && !barSlot.IsDestroyed)
                 barSlot.LocalPosition = new float3(
-                    -worldHalfW + _lastBarW / 2f * canvasScale,
+                    -worldHalfW + toggleActions.CurrentBarWidth / 2f * canvasScale,
                     barYPos, 0f);
 
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
@@ -1235,12 +1196,11 @@ public partial class DesktopBuddyMod
 
         ScheduleUpdate(root.World);
 
-        if (!isChild)
-            root.Tag = "Desktop Buddy";
-            WindowInput.FocusWindow(hwnd);
+        root.Tag = "Desktop Buddy";
+        WindowInput.FocusWindow(hwnd);
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
-        if (useSpatialAudio && !isChild && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
+        if (useSpatialAudio && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
         {
             string cableId = VBCableSetup.FindCableInputDeviceId();
             if (cableId != null)
@@ -1293,63 +1253,6 @@ public partial class DesktopBuddyMod
                 _largeIconTasks.TryRemove(cacheKey, out var ignoredTask);
             }
         }));
-    }
-
-    private static void SpawnChildWindow(DesktopSession parentSession, IntPtr childHwnd, string childTitle = null)
-    {
-        if (!WindowEnumerator.TryGetWindowRect(parentSession.Hwnd, out int px, out int py, out int pw, out int ph))
-        {
-            Msg($"[ChildWindow] Failed to get parent window rect");
-            return;
-        }
-        if (!WindowEnumerator.TryGetWindowRect(childHwnd, out int cx, out int cy, out int cw, out int ch))
-        {
-            Msg($"[ChildWindow] Failed to get child window rect hwnd={childHwnd}");
-            return;
-        }
-        string title = childTitle;
-        if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
-
-        float canvasScale = 0.0005f;
-        float offsetX, offsetY;
-        float offsetZ = -0.01f;
-
-        bool isExplorer = false;
-        try
-        {
-            var proc = Process.GetProcessById((int)parentSession.ProcessId);
-            isExplorer = proc.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) { Msg($"[ChildWindow] Process check error: {ex.Message}"); }
-
-        if (isExplorer)
-        {
-            offsetX = 0f;
-            offsetY = 0f;
-            Msg($"[ChildWindow] Explorer detected — centering child on parent");
-        }
-        else
-        {
-            offsetX = ((cx - px) + cw / 2f - pw / 2f) * canvasScale;
-            offsetY = (-(cy - py) - ch / 2f + ph / 2f) * canvasScale;
-        }
-
-        var root = parentSession.Root.AddSlot($"Popup: {title}");
-        root.LocalPosition = new float3(offsetX, offsetY, offsetZ);
-        Msg($"[ChildWindow] Spawning local-only popup for hwnd={childHwnd} title='{title}' size={cw}x{ch} offset=({offsetX:F4},{offsetY:F4})");
-
-        parentSession.TrackedChildHwnds.Add(childHwnd);
-
-        try
-        {
-            StartStreaming(root, childHwnd, title, isChild: true, parentSession: parentSession);
-        }
-        catch (Exception ex)
-        {
-            Msg($"[ChildWindow] Failed to spawn: {ex.Message}");
-            parentSession.TrackedChildHwnds.Remove(childHwnd);
-            if (!root.IsDestroyed) root.Destroy();
-        }
     }
 
 }

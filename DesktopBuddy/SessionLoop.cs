@@ -30,11 +30,17 @@ public partial class DesktopBuddyMod
             DesktopSession[] snapshot;
             try { snapshot = ActiveSessions.ToArray(); }
             catch { continue; }
+            var activeWindows = new HashSet<IntPtr>();
+            foreach (var session in snapshot)
+            {
+                if (!session.Cleaned && session.Hwnd != IntPtr.Zero)
+                    activeWindows.Add(session.Hwnd);
+            }
 
             var byProcess = new Dictionary<uint, List<DesktopSession>>();
             foreach (var session in snapshot)
             {
-                if (session.Cleaned || session.IsChildPanel || session.ProcessId == 0) continue;
+                if (session.Cleaned || session.ProcessId == 0) continue;
                 if (!byProcess.TryGetValue(session.ProcessId, out var list))
                     byProcess[session.ProcessId] = list = new List<DesktopSession>();
                 list.Add(session);
@@ -46,13 +52,9 @@ public partial class DesktopBuddyMod
                 var sessions = kvp.Value;
 
                 List<WindowEnumerator.WindowInfo> procWindows;
-                HashSet<IntPtr> windowSet;
                 try
                 {
                     procWindows = WindowEnumerator.GetProcessWindows(kvp.Key);
-                    windowSet = new HashSet<IntPtr>(procWindows.Count);
-                    for (int pw = 0; pw < procWindows.Count; pw++)
-                        windowSet.Add(procWindows[pw].Handle);
                 }
                 catch (Exception ex)
                 {
@@ -84,31 +86,17 @@ public partial class DesktopBuddyMod
                         foreach (var win in procWindows)
                         {
                             if (win.Handle == session.Hwnd) continue;
-                            if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
+                            if (activeWindows.Contains(win.Handle)) continue;
+                            if (session.SeenRelatedHwnds.Contains(win.Handle)) continue;
 
-                            session.TrackedChildHwnds.Add(win.Handle);
+                            session.SeenRelatedHwnds.Add(win.Handle);
                             _windowEvents.Enqueue(new WindowEvent
                             {
                                 Session = session,
-                                EventType = WindowEventType.NewChild,
-                                ChildHwnd = win.Handle,
+                                EventType = WindowEventType.NewTopLevelWindow,
+                                WindowHwnd = win.Handle,
                                 Title = win.Title
                             });
-                        }
-
-                        for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
-                        {
-                            var child = session.ChildSessions[c];
-                            bool childStillActive = child.Streamer != null && windowSet.Contains(child.Hwnd);
-                            if (!childStillActive)
-                            {
-                                _windowEvents.Enqueue(new WindowEvent
-                                {
-                                    Session = session,
-                                    EventType = WindowEventType.ChildClosed,
-                                    ChildHwnd = child.Hwnd
-                                });
-                            }
                         }
                     }
                     catch (Exception ex)
@@ -226,34 +214,10 @@ public partial class DesktopBuddyMod
                                 evt.Session.Root.Name = $"Desktop: {evt.Title}";
                             break;
 
-                        case WindowEventType.NewChild:
-                            Msg($"[ChildWindow] Detected new popup: hwnd={evt.ChildHwnd} title='{evt.Title}'");
-                            SpawnChildWindow(evt.Session, evt.ChildHwnd, evt.Title);
+                        case WindowEventType.NewTopLevelWindow:
+                            Msg($"[WindowPoller] Detected new top-level window: hwnd={evt.WindowHwnd} title='{evt.Title}'");
+                            SpawnStreaming(evt.Session.Root.World, evt.WindowHwnd, evt.Title);
                             break;
-
-                        case WindowEventType.ChildClosed:
-                        {
-                            var child = evt.Session.ChildSessions.Find(c => c.Hwnd == evt.ChildHwnd);
-                            if (child != null)
-                            {
-                                Msg($"[ChildWindow] Popup closed: hwnd={child.Hwnd}");
-                                evt.Session.TrackedChildHwnds.Remove(child.Hwnd);
-                                child.ParentSession = null;
-                                evt.Session.ChildSessions.Remove(child);
-                                {
-                                    var cvtp = child.VideoTexture;
-                                    if (cvtp != null && !cvtp.IsDestroyed) { cvtp.URL.Value = null; cvtp.Stop(); }
-                                    child.VideoTexture = null;
-                                    var cRoot = child.Root;
-                                    world.RunInUpdates(10, () =>
-                                    {
-                                        if (cRoot != null && !cRoot.IsDestroyed) cRoot.Destroy();
-                                    });
-                                }
-                                CleanupSession(child);
-                            }
-                            break;
-                        }
                     }
                 }
 
@@ -298,7 +262,7 @@ public partial class DesktopBuddyMod
                     int rw = session.PendingResizeW;
                     int rh = session.PendingResizeH;
 
-                    if (session.IsChildPanel || session.StreamId <= 0)
+                    if (session.StreamId <= 0)
                     {
                         Msg($"[UpdateLoop] Resize debounce expired for local-only panel {rw}x{rh}, no encoder reinit");
                         continue;
@@ -479,7 +443,7 @@ public partial class DesktopBuddyMod
     {
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
         session.Cleaned = true;
-        Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId} isChild={session.IsChildPanel} children={session.ChildSessions.Count}");
+        Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId}");
 
         if (VMic != null && session.VMicListener != null)
         {
@@ -510,51 +474,7 @@ public partial class DesktopBuddyMod
             }
         }
 
-        if (session.ChildSessions.Count > 0)
-        {
-            Msg($"[Cleanup] Destroying {session.ChildSessions.Count} child popup panels");
-            foreach (var child in session.ChildSessions)
-            {
-                child.ParentSession = null;
-                Msg($"[Cleanup] Child: disconnecting VTP hwnd={child.Hwnd}");
-                {
-                    var vtp = child.VideoTexture;
-                    if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
-                    child.VideoTexture = null;
-                    var rootToDie = child.Root;
-                    if (rootToDie != null && !rootToDie.IsDestroyed)
-                    {
-                        var childWorld = rootToDie.World;
-                        if (childWorld != null && !childWorld.IsDestroyed)
-                        {
-                            childWorld.RunInUpdates(10, () =>
-                            {
-                                Msg($"[Cleanup] Child deferred destroy executing hwnd={child.Hwnd}");
-                                if (rootToDie != null && !rootToDie.IsDestroyed) rootToDie.Destroy();
-                                Msg($"[Cleanup] Child deferred destroy complete hwnd={child.Hwnd}");
-                            });
-                        }
-                        else
-                        {
-                            Msg($"[Cleanup] Child world dead, destroying now hwnd={child.Hwnd}");
-                            rootToDie.Destroy();
-                        }
-                    }
-                }
-                Msg($"[Cleanup] Child: calling CleanupSession recursively hwnd={child.Hwnd}");
-                CleanupSession(child);
-                Msg($"[Cleanup] Child: done hwnd={child.Hwnd}");
-            }
-            session.ChildSessions.Clear();
-            session.TrackedChildHwnds.Clear();
-        }
-
-        if (session.ParentSession != null)
-        {
-            Msg($"[Cleanup] Removing from parent tracking");
-            session.ParentSession.TrackedChildHwnds.Remove(session.Hwnd);
-            session.ParentSession.ChildSessions.Remove(session);
-        }
+        session.SeenRelatedHwnds.Clear();
 
         Msg($"[Cleanup] Removing canvas ID");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);

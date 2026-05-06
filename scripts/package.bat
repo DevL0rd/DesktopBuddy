@@ -6,6 +6,7 @@ set "ROOT_DIR=%SCRIPT_DIR%.."
 set "MOD_DLL=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.dll"
 set "MOD_SHA=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.sha"
 set "RENDERER_DLL=%ROOT_DIR%\DesktopBuddyRenderer\bin\Debug\net472\DesktopBuddyRenderer.dll"
+set "RENDERER_NATIVE_DLL=%ROOT_DIR%\DesktopBuddyRendererNative\bin\Release\x64\DesktopBuddyRendererNative.dll"
 
 for /f %%i in ('git -C "%ROOT_DIR%" rev-parse --short HEAD 2^>nul') do set "SHORT=%%i"
 if not defined SHORT set "SHORT=unknown"
@@ -26,6 +27,10 @@ if not exist "%MOD_DLL%" (
 )
 if not exist "%RENDERER_DLL%" (
     echo ERROR: DesktopBuddyRenderer.dll not found. Run scripts\build.bat first.
+    exit /b 1
+)
+if not exist "%RENDERER_NATIVE_DLL%" (
+    echo ERROR: DesktopBuddyRendererNative.dll not found. Run scripts\build.bat first.
     exit /b 1
 )
 if not exist "%INSTALL_SOURCE%" (
@@ -57,6 +62,7 @@ copy "%ROOT_DIR%\rml_libs\*" "%STAGE%\rml_libs\" >nul
 REM Renderer BepInEx plugin
 mkdir "%STAGE%\Renderer\BepInEx\plugins"
 copy "%RENDERER_DLL%" "%STAGE%\Renderer\BepInEx\plugins\DesktopBuddyRenderer.dll" >nul
+copy "%RENDERER_NATIVE_DLL%" "%STAGE%\Renderer\BepInEx\plugins\DesktopBuddyRendererNative.dll" >nul
 
 REM VBCable installer (keeps its own subfolder so .inf/.sys are next to the exe)
 mkdir "%STAGE%\vbcable"

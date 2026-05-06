@@ -132,7 +132,7 @@ public static class ContextMenuPatch
     {
         try
         {
-            var tex = slot.AttachComponent<StaticTexture2D>();
+            var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
 
             if (_desktopIconGenerated && _desktopIconUri != null)
             {
@@ -182,7 +182,7 @@ public static class ContextMenuPatch
     {
         try
         {
-            var tex = slot.AttachComponent<StaticTexture2D>();
+            var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
 
             if (_iconCache.TryGetValue(hwnd, out var cached))
             {

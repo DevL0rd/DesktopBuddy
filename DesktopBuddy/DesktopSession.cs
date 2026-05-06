@@ -32,10 +32,7 @@ public class DesktopSession
     public bool LastValidState = true;
     public TextRenderer TitleText;
     public string LastTitle;
-    public HashSet<IntPtr> TrackedChildHwnds = new();
-    public List<DesktopSession> ChildSessions = new();
-    public DesktopSession ParentSession;
-    public bool IsChildPanel => ParentSession != null;
+    public HashSet<IntPtr> SeenRelatedHwnds = new();
     public bool Cleaned;
 
     public double ResizeDebounceUntil;
