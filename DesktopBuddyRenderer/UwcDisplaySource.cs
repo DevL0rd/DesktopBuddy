@@ -7,7 +7,7 @@ using Renderite.Unity;
 
 namespace DesktopBuddyRenderer
 {
-    internal sealed class UwcDisplaySource : IDisplayTextureSource
+    internal sealed class UwcDisplaySource : IDesktopDisplaySource
     {
         private readonly ManualLogSource _log;
         private UwcWindow _window;
@@ -21,6 +21,7 @@ namespace DesktopBuddyRenderer
         public int Width => _window?.width ?? 0;
         public int Height => _window?.height ?? 0;
         public bool IsValid => _window != null && _window.isAlive;
+        public string SourceName => "UWC";
 
         internal UwcDisplaySource(IntPtr hwnd, ManualLogSource log)
         {
@@ -28,7 +29,7 @@ namespace DesktopBuddyRenderer
             _log = log;
         }
 
-        internal bool TryBind()
+        public bool TryBind()
         {
             if (_window != null) return true;
 
@@ -79,7 +80,7 @@ namespace DesktopBuddyRenderer
             return true;
         }
 
-        internal void Tick()
+        public void Tick()
         {
             if (_window == null || _disposed) return;
 
@@ -117,7 +118,7 @@ namespace DesktopBuddyRenderer
             _requests.Remove(onTextureChanged);
         }
 
-        internal void Dispose()
+        public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;

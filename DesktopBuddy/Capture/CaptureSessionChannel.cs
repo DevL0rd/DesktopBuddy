@@ -66,10 +66,11 @@ internal sealed class CaptureSessionChannel : IDisposable
         {
             SessionId = slot,
             Hwnd = hwnd.ToInt64(),
-            MonitorHandle = monitorHandle.ToInt64()
+            MonitorHandle = monitorHandle.ToInt64(),
+            UseLegacyUwc = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.UseLegacyUwc) ?? false
         });
 
-        Log.Msg($"[CaptureSessionChannel] Registered session slot={slot} hwnd=0x{hwnd:X} monitor=0x{monitorHandle:X}");
+        Log.Msg($"[CaptureSessionChannel] Registered session slot={slot} hwnd=0x{hwnd:X} monitor=0x{monitorHandle:X} legacyUwc={DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.UseLegacyUwc) ?? false}");
         return slot;
     }
 

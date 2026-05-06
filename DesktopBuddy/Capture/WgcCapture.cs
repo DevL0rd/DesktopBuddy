@@ -315,6 +315,7 @@ public sealed class WgcCapture : IDisposable
 
             _session = _framePool.CreateCaptureSession(_item);
             try { _session.IsBorderRequired = false; } catch (Exception ex) { Log.Msg($"[WgcCapture] IsBorderRequired not supported (Win11+ only): {ex.Message}"); }
+            TrySetIncludeSecondaryWindows(_session);
             _session.IsCursorCaptureEnabled = true;
 
             _session.StartCapture();
@@ -326,6 +327,32 @@ public sealed class WgcCapture : IDisposable
         {
             Log.Msg($"[WgcCapture] Init failed: {ex}");
             return false;
+        }
+    }
+
+    private static void TrySetIncludeSecondaryWindows(GraphicsCaptureSession session)
+    {
+        try
+        {
+            if (!Windows.Foundation.Metadata.ApiInformation.IsPropertyPresent("Windows.Graphics.Capture.GraphicsCaptureSession", "IncludeSecondaryWindows"))
+            {
+                Log.Msg("[WgcCapture] IncludeSecondaryWindows unsupported on this Windows API");
+                return;
+            }
+
+            var prop = typeof(GraphicsCaptureSession).GetProperty("IncludeSecondaryWindows");
+            if (prop == null || !prop.CanWrite)
+            {
+                Log.Msg("[WgcCapture] IncludeSecondaryWindows present in Windows API but unavailable in this managed SDK projection");
+                return;
+            }
+
+            prop.SetValue(session, true);
+            Log.Msg("[WgcCapture] IncludeSecondaryWindows enabled");
+        }
+        catch (Exception ex)
+        {
+            Log.Msg($"[WgcCapture] IncludeSecondaryWindows failed: {ex.Message}");
         }
     }
 

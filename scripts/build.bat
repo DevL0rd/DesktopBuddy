@@ -33,6 +33,24 @@ if !ERRORLEVEL! neq 0 (
     exit /b !ERRORLEVEL!
 )
 
+REM Build the native renderer helper
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+set "MSBUILD_EXE="
+if exist "!VSWHERE!" (
+    for /f "usebackq tokens=*" %%I in (`"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find MSBuild\**\Bin\MSBuild.exe`) do (
+        if not defined MSBUILD_EXE set "MSBUILD_EXE=%%I"
+    )
+)
+if not defined MSBUILD_EXE (
+    echo NATIVE BUILD FAILED - Visual Studio Build Tools with C++ x64 tools were not found
+    exit /b 1
+)
+"!MSBUILD_EXE!" "%SCRIPT_DIR%..\DesktopBuddyRendererNative\DesktopBuddyRendererNative.vcxproj" /p:Configuration=Release /p:Platform=x64 /m
+if !ERRORLEVEL! neq 0 (
+    echo NATIVE BUILD FAILED - not launching Resonite
+    exit /b !ERRORLEVEL!
+)
+
 REM Build the renderer plugin
 dotnet build "%SCRIPT_DIR%..\DesktopBuddyRenderer\DesktopBuddyRenderer.csproj"
 if !ERRORLEVEL! neq 0 (

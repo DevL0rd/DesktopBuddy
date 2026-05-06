@@ -36,12 +36,14 @@ namespace DesktopBuddy.Shared
         public int SessionId;
         public long Hwnd;
         public long MonitorHandle;
+        public bool UseLegacyUwc;
 
         public void Pack(ref MemoryPacker packer)
         {
             packer.Write(SessionId);
             packer.Write(Hwnd);
             packer.Write(MonitorHandle);
+            packer.Write(UseLegacyUwc);
         }
 
         public void Unpack(ref MemoryUnpacker unpacker)
@@ -49,6 +51,7 @@ namespace DesktopBuddy.Shared
             unpacker.Read(ref SessionId);
             unpacker.Read(ref Hwnd);
             unpacker.Read(ref MonitorHandle);
+            unpacker.Read(ref UseLegacyUwc);
         }
     }
 

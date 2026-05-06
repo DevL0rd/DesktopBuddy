@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopBuddy", "DesktopBudd
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopBuddyRenderer", "DesktopBuddyRenderer\DesktopBuddyRenderer.csproj", "{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}"
 EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "DesktopBuddyRendererNative", "DesktopBuddyRendererNative\DesktopBuddyRendererNative.vcxproj", "{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,5 +23,9 @@ Global
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Debug|Any CPU.Build.0 = Debug|x64
+		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Release|Any CPU.ActiveCfg = Release|x64
+		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Release|Any CPU.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

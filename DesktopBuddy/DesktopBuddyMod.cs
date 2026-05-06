@@ -22,9 +22,6 @@ public partial class DesktopBuddyMod : ResoniteMod
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
     internal static ModConfiguration? Config;
-    internal const int MinChildCaptureWidth = 128;
-    internal const int MinChildCaptureHeight = 128;
-
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> FrameRate =
         new("frameRate", "Target capture frame rate", () => 30);
@@ -56,6 +53,10 @@ public partial class DesktopBuddyMod : ResoniteMod
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<string> MediaMtxStreamName =
         new("mediaMtxStreamName", "MediaMTX stream name (path component of the RTSP URL). Leave blank to auto-generate a random name per session.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> UseLegacyUwc =
+        new("useLegacyUwc", "Use the legacy uWindowCapture renderer path instead of the default Windows Graphics Capture path.", () => false);
 
     internal static bool IsMediaMtxEnabled =>
         Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
@@ -120,11 +121,11 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal struct WindowEvent
     {
         public DesktopSession Session;
-        public IntPtr ChildHwnd;
+        public IntPtr WindowHwnd;
         public string Title;
         public WindowEventType EventType;
     }
-    internal enum WindowEventType { NewChild, ChildClosed, TitleChanged }
+    internal enum WindowEventType { NewTopLevelWindow, TitleChanged }
 
     private static string _latestVersion;
     private static bool _updateShown;

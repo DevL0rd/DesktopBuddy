@@ -38,6 +38,18 @@ public static class WindowEnumerator
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassNameW(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)]
+    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
     private static readonly HashSet<string> _ignoredClasses = new(StringComparer.OrdinalIgnoreCase)
     {
         "Shell_TrayWnd", "Shell_SecondaryTrayWnd",
@@ -45,6 +57,14 @@ public static class WindowEnumerator
         "NotifyIconOverflowWindow",
         "Windows.UI.Core.CoreWindow",
     };
+
+    private const uint GW_OWNER = 4;
+    private const uint GA_ROOTOWNER = 3;
+    private const int GWL_STYLE = -16;
+    private const int GWL_EXSTYLE = -20;
+    private const long WS_CHILD = 0x40000000L;
+    private const long WS_EX_TOOLWINDOW = 0x00000080L;
+    private const long WS_EX_APPWINDOW = 0x00040000L;
 
     public struct RECT { public int Left, Top, Right, Bottom; }
 
@@ -79,6 +99,7 @@ public static class WindowEnumerator
             string title = _titleBuf.ToString();
 
             if (string.IsNullOrWhiteSpace(title)) return true;
+            if (!IsStandaloneTopLevelWindow(hWnd)) return true;
 
             GetWindowThreadProcessId(hWnd, out uint pid);
             windows.Add(new WindowInfo(hWnd, title, pid));
@@ -112,6 +133,7 @@ public static class WindowEnumerator
             _classBuf.Clear();
             GetClassNameW(hWnd, _classBuf, _classBuf.Capacity);
             if (_ignoredClasses.Contains(_classBuf.ToString())) return true;
+            if (!IsStandaloneTopLevelWindow(hWnd)) return true;
 
             int length = GetWindowTextLength(hWnd);
             string title = "";
@@ -127,6 +149,35 @@ public static class WindowEnumerator
         }, IntPtr.Zero);
 
         return windows;
+    }
+
+    public static bool IsStandaloneTopLevelWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
+        long style = GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64();
+        long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+
+        if ((style & WS_CHILD) != 0) return false;
+
+        IntPtr owner = GetWindow(hwnd, GW_OWNER);
+        if (owner != IntPtr.Zero) return false;
+
+        IntPtr rootOwner = GetAncestor(hwnd, GA_ROOTOWNER);
+        if (rootOwner != IntPtr.Zero && rootOwner != hwnd) return false;
+
+        bool toolWindow = (exStyle & WS_EX_TOOLWINDOW) != 0;
+        bool appWindow = (exStyle & WS_EX_APPWINDOW) != 0;
+        if (toolWindow && !appWindow) return false;
+
+        return true;
+    }
+
+    private static IntPtr GetWindowLongPtr(IntPtr hwnd, int index)
+    {
+        return IntPtr.Size == 8
+            ? GetWindowLongPtr64(hwnd, index)
+            : new IntPtr(GetWindowLong32(hwnd, index));
     }
 
     public static bool TryGetWindowRect(IntPtr hwnd, out int x, out int y, out int width, out int height)
