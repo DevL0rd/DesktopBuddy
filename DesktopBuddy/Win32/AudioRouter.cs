@@ -25,7 +25,9 @@ internal static class AudioRouter
     private static IntPtr _factory;
     private static bool _initFailed;
 
-    private static unsafe bool EnsureFactory()
+    internal static void PrewarmFactory() => EnsureFactory();
+
+    private static bool EnsureFactory()
     {
         if (_factory != IntPtr.Zero) return true;
         if (_initFailed) return false;

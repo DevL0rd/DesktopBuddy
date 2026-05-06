@@ -30,10 +30,6 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("frameRate", "Target capture frame rate", () => 30);
 
     [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<bool> ImmediateGC =
-        new("immediate_gc", "Force garbage collection on dispose", () => false);
-
-    [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
         new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => false);
 
@@ -136,7 +132,6 @@ public partial class DesktopBuddyMod : ResoniteMod
     public override void OnEngineInit()
     {
         Config = GetConfiguration();
-        Config!.Save(true);
 
         Log.StartSession();
 
@@ -155,6 +150,7 @@ public partial class DesktopBuddyMod : ResoniteMod
         harmony.PatchAll();
 
         AudioCapture.LogHandler = Msg;
+        PrewarmSharedResources();
 
         if (IsMediaMtxEnabled)
         {
@@ -222,18 +218,52 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         Msg("DesktopBuddy initialized!");
 
-        System.Threading.Tasks.Task.Run(() =>
+        System.Threading.Tasks.Task.Run(OpenCaptureChannelRetryLoop);
+    }
+
+    private static void PrewarmSharedResources()
+    {
+        try { WgcCapture.PrewarmSharedDevice(); }
+        catch (Exception ex) { Msg($"[Startup] WGC shared device prewarm failed: {ex.Message}"); }
+
+        try { WgcCapture.PrewarmCaptureFactory(); }
+        catch (Exception ex) { Msg($"[Startup] WGC capture factory prewarm failed: {ex.Message}"); }
+
+        try { FfmpegEncoder.SetFfmpegPath(); }
+        catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
+
+        try { FfmpegEncoder.PrewarmHardwareEncoder(WgcCapture.SharedD3dDevice, WgcCapture.SharedD3dContextLock); }
+        catch (Exception ex) { Msg($"[Startup] FFmpeg hardware encoder prewarm failed: {ex.Message}"); }
+
+        try { WindowInput.PrewarmTouchInjection(); }
+        catch (Exception ex) { Msg($"[Startup] Touch injection prewarm failed: {ex.Message}"); }
+
+        try { DesktopTextureProviderPatch.PrewarmReflection(); }
+        catch (Exception ex) { Msg($"[Startup] DesktopTexture reflection prewarm failed: {ex.Message}"); }
+
+        try { AudioRouter.PrewarmFactory(); }
+        catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }
+    }
+
+    private static void OpenCaptureChannelRetryLoop()
+    {
+        for (int attempt = 1; attempt <= 30 && !_captureChannelOpened; attempt++)
         {
             try
             {
-                Thread.Sleep(5000);
                 OpenCaptureChannel();
+                if (_captureChannelOpened) return;
             }
             catch (Exception ex)
             {
-                Msg($"[CaptureChannel] Failed to open: {ex.Message}");
+                Msg($"[CaptureChannel] Retry {attempt} failed: {ex.Message}");
             }
-        });
+
+            Thread.Sleep(1000);
+        }
+
+        if (!_captureChannelOpened)
+            Msg("[CaptureChannel] Startup open retry window expired");
     }
 
     private static void OpenCaptureChannel()

@@ -72,6 +72,13 @@ static class DesktopTextureProviderPatch
         return false; // Skip original
     }
 
+    internal static void PrewarmReflection()
+    {
+        if (_reflectionCached) return;
+        CacheReflection();
+        _reflectionCached = true;
+    }
+
     private static void CacheReflection()
     {
         var type = typeof(DesktopTextureProvider);

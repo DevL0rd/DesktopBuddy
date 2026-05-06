@@ -88,6 +88,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     }
 
     private static bool _ffmpegPathSet;
+    private static bool _hardwareEncoderPrewarmed;
     private static readonly object _ffmpegInitLock = new();
 
     public static void SetFfmpegPath()
@@ -121,6 +122,30 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         if (File.Exists(Path.Combine(rmlLibsDir, "avcodec-62.dll")))
             return rmlLibsDir;
         return null;
+    }
+
+    public static void PrewarmHardwareEncoder(IntPtr d3dDevice, object d3dContextLock)
+    {
+        lock (_ffmpegInitLock)
+        {
+            if (_hardwareEncoderPrewarmed) return;
+            if (d3dDevice == IntPtr.Zero)
+            {
+                Log.Msg("[FFmpeg] Hardware encoder prewarm skipped: no D3D device");
+                return;
+            }
+
+            using var encoder = new FfmpegEncoder(0);
+            if (encoder.Initialize(d3dDevice, 128, 128, d3dContextLock))
+            {
+                _hardwareEncoderPrewarmed = true;
+                Log.Msg("[FFmpeg] Hardware encoder prewarmed");
+            }
+            else
+            {
+                Log.Msg("[FFmpeg] Hardware encoder prewarm failed");
+            }
+        }
     }
 
     public System.Threading.Tasks.Task WaitForDataAsync(int timeoutMs)

@@ -85,24 +85,15 @@ public partial class DesktopBuddyMod
                         {
                             if (win.Handle == session.Hwnd) continue;
                             if (session.TrackedChildHwnds.Contains(win.Handle)) continue;
-                            if (WindowEnumerator.TryGetWindowRect(win.Handle, out _, out _, out int cw2, out int ch2))
-                            {
-                                if (cw2 < MinChildCaptureWidth || ch2 < MinChildCaptureHeight)
-                                {
-                                    session.TrackedChildHwnds.Add(win.Handle);
-                                    Msg($"[ChildWindow] Ignoring tiny popup: hwnd={win.Handle} title='{win.Title}' size={cw2}x{ch2}");
-                                    continue;
-                                }
 
-                                session.TrackedChildHwnds.Add(win.Handle);
-                                _windowEvents.Enqueue(new WindowEvent
-                                {
-                                    Session = session,
-                                    EventType = WindowEventType.NewChild,
-                                    ChildHwnd = win.Handle,
-                                    Title = win.Title
-                                });
-                            }
+                            session.TrackedChildHwnds.Add(win.Handle);
+                            _windowEvents.Enqueue(new WindowEvent
+                            {
+                                Session = session,
+                                EventType = WindowEventType.NewChild,
+                                ChildHwnd = win.Handle,
+                                Title = win.Title
+                            });
                         }
 
                         for (int c = session.ChildSessions.Count - 1; c >= 0; c--)
@@ -306,6 +297,13 @@ public partial class DesktopBuddyMod
                     session.ResizeDebounceUntil = 0;
                     int rw = session.PendingResizeW;
                     int rh = session.PendingResizeH;
+
+                    if (session.IsChildPanel || session.StreamId <= 0)
+                    {
+                        Msg($"[UpdateLoop] Resize debounce expired for local-only panel {rw}x{rh}, no encoder reinit");
+                        continue;
+                    }
+
                     Msg($"[UpdateLoop] Resize debounce expired, reiniting encoder for {rw}x{rh}");
 
                     if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
@@ -632,13 +630,6 @@ public partial class DesktopBuddyMod
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 
-                    bool forceGC = Config?.GetValue(ImmediateGC) ?? false;
-                    if (forceGC)
-                    {
-                        Msg("[Cleanup:BG] Forcing GC after encoder dispose");
-                        GC.Collect();
-                        GC.WaitForPendingFinalizers();
-                    }
                 }
 
                 Msg($"[Cleanup:BG] Stopping capture...");
