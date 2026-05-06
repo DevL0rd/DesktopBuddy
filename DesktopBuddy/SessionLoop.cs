@@ -224,7 +224,7 @@ public partial class DesktopBuddyMod
                 if (!session.Texture.IsAssetAvailable)
                 {
                     if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
-                    if (session.CaptureSlot >= 0 && _updateCount % 5 == 0)
+                    if (session.SharedTextureSlot >= 0 && _updateCount % 5 == 0)
                     {
                         RetriggerDesktopTexture(session.Texture);
                     }
@@ -248,6 +248,20 @@ public partial class DesktopBuddyMod
                             session.Canvas.Size.Value = new float2(sw, sh);
 
                         session.OnResize?.Invoke(sw, sh);
+                        if (session.SharedTextureSlot >= 0 && TextureBridgeChannel != null)
+                        {
+                            TextureBridgeChannel.UpdateTexture(
+                                session.SharedTextureSlot,
+                                streamerForResize.SharedTextureHandle,
+                                streamerForResize.SharedTextureWidth,
+                                streamerForResize.SharedTextureHeight);
+                            RetriggerDesktopTexture(session.Texture);
+                            world.RunInUpdates(2, () =>
+                            {
+                                if (!session.Cleaned && session.Texture != null && !session.Texture.IsDestroyed)
+                                    RetriggerDesktopTexture(session.Texture);
+                            });
+                        }
                         session.PendingResizeW = sw;
                         session.PendingResizeH = sh;
                         session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
@@ -445,6 +459,8 @@ public partial class DesktopBuddyMod
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId}");
 
+        session.ActiveTouchIds.Clear();
+
         if (VMic != null && session.VMicListener != null)
         {
             Msg("[Cleanup] Disposing VMic (listener destroyed)");
@@ -479,10 +495,10 @@ public partial class DesktopBuddyMod
         Msg($"[Cleanup] Removing canvas ID");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);
 
-        if (session.CaptureSlot >= 0 && CaptureChannel != null)
+        if (session.SharedTextureSlot >= 0 && TextureBridgeChannel != null)
         {
-            CaptureChannel.StopSession(session.CaptureSlot);
-            Msg($"[Cleanup] Stopped capture slot {session.CaptureSlot}");
+            TextureBridgeChannel.StopTexture(session.SharedTextureSlot);
+            Msg($"[Cleanup] Stopped shared texture slot {session.SharedTextureSlot}");
         }
 
         if (session.Texture != null)

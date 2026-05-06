@@ -118,9 +118,17 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public static string FindFfmpegDlls()
     {
         var modDir = Path.GetDirectoryName(typeof(FfmpegEncoder).Assembly.Location) ?? "";
-        var rmlLibsDir = Path.GetFullPath(Path.Combine(modDir, "..", "rml_libs"));
-        if (File.Exists(Path.Combine(rmlLibsDir, "avcodec-62.dll")))
-            return rmlLibsDir;
+        string[] candidates =
+        {
+            Path.GetFullPath(Path.Combine(modDir, "..", "DesktopBuddyNative")),
+            Path.GetFullPath(Path.Combine(modDir, "DesktopBuddyNative")),
+            Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesktopBuddyNative")),
+        };
+        foreach (var dir in candidates)
+        {
+            if (File.Exists(Path.Combine(dir, "avcodec-62.dll")))
+                return dir;
+        }
         return null;
     }
 
@@ -136,7 +144,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
 
             using var encoder = new FfmpegEncoder(0);
-            if (encoder.Initialize(d3dDevice, 128, 128, d3dContextLock))
+            if (encoder.Initialize(d3dDevice, 640, 360, d3dContextLock))
             {
                 _hardwareEncoderPrewarmed = true;
                 Log.Msg("[FFmpeg] Hardware encoder prewarmed");

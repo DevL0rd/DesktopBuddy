@@ -15,6 +15,9 @@ public sealed class DesktopStreamer : IDisposable
     public bool IsValid => _wgc?.IsValid ?? false;
     public object D3dContextLock => _wgc?.D3dContextLock;
     public IntPtr D3dDevice => _wgc?.D3dDevice ?? IntPtr.Zero;
+    public IntPtr SharedTextureHandle => _wgc?.SharedTextureHandle ?? IntPtr.Zero;
+    public int SharedTextureWidth => _wgc?.SharedTextureWidth ?? 0;
+    public int SharedTextureHeight => _wgc?.SharedTextureHeight ?? 0;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame
     {

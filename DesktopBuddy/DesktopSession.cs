@@ -15,10 +15,11 @@ public class DesktopSession
     public bool UpdateInProgress;
     public double TimeSinceLastCapture;
     public double TargetInterval;
-    public int CaptureSlot = -1;
+    public int SharedTextureSlot = -1;
     public int LastKnownW, LastKnownH;
 
     public Component LastActiveSource;
+    public HashSet<uint> ActiveTouchIds = new();
 
     public int LastScrollSign;
     public double LastScrollTick;
@@ -49,6 +50,7 @@ public class DesktopSession
     public bool VCamRenderPending;
     public UI_UnlitMaterial VCamIndicator;
     public bool VCamLastLitState;
+    public Slot VMicSlot;
     public AudioListener VMicListener;
     public UI_UnlitMaterial VMicIndicator;
     public bool VMicMuted;

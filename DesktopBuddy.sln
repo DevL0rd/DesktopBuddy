@@ -5,9 +5,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopBuddy", "DesktopBuddy\DesktopBuddy.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopBuddyRenderer", "DesktopBuddyRenderer\DesktopBuddyRenderer.csproj", "{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}"
-EndProject
-Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "DesktopBuddyRendererNative", "DesktopBuddyRendererNative\DesktopBuddyRendererNative.vcxproj", "{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopBuddySharedTextureBridge", "DesktopBuddySharedTextureBridge\DesktopBuddySharedTextureBridge.csproj", "{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -23,9 +21,5 @@ Global
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D3E4F5A6-B7C8-9012-DEF0-123456789ABC}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Debug|Any CPU.ActiveCfg = Debug|x64
-		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Debug|Any CPU.Build.0 = Debug|x64
-		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Release|Any CPU.ActiveCfg = Release|x64
-		{F49A5F9C-6E88-4D8D-8D22-4A5A337F119D}.Release|Any CPU.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

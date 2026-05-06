@@ -10,9 +10,9 @@ public partial class DesktopBuddyMod
     {
         var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
         string[] candidates = {
-            System.IO.Path.Combine(modDir, "..", "rml_libs", "cloudflared.exe"),
-            System.IO.Path.Combine(modDir, "rml_libs", "cloudflared.exe"),
-            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "rml_libs", "cloudflared.exe"),
+            System.IO.Path.Combine(modDir, "..", "DesktopBuddyNative", "cloudflared.exe"),
+            System.IO.Path.Combine(modDir, "DesktopBuddyNative", "cloudflared.exe"),
+            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesktopBuddyNative", "cloudflared.exe"),
             "cloudflared"
         };
         foreach (var c in candidates)
@@ -100,7 +100,7 @@ public partial class DesktopBuddyMod
             var psi = new ProcessStartInfo
             {
                 FileName = _cfPath,
-                Arguments = $"tunnel --config NUL" +
+                Arguments = $"tunnel" +
                     $" --url http://localhost:{STREAM_PORT}" +
                     $" --proxy-keepalive-timeout 5m" +
                     $" --proxy-keepalive-connections 100" +
