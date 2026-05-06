@@ -375,14 +375,7 @@ public sealed class WgcCapture : IDisposable
                 return;
             }
 
-            var prop = typeof(GraphicsCaptureSession).GetProperty("IncludeSecondaryWindows");
-            if (prop == null || !prop.CanWrite)
-            {
-                Log.Msg("[WgcCapture] IncludeSecondaryWindows present in Windows API but unavailable in this managed SDK projection");
-                return;
-            }
-
-            prop.SetValue(session, true);
+            session.IncludeSecondaryWindows = true;
             Log.Msg("[WgcCapture] IncludeSecondaryWindows enabled");
         }
         catch (Exception ex)
