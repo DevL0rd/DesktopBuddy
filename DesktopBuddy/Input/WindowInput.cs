@@ -113,6 +113,8 @@ public static class WindowInput
         }
     }
 
+    internal static bool PrewarmTouchInjection() => EnsureTouchInit();
+
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hWnd);
 

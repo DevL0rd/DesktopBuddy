@@ -11,6 +11,14 @@ namespace DesktopBuddy;
 
 public sealed class WgcCapture : IDisposable
 {
+    private static readonly object _sharedD3dLock = new();
+    private static bool _sharedD3dReady;
+    private static IntPtr _sharedD3dDevice;
+    private static IntPtr _sharedD3dContext;
+    private static IDirect3DDevice _sharedWinrtDevice;
+    private static readonly object _captureInteropLock = new();
+    private static IGraphicsCaptureItemInterop _captureInterop;
+
     [ComImport]
     [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -149,6 +157,77 @@ public sealed class WgcCapture : IDisposable
         return hr;
     }
 
+    internal static IntPtr SharedD3dDevice
+    {
+        get
+        {
+            EnsureSharedD3dDevice();
+            return _sharedD3dDevice;
+        }
+    }
+
+    internal static object SharedD3dContextLock => _sharedD3dLock;
+
+    internal static bool PrewarmSharedDevice() => EnsureSharedD3dDevice();
+
+    internal static bool PrewarmCaptureFactory() => EnsureCaptureInterop();
+
+    private static bool EnsureSharedD3dDevice()
+    {
+        lock (_sharedD3dLock)
+        {
+            if (_sharedD3dReady) return true;
+
+            uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+            IntPtr preferredAdapter = FindPreferredAdapter();
+            int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+            int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
+                deviceFlags, IntPtr.Zero, 0, 7,
+                out _sharedD3dDevice, out _, out _sharedD3dContext);
+            if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
+            if (hr < 0)
+            {
+                Log.Msg($"[WgcCapture] Shared D3D11CreateDevice failed hr=0x{hr:X8}");
+                return false;
+            }
+
+            var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
+            if (Marshal.QueryInterface(_sharedD3dDevice, ref mtGuid, out IntPtr mtPtr) >= 0)
+            {
+                unsafe
+                {
+                    var vtable = *(IntPtr**)mtPtr;
+                    var setProtFn = (delegate* unmanaged[Stdcall]<IntPtr, int, int*, int>)vtable[4];
+                    setProtFn(mtPtr, 1, null);
+                }
+                Marshal.Release(mtPtr);
+                Log.Msg("[WgcCapture] Shared D3D11 multithread protection enabled");
+            }
+
+            var dxgiGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+            hr = Marshal.QueryInterface(_sharedD3dDevice, ref dxgiGuid, out IntPtr dxgiDevice);
+            if (hr < 0 || dxgiDevice == IntPtr.Zero)
+            {
+                Log.Msg($"[WgcCapture] Shared IDXGIDevice QueryInterface failed hr=0x{hr:X8}");
+                return false;
+            }
+
+            hr = CallCreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out IntPtr inspectable);
+            Marshal.Release(dxgiDevice);
+            if (hr < 0 || inspectable == IntPtr.Zero)
+            {
+                Log.Msg($"[WgcCapture] Shared CreateDirect3D11DeviceFromDXGIDevice failed hr=0x{hr:X8}");
+                return false;
+            }
+
+            _sharedWinrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
+            Marshal.Release(inspectable);
+            _sharedD3dReady = true;
+            Log.Msg($"[WgcCapture] Shared D3D11 device ready 0x{_sharedD3dDevice:X}");
+            return true;
+        }
+    }
+
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame;
 
     private IntPtr _hwnd;
@@ -202,44 +281,10 @@ public sealed class WgcCapture : IDisposable
         _isDesktop = hwnd == IntPtr.Zero;
         try
         {
-            uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-
-            IntPtr preferredAdapter = FindPreferredAdapter();
-            int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
-            int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
-                deviceFlags, IntPtr.Zero, 0, 7,
-                out _d3dDevice, out _, out _d3dContext);
-            if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
-            if (hr < 0) { Log.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}"); return false; }
-
-            var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
-            if (Marshal.QueryInterface(_d3dDevice, ref mtGuid, out IntPtr mtPtr) >= 0)
-            {
-                unsafe
-                {
-                    var vtable = *(IntPtr**)mtPtr;
-                    var setProtFn = (delegate* unmanaged[Stdcall]<IntPtr, int, int*, int>)vtable[4];
-                    setProtFn(mtPtr, 1, null);
-                }
-                Marshal.Release(mtPtr);
-                Log.Msg("[WgcCapture] D3D11 multithread protection enabled");
-            }
-
-            Log.Msg("[WgcCapture] D3D11 device created");
-
-            var dxgiGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
-            Marshal.QueryInterface(_d3dDevice, ref dxgiGuid, out IntPtr dxgiDevice);
-
-            hr = CallCreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out IntPtr inspectable);
-            Marshal.Release(dxgiDevice);
-            if (hr < 0 || inspectable == IntPtr.Zero)
-            {
-                Log.Msg($"[WgcCapture] CreateDirect3D11DeviceFromDXGIDevice failed hr=0x{hr:X8}");
-                return false;
-            }
-
-            _winrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
-            Marshal.Release(inspectable);
+            if (!EnsureSharedD3dDevice()) return false;
+            _d3dDevice = _sharedD3dDevice;
+            _d3dContext = _sharedD3dContext;
+            _winrtDevice = _sharedWinrtDevice;
 
             if (hwnd == IntPtr.Zero)
             {
@@ -304,45 +349,60 @@ public sealed class WgcCapture : IDisposable
         return factory;
     }
 
+    private static bool EnsureCaptureInterop()
+    {
+        lock (_captureInteropLock)
+        {
+            if (_captureInterop != null) return true;
+
+            var interopGuid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+            var factoryPtr = GetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureItem", interopGuid);
+            if (factoryPtr == IntPtr.Zero)
+            {
+                Log.Msg("[WgcCapture] GraphicsCaptureItem activation factory unavailable");
+                return false;
+            }
+
+            _captureInterop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+            Marshal.Release(factoryPtr);
+            Log.Msg("[WgcCapture] GraphicsCaptureItem interop factory ready");
+            return true;
+        }
+    }
+
     private static GraphicsCaptureItem CreateItemForWindow(IntPtr hwnd)
     {
-        var interopGuid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
-        var factoryPtr = GetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureItem", interopGuid);
-        var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
-        Marshal.Release(factoryPtr);
-
+        if (!EnsureCaptureInterop()) return null;
         try
         {
             var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-            var ptr = interop.CreateForWindow(hwnd, ref itemGuid);
+            var ptr = _captureInterop.CreateForWindow(hwnd, ref itemGuid);
             var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
             Marshal.Release(ptr);
             return item;
         }
-        finally
+        catch (Exception ex)
         {
-            Marshal.FinalReleaseComObject(interop);
+            Log.Msg($"[WgcCapture] CreateForWindow failed: {ex.Message}");
+            return null;
         }
     }
 
     private static GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
     {
-        var interopGuid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
-        var factoryPtr = GetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureItem", interopGuid);
-        var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
-        Marshal.Release(factoryPtr);
-
+        if (!EnsureCaptureInterop()) return null;
         try
         {
             var itemGuid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-            var ptr = interop.CreateForMonitor(hmon, ref itemGuid);
+            var ptr = _captureInterop.CreateForMonitor(hmon, ref itemGuid);
             var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(ptr);
             Marshal.Release(ptr);
             return item;
         }
-        finally
+        catch (Exception ex)
         {
-            Marshal.FinalReleaseComObject(interop);
+            Log.Msg($"[WgcCapture] CreateForMonitor failed: {ex.Message}");
+            return null;
         }
     }
 
@@ -422,11 +482,11 @@ public sealed class WgcCapture : IDisposable
 
     private readonly object _disposeLock = new();
 
-    public object D3dContextLock => _disposeLock;
+    public object D3dContextLock => _sharedD3dLock;
 
     public unsafe void FlushD3dContext()
     {
-        lock (_disposeLock)
+        lock (_sharedD3dLock)
         {
             if (_disposed || _d3dContext == IntPtr.Zero) return;
             try
@@ -455,7 +515,7 @@ public sealed class WgcCapture : IDisposable
 
         // Do not explicitly dispose CsWinRT capture wrappers here. The crash evidence
         // points at WinRT.IObjectReference finalizers, so let the projection release
-        // its wrappers during the controlled GC in Dispose while the raw D3D refs live.
+        // its wrappers naturally while the raw D3D refs remain alive.
         _session = null;
         _framePool = null;
         _itemClosedHandler = null;
@@ -487,35 +547,8 @@ public sealed class WgcCapture : IDisposable
         OnGpuFrame = null;
 
         _winrtDevice = null;
-        Log.Msg($"[WgcCapture:Dispose] Finalizing WinRT wrappers before D3D release");
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-
-        if (_d3dContext != IntPtr.Zero) { Marshal.Release(_d3dContext); _d3dContext = IntPtr.Zero; }
-        if (_d3dDevice != IntPtr.Zero) { Marshal.Release(_d3dDevice); _d3dDevice = IntPtr.Zero; }
-        Log.Msg($"[WgcCapture:Dispose] D3D device released");
-
-        SchedulePostReleaseGcProbe(_hwnd);
-    }
-
-    private static void SchedulePostReleaseGcProbe(IntPtr hwnd)
-    {
-        Log.Msg($"[WgcCapture:Dispose] Scheduling delayed post-release GC probe hwnd={hwnd}");
-        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-        {
-            try
-            {
-                System.Threading.Thread.Sleep(2000);
-                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe starting hwnd={hwnd}");
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe finished hwnd={hwnd}");
-            }
-            catch (Exception ex)
-            {
-                Log.Msg($"[WgcCapture:Dispose] Delayed post-release GC probe managed error hwnd={hwnd}: {ex}");
-            }
-        });
+        _d3dDevice = IntPtr.Zero;
+        _d3dContext = IntPtr.Zero;
+        Log.Msg($"[WgcCapture:Dispose] Detached from shared D3D device hwnd={_hwnd}");
     }
 }

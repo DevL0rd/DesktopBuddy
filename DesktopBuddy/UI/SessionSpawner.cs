@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using Renderite.Shared;
 using FrooxEngine;
 using SkyFrost.Base;
@@ -14,6 +16,9 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
+    private static readonly ConcurrentDictionary<string, Uri> _largeIconCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, Task<Uri>> _largeIconTasks = new(StringComparer.OrdinalIgnoreCase);
+
     internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
     {
         try
@@ -844,46 +849,39 @@ public partial class DesktopBuddyMod
             {
                 try
                 {
-                    var iconData = WindowIconExtractor.GetLargeIconRGBA(hwnd, out int iw, out int ih, 128);
-                    if (iconData != null && iw > 0 && ih > 0)
+                    backUi.Style.MinHeight = iconSize;
+                    backUi.Style.PreferredHeight = iconSize;
+                    backUi.Style.FlexibleHeight = -1f;
+
+                    var iconTex = backSlot.AttachComponent<StaticTexture2D>();
+                    var iconMat = backSlot.AttachComponent<UI_UnlitMaterial>();
+                    iconMat.Texture.Target = iconTex;
+                    iconMat.OffsetFactor.Value = -1f;
+                    var iconImg = backUi.RawImage(iconTex);
+                    iconImg.PreserveAspect.Value = true;
+                    iconImg.Material.Target = iconMat;
+
+                    var capturedHwnd = hwnd;
+                    var capturedRoot = root;
+                    var capturedTex = iconTex;
+                    Task.Run(async () =>
                     {
-                        backUi.Style.MinHeight = iconSize;
-                        backUi.Style.PreferredHeight = iconSize;
-                        backUi.Style.FlexibleHeight = -1f;
-
-                        var iconTex = backSlot.AttachComponent<StaticTexture2D>();
-                        var iconMat = backSlot.AttachComponent<UI_UnlitMaterial>();
-                        iconMat.Texture.Target = iconTex;
-                        iconMat.OffsetFactor.Value = -1f;
-                        var iconImg = backUi.RawImage(iconTex);
-                        iconImg.PreserveAspect.Value = true;
-                        iconImg.Material.Target = iconMat;
-
-                        var capturedIconData = iconData;
-                        var capturedIw = iw;
-                        var capturedIh = ih;
-                        var capturedTex = iconTex;
-                        System.Threading.Tasks.Task.Run(async () =>
+                        try
                         {
-                            try
+                            var uri = await GetLargeIconUriAsync(capturedRoot.Engine, capturedHwnd).ConfigureAwait(false);
+                            if (uri != null && !capturedTex.IsDestroyed)
                             {
-                                var bitmap = new Bitmap2D(capturedIconData, capturedIw, capturedIh,
-                                    TextureFormat.RGBA32, false, ColorProfile.sRGB, false);
-                                var uri = await root.Engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
-                                if (uri != null)
+                                capturedTex.World.RunInUpdates(0, () =>
                                 {
-                                    capturedTex.World.RunInUpdates(0, () =>
-                                    {
-                                        if (!capturedTex.IsDestroyed)
-                                            capturedTex.URL.Value = uri;
-                                    });
-                                }
+                                    if (!capturedTex.IsDestroyed)
+                                        capturedTex.URL.Value = uri;
+                                });
                             }
-                            catch (Exception ex) { Msg($"[BackPanel] Icon save error: {ex.Message}"); }
-                        });
-                        backUi.Style.FlexibleHeight = 1f;
-                        Msg("[BackPanel] Icon added");
-                    }
+                        }
+                        catch (Exception ex) { Msg($"[BackPanel] Icon load/save error: {ex.Message}"); }
+                    });
+                    backUi.Style.FlexibleHeight = 1f;
+                    Msg("[BackPanel] Icon placeholder added");
                 }
                 catch (Exception ex) { Msg($"[BackPanel] Icon error: {ex.Message}"); }
             }
@@ -940,7 +938,8 @@ public partial class DesktopBuddyMod
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        if (useMediaMtx || (StreamServer != null && TunnelUrl != null))
+        bool allowRemoteStream = !isChild && (useMediaMtx || (StreamServer != null && TunnelUrl != null));
+        if (allowRemoteStream)
         {
             try
             {
@@ -1088,7 +1087,10 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            if (isChild)
+                Msg("[RemoteStream] Skipped for child popup; local panel only");
+            else
+                Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();
@@ -1250,6 +1252,48 @@ public partial class DesktopBuddyMod
         Msg($"[StartStreaming] Window focused, streaming started for: {title}");
     }
 
+    private static Task<Uri> GetLargeIconUriAsync(Engine engine, IntPtr hwnd)
+    {
+        string exePath = WindowIconExtractor.GetExecutablePath(hwnd);
+        string cacheKey = !string.IsNullOrEmpty(exePath)
+            ? exePath
+            : $"hwnd:{hwnd.ToInt64():X}";
+
+        if (_largeIconCache.TryGetValue(cacheKey, out var cached))
+        {
+            Msg($"[BackPanel] Using cached high-res icon for {cacheKey}");
+            return Task.FromResult(cached);
+        }
+
+        return _largeIconTasks.GetOrAdd(cacheKey, key => Task.Run(async () =>
+        {
+            try
+            {
+                var iconData = WindowIconExtractor.GetLargeIconRGBA(hwnd, out int iw, out int ih, 128);
+                if (iconData == null || iw <= 0 || ih <= 0) return null;
+
+                var bitmap = new Bitmap2D(iconData, iw, ih,
+                    TextureFormat.RGBA32, false, ColorProfile.sRGB, false);
+                var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
+                if (uri != null)
+                {
+                    _largeIconCache[cacheKey] = uri;
+                    Msg($"[BackPanel] Cached high-res icon for {cacheKey}: {uri}");
+                }
+                return uri;
+            }
+            catch (Exception ex)
+            {
+                Msg($"[BackPanel] High-res icon cache error for {cacheKey}: {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                _largeIconTasks.TryRemove(cacheKey, out var ignoredTask);
+            }
+        }));
+    }
+
     private static void SpawnChildWindow(DesktopSession parentSession, IntPtr childHwnd, string childTitle = null)
     {
         if (!WindowEnumerator.TryGetWindowRect(parentSession.Hwnd, out int px, out int py, out int pw, out int ph))
@@ -1262,13 +1306,6 @@ public partial class DesktopBuddyMod
             Msg($"[ChildWindow] Failed to get child window rect hwnd={childHwnd}");
             return;
         }
-        if (cw < MinChildCaptureWidth || ch < MinChildCaptureHeight)
-        {
-            Msg($"[ChildWindow] Ignoring tiny popup before spawn: hwnd={childHwnd} title='{childTitle}' size={cw}x{ch}");
-            parentSession.TrackedChildHwnds.Add(childHwnd);
-            return;
-        }
-
         string title = childTitle;
         if (string.IsNullOrEmpty(title)) title = $"Popup ({childHwnd})";
 
@@ -1298,7 +1335,7 @@ public partial class DesktopBuddyMod
 
         var root = parentSession.Root.AddSlot($"Popup: {title}");
         root.LocalPosition = new float3(offsetX, offsetY, offsetZ);
-        Msg($"[ChildWindow] Spawning full DesktopBuddy for hwnd={childHwnd} title='{title}' size={cw}x{ch} offset=({offsetX:F4},{offsetY:F4})");
+        Msg($"[ChildWindow] Spawning local-only popup for hwnd={childHwnd} title='{title}' size={cw}x{ch} offset=({offsetX:F4},{offsetY:F4})");
 
         parentSession.TrackedChildHwnds.Add(childHwnd);
 

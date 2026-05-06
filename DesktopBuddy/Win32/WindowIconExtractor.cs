@@ -124,6 +124,37 @@ public static class WindowIconExtractor
         return ExtractIconPixels(hIcon, out width, out height, destroyIcon: false);
     }
 
+    public static string GetExecutablePath(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return null;
+
+        try
+        {
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0) return null;
+
+            IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (hProc == IntPtr.Zero) return null;
+
+            try
+            {
+                var sb = new StringBuilder(1024);
+                uint size = (uint)sb.Capacity;
+                bool ok = QueryFullProcessImageNameW(hProc, 0, sb, ref size);
+                return ok && size > 0 ? sb.ToString() : null;
+            }
+            finally
+            {
+                CloseHandle(hProc);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Msg($"[IconExtractor] Executable path error: {ex.Message}");
+            return null;
+        }
+    }
+
     public static byte[] GetLargeIconRGBA(IntPtr hwnd, out int width, out int height, int requestedSize = 128)
     {
         width = height = 0;
@@ -131,20 +162,8 @@ public static class WindowIconExtractor
 
         try
         {
-            GetWindowThreadProcessId(hwnd, out uint pid);
-            if (pid == 0) return GetIconRGBA(hwnd, out width, out height);
-
-            IntPtr hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-            if (hProc == IntPtr.Zero) return GetIconRGBA(hwnd, out width, out height);
-
-            var sb = new StringBuilder(1024);
-            uint size = (uint)sb.Capacity;
-            bool ok = QueryFullProcessImageNameW(hProc, 0, sb, ref size);
-            CloseHandle(hProc);
-
-            if (!ok || size == 0) return GetIconRGBA(hwnd, out width, out height);
-
-            string exePath = sb.ToString();
+            string exePath = GetExecutablePath(hwnd);
+            if (string.IsNullOrEmpty(exePath)) return GetIconRGBA(hwnd, out width, out height);
             Log.Msg($"[IconExtractor] Exe path for hwnd={hwnd}: {exePath}");
 
             var icons = new IntPtr[1];
