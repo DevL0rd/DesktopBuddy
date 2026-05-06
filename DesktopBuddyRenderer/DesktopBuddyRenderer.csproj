@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
-    <LangVersion>9.0</LangVersion>
+    <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
   </PropertyGroup>
@@ -18,6 +18,7 @@
 
   <!-- BepInEx 5.x + Harmony (reference-only) -->
   <ItemGroup>
+    <PackageReference Include="System.Memory" Version="4.6.3" />
     <Reference Include="BepInEx">
       <HintPath>$(LibPath)\BepInEx.dll</HintPath>
       <Private>false</Private>
@@ -74,6 +75,8 @@
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
     <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
+    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
+    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
 
   <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->

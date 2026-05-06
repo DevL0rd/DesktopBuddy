@@ -14,8 +14,10 @@ A Resonite mod that spawns world-space desktop/window viewers with touch input, 
 1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) and [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download the latest `DesktopBuddy-Alpha-*.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases).
 3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+4. For a first-time install, run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
 5. Launch Resonite and open the context menu, then **Desktop**.
+
+If you already had DesktopBuddy installed and working, you do **not** need to run the setup script again after extracting an update. Run it again only if dependencies are missing, the renderer setup was removed, or you are repairing the install.
 
 The zip is already structured for the Resonite root. There is no DesktopBuddy Manager anymore.
 
@@ -30,7 +32,7 @@ The zip is already structured for the Resonite root. There is no DesktopBuddy Ma
 - Installs required renderer dependencies: RenderiteHook and BepInEx.Renderer
 - Checks that `DesktopBuddyRenderer.dll` is in the renderer plugin folder
 
-Run it again after updates if any of those dependencies are missing or out of place. A reboot may be required after VB-Cable installation.
+You do not need to run this script again for normal DesktopBuddy updates if the previous install was already working. Run it again only if any of those dependencies are missing or out of place. A reboot may be required after VB-Cable installation.
 
 ## Troubleshooting
 
@@ -151,12 +153,38 @@ DesktopBuddy-Alpha-*.zip
     driver files
 ```
 
-## Third-Party Components
+## Credits
 
-- [SoftCam](https://github.com/tshino/softcam) - MIT license - virtual camera DirectShow filter
-- [VB-Cable](https://vb-audio.com/Cable/) - donationware by VB-Audio - virtual audio cable driver
-- [FFmpeg](https://ffmpeg.org/) - LGPL - media encoding libraries
-- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) - network tunneling
+Special thanks to the projects and libraries DesktopBuddy builds on.
+
+### Bundled or Packaged
+
+| Project | What DesktopBuddy uses it for |
+| --- | --- |
+| [ResoniteInterprocessLib](https://github.com/Nytra/ResoniteInterprocessLib) | Shared-source IPC between the Resonite mod and renderer plugin |
+| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `rml_libs` |
+| [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg |
+| [SoftCam](https://github.com/tshino/softcam) | DirectShow virtual camera filter |
+| [cloudflared](https://github.com/cloudflare/cloudflared) | Cloudflare Tunnel executable for remote stream access |
+
+### Installed by Setup
+
+| Project | What DesktopBuddy uses it for |
+| --- | --- |
+| [RenderiteHook](https://github.com/ResoniteModding/RenderiteHook) | Renderer-side hook support |
+| [BepInEx.Renderer](https://github.com/ResoniteModding/BepInEx.Renderer) | BepInEx loader for the Resonite renderer |
+| [VB-Cable](https://vb-audio.com/Cable/) | Virtual microphone driver; no public source repository is provided by VB-Audio |
+
+### Build and Runtime References
+
+| Project | What DesktopBuddy uses it for |
+| --- | --- |
+| [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader) | Game-side mod loading |
+| [Harmony](https://github.com/pardeike/Harmony) | Runtime patching |
+| [BepInEx](https://github.com/BepInEx/BepInEx) | Renderer plugin runtime |
+| [uWindowCapture](https://github.com/hecomi/uWindowCapture) | Renderer-side Windows capture plugin |
+| [ILRepack](https://github.com/gluck/il-repack) | Merging packaged game-side dependencies |
+| [CsWinRT](https://github.com/microsoft/CsWinRT) | Windows Runtime interop support used by Windows.Graphics.Capture |
 
 ## Contributing
 

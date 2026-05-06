@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO.MemoryMappedFiles;
 using BepInEx.Logging;
 using DesktopBuddy.Shared;
+using InterprocessLib;
 using UnityEngine;
 
 namespace DesktopBuddyRenderer
@@ -10,20 +11,17 @@ namespace DesktopBuddyRenderer
     internal sealed class CaptureSessionManager : IDisposable
     {
         private readonly ManualLogSource _log;
-        private readonly string _queuePrefix;
-
-        private MemoryMappedFile _mmf;
-        private MemoryMappedViewAccessor _accessor;
-        private float _pollTimer;
-        private const float PollInterval = 0.1f;
+        private readonly ConcurrentQueue<Action> _mainThreadActions = new ConcurrentQueue<Action>();
+        private Messenger _messenger;
+        private float _connectRetryTimer;
+        private const float ConnectRetryInterval = 1f;
 
         private readonly Dictionary<int, UwcDisplaySource> _activeSources = new Dictionary<int, UwcDisplaySource>();
         private static readonly Dictionary<int, UwcDisplaySource> _indexToSource = new Dictionary<int, UwcDisplaySource>();
         private readonly List<(int slot, UwcDisplaySource source)> _pendingBinds = new List<(int, UwcDisplaySource)>();
 
-        internal CaptureSessionManager(string queuePrefix, ManualLogSource log)
+        internal CaptureSessionManager(ManualLogSource log)
         {
-            _queuePrefix = queuePrefix;
             _log = log;
         }
 
@@ -35,6 +33,14 @@ namespace DesktopBuddyRenderer
 
         internal void Update()
         {
+            TryEnsureMessenger();
+
+            while (_mainThreadActions.TryDequeue(out var action))
+            {
+                try { action(); }
+                catch (Exception ex) { _log.LogError($"IPC action failed: {ex}"); }
+            }
+
             foreach (var kv in _activeSources)
                 kv.Value.Tick();
 
@@ -46,49 +52,52 @@ namespace DesktopBuddyRenderer
                 WriteRunning(slot, source);
                 _log.LogInfo($"[PendingBind] Slot {slot} bound: {source.Width}x{source.Height}");
             }
-
-            _pollTimer += Time.unscaledDeltaTime;
-            if (_pollTimer < PollInterval) return;
-            _pollTimer = 0f;
-
-            if (!TryOpenMmf()) return;
-
-            for (int i = 0; i < CaptureSessionProtocol.MaxSessions; i++)
-                PollSlot(i);
         }
 
-        private bool TryOpenMmf()
+        private void TryEnsureMessenger()
         {
-            if (_mmf != null) return true;
+            if (_messenger != null) return;
+
+            _connectRetryTimer += Time.unscaledDeltaTime;
+            if (_connectRetryTimer < ConnectRetryInterval) return;
+            _connectRetryTimer = 0f;
+
             try
             {
-                var mmfName = CaptureSessionProtocol.GetMmfName(_queuePrefix + "Primary");
-                _mmf = MemoryMappedFile.OpenExisting(mmfName);
-                _accessor = _mmf.CreateViewAccessor(0, CaptureSessionProtocol.TotalSize, MemoryMappedFileAccess.ReadWrite);
-                _log.LogInfo($"Opened MMF: {mmfName}");
-                return true;
+                Messenger.OnWarning += OnWarning;
+                Messenger.OnFailure += OnFailure;
+
+                _messenger = new Messenger(
+                    CaptureSessionProtocol.OwnerId,
+                    false,
+                    CaptureSessionProtocol.QueueName,
+                    SimpleMemoryPackerPool.Instance);
+
+                _messenger.ReceiveObject<CaptureStartMessage>(
+                    CaptureSessionProtocol.StartMessageId,
+                    msg => _mainThreadActions.Enqueue(() => StartCapture(msg.SessionId, msg.Hwnd, msg.MonitorHandle)));
+
+                _messenger.ReceiveObject<CaptureStopMessage>(
+                    CaptureSessionProtocol.StopMessageId,
+                    msg => _mainThreadActions.Enqueue(() => StopCapture(msg.SessionId)));
+
+                _log.LogInfo($"Opened InterprocessLib queue: {CaptureSessionProtocol.QueueName}");
             }
-            catch (System.IO.FileNotFoundException)
+            catch (Exception ex)
             {
-                return false;
+                Messenger.OnWarning -= OnWarning;
+                Messenger.OnFailure -= OnFailure;
+                _messenger?.Dispose();
+                _messenger = null;
+                _log.LogDebug($"InterprocessLib queue not ready: {ex.Message}");
             }
         }
 
-        private void PollSlot(int slot)
+        private void StartCapture(int slot, long hwndRaw, long monitorRaw)
         {
-            int offset = slot * CaptureSessionProtocol.SessionSize;
-            int status = _accessor.ReadInt32(offset + CaptureSessionProtocol.OffsetStatus);
+            if (_activeSources.ContainsKey(slot))
+                StopCapture(slot);
 
-            if (status == CaptureSessionProtocol.StatusStart && !_activeSources.ContainsKey(slot))
-                StartCapture(slot, offset);
-            else if (status == CaptureSessionProtocol.StatusStop && _activeSources.ContainsKey(slot))
-                StopCapture(slot, offset);
-        }
-
-        private void StartCapture(int slot, int offset)
-        {
-            long hwndRaw = _accessor.ReadInt64(offset + CaptureSessionProtocol.OffsetHwnd);
-            long monitorRaw = _accessor.ReadInt64(offset + CaptureSessionProtocol.OffsetMonitor);
             var hwnd = new IntPtr(hwndRaw);
 
             _log.LogInfo($"Starting capture slot={slot} hwnd=0x{hwndRaw:X} monitor=0x{monitorRaw:X}");
@@ -103,23 +112,44 @@ namespace DesktopBuddyRenderer
                 _pendingBinds.Add((slot, source));
         }
 
-        private void StopCapture(int slot, int offset)
+        private void StopCapture(int slot)
         {
+            if (!_activeSources.ContainsKey(slot)) return;
+
             _log.LogInfo($"Stopping capture slot={slot}");
             _indexToSource.Remove(CaptureSessionProtocol.MagicIndexBase + slot);
             _activeSources[slot].Dispose();
             _activeSources.Remove(slot);
             _pendingBinds.RemoveAll(p => p.slot == slot);
-            _accessor.Write(offset + CaptureSessionProtocol.OffsetStatus, CaptureSessionProtocol.StatusIdle);
         }
 
         private void WriteRunning(int slot, UwcDisplaySource source)
         {
-            int offset = slot * CaptureSessionProtocol.SessionSize;
-            _accessor.Write(offset + CaptureSessionProtocol.OffsetStatus, CaptureSessionProtocol.StatusRunning);
-            _accessor.Write(offset + CaptureSessionProtocol.OffsetWidth, source.Width);
-            _accessor.Write(offset + CaptureSessionProtocol.OffsetHeight, source.Height);
+            try
+            {
+                _messenger?.SendObject(CaptureSessionProtocol.RunningMessageId, new CaptureRunningMessage
+                {
+                    SessionId = slot,
+                    Width = source.Width,
+                    Height = source.Height
+                });
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning($"Failed to send running ack for slot {slot}: {ex.Message}");
+            }
+
             _log.LogInfo($"Capture slot={slot} running: {source.Width}x{source.Height}");
+        }
+
+        private void OnWarning(string message)
+        {
+            _log.LogWarning($"[InterprocessLib] {message}");
+        }
+
+        private void OnFailure(Exception ex)
+        {
+            _log.LogError($"[InterprocessLib] {ex}");
         }
 
         public void Dispose()
@@ -129,8 +159,10 @@ namespace DesktopBuddyRenderer
             _activeSources.Clear();
             _indexToSource.Clear();
             _pendingBinds.Clear();
-            _accessor?.Dispose();
-            _mmf?.Dispose();
+            _messenger?.Dispose();
+            _messenger = null;
+            Messenger.OnWarning -= OnWarning;
+            Messenger.OnFailure -= OnFailure;
         }
     }
 }

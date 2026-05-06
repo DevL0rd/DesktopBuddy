@@ -97,6 +97,8 @@
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
     <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
+    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
+    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
 
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->

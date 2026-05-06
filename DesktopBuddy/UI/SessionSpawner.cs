@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using DesktopBuddy.Shared;
 using Renderite.Shared;
 using FrooxEngine;
 using SkyFrost.Base;

@@ -1,33 +1,90 @@
 using System;
+using InterprocessLib;
+using Renderite.Shared;
 
 namespace DesktopBuddy.Shared
 {
     internal static class CaptureSessionProtocol
     {
-        public const int SessionSize = 32;
+        public const string OwnerId = "DesktopBuddy.Capture";
+        public const string QueueName = "DesktopBuddy.Capture";
+        public const string StartMessageId = "Start";
+        public const string StopMessageId = "Stop";
+        public const string RunningMessageId = "Running";
+
         public const int MaxSessions = 4096;
-        public const int TotalSize = SessionSize * MaxSessions;
-
-        public const int OffsetSessionId = 0;
-        public const int OffsetHwnd = 4;
-        public const int OffsetMonitor = 12;
-        public const int OffsetStatus = 20;
-        public const int OffsetWidth = 24;
-        public const int OffsetHeight = 28;
-
-        public const int StatusIdle = 0;
-        public const int StatusStart = 1;
-        public const int StatusRunning = 2;
-        public const int StatusStop = 3;
-
         public const int MagicIndexBase = 10000;
+    }
 
-        public static string GetMmfName(string queueName)
+    internal sealed class SimpleMemoryPackerPool : IMemoryPackerEntityPool
+    {
+        public static readonly SimpleMemoryPackerPool Instance = new();
+
+        private SimpleMemoryPackerPool()
         {
-            var prefix = queueName;
-            if (prefix.EndsWith("Primary", StringComparison.OrdinalIgnoreCase))
-                prefix = prefix.Substring(0, prefix.Length - 7);
-            return prefix + "DesktopBuddy_Cap";
+        }
+
+        T IMemoryPackerEntityPool.Borrow<T>() => new T();
+
+        void IMemoryPackerEntityPool.Return<T>(T value)
+        {
+        }
+    }
+
+    internal sealed class CaptureStartMessage : IMemoryPackable
+    {
+        public int SessionId;
+        public long Hwnd;
+        public long MonitorHandle;
+
+        public void Pack(ref MemoryPacker packer)
+        {
+            packer.Write(SessionId);
+            packer.Write(Hwnd);
+            packer.Write(MonitorHandle);
+        }
+
+        public void Unpack(ref MemoryUnpacker unpacker)
+        {
+            unpacker.Read(ref SessionId);
+            unpacker.Read(ref Hwnd);
+            unpacker.Read(ref MonitorHandle);
+        }
+    }
+
+    internal sealed class CaptureStopMessage : IMemoryPackable
+    {
+        public int SessionId;
+
+        public void Pack(ref MemoryPacker packer)
+        {
+            packer.Write(SessionId);
+        }
+
+        public void Unpack(ref MemoryUnpacker unpacker)
+        {
+            unpacker.Read(ref SessionId);
+        }
+    }
+
+    internal sealed class CaptureRunningMessage : IMemoryPackable
+    {
+        public int SessionId;
+        public int Width;
+        public int Height;
+
+        public void Pack(ref MemoryPacker packer)
+        {
+            packer.Write(SessionId);
+            packer.Write(Width);
+            packer.Write(Height);
+        }
+
+        public void Unpack(ref MemoryUnpacker unpacker)
+        {
+            unpacker.Read(ref SessionId);
+            unpacker.Read(ref Width);
+            unpacker.Read(ref Height);
         }
     }
 }

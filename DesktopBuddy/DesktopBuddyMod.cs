@@ -218,7 +218,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         Msg("DesktopBuddy initialized!");
 
-        System.Threading.Tasks.Task.Run(OpenCaptureChannelRetryLoop);
+        OpenCaptureChannel();
     }
 
     private static void PrewarmSharedResources()
@@ -245,56 +245,16 @@ public partial class DesktopBuddyMod : ResoniteMod
         catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }
     }
 
-    private static void OpenCaptureChannelRetryLoop()
-    {
-        for (int attempt = 1; attempt <= 30 && !_captureChannelOpened; attempt++)
-        {
-            try
-            {
-                OpenCaptureChannel();
-                if (_captureChannelOpened) return;
-            }
-            catch (Exception ex)
-            {
-                Msg($"[CaptureChannel] Retry {attempt} failed: {ex.Message}");
-            }
-
-            Thread.Sleep(1000);
-        }
-
-        if (!_captureChannelOpened)
-            Msg("[CaptureChannel] Startup open retry window expired");
-    }
-
     private static void OpenCaptureChannel()
     {
         if (_captureChannelOpened) return;
 
         try
         {
-            var engine = FrooxEngine.Engine.Current;
-            if (engine == null) { Msg("[CaptureChannel] Engine.Current is null"); return; }
-
-            var renderSystem = engine.RenderSystem;
-            if (renderSystem == null) { Msg("[CaptureChannel] RenderSystem is null"); return; }
-
-            var hostField = renderSystem.GetType().GetField("_messagingHost",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (hostField == null) { Msg("[CaptureChannel] _messagingHost field not found"); return; }
-
-            var host = hostField.GetValue(renderSystem);
-            if (host == null) { Msg("[CaptureChannel] _messagingHost is null (renderer not started?)"); return; }
-
-            var queueNameProp = host.GetType().GetProperty("QueueName");
-            if (queueNameProp == null) { Msg("[CaptureChannel] QueueName property not found"); return; }
-
-            var queueName = (string)queueNameProp.GetValue(host);
-            if (string.IsNullOrEmpty(queueName)) { Msg("[CaptureChannel] QueueName is empty"); return; }
-
             CaptureChannel = new CaptureSessionChannel();
-            CaptureChannel.Open(queueName);
+            CaptureChannel.Open(null);
             _captureChannelOpened = true;
-            Msg($"[CaptureChannel] Opened successfully (queueName={queueName})");
+            Msg("[CaptureChannel] Opened successfully");
         }
         catch (Exception ex)
         {
