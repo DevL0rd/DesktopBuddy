@@ -431,7 +431,7 @@ public partial class DesktopBuddyMod
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
 
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = 4f * 30f + 6f * 6f + 13f + 30f + 100f;
+        float expandContentW = 4f * 30f + 7f * 6f + 14f + 30f + 100f;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         void StyleButton(Button btn)
@@ -463,13 +463,7 @@ public partial class DesktopBuddyMod
             }
         }
 
-        DesktopBuddyButtonActions AttachSharedAction(Button btn, DesktopBuddyButtonAction action)
-        {
-            var actions = btn.Slot.AttachComponent<DesktopBuddyButtonActions>();
-            actions.ConfigureAction(action);
-            btn.SendSlotEvents.Value = true;
-            return actions;
-        }
+        FrooxEngine.User PressingUser(ButtonEventData data) => data.source?.Slot?.ActiveUser ?? root.World.LocalUser;
 
         barUi.Style.MinWidth = 36f;
         barUi.Style.PreferredWidth = 36f;
@@ -506,6 +500,14 @@ public partial class DesktopBuddyMod
         epLayout.ForceExpandWidth.Value = false;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
+
+        ep.Style.MinWidth = 1f;
+        ep.Style.PreferredWidth = 1f;
+        ep.Style.MinHeight = 32f;
+        ep.Style.PreferredHeight = 32f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = -1f;
+        ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
 
         ep.Style.MinWidth = 30f;
         ep.Style.PreferredWidth = 30f;
@@ -564,17 +566,62 @@ public partial class DesktopBuddyMod
         float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
         widthField.Value.Value = barCollapsedW;
         widthSmooth.TargetValue.Value = barCollapsedW;
-        var toggleActions = AttachSharedAction(toggleBtn, DesktopBuddyButtonAction.ToggleBar);
-        toggleActions.ConfigureBar(root, barSlot, barBackSlot, barCanvas, barBackCanvas, widthField, widthSmooth,
-            canvasScale, worldHalfW, barYPos, barH, barCollapsedW, barExpandedW, expandPanel);
+        float currentBarWidth = barCollapsedW;
+        bool barExpanded = false;
 
-        barCanvas.Size.Value = new float2(barCollapsedW, barH);
-        barBackCanvas.Size.Value = new float2(barCollapsedW, barH);
-        barSlot.LocalPosition = new float3(
-            -worldHalfW + barCollapsedW / 2f * canvasScale,
-            barYPos, 0f);
-        barBackSlot.LocalPosition = barSlot.LocalPosition + new float3(0f, 0f, 0.001f);
-        root.World.RunInUpdates(1, toggleActions.BarUpdateLoop);
+        void ApplyBarLayout(float width)
+        {
+            if (barCanvas != null && !barCanvas.IsDestroyed)
+                barCanvas.Size.Value = new float2(width, barH);
+
+            var position = new float3(
+                -worldHalfW + width / 2f * canvasScale,
+                barYPos,
+                0f);
+
+            if (barSlot != null && !barSlot.IsDestroyed)
+                barSlot.LocalPosition = position;
+
+            if (barBackCanvas != null && !barBackCanvas.IsDestroyed)
+                barBackCanvas.Size.Value = new float2(width, barH);
+
+            if (barBackSlot != null && !barBackSlot.IsDestroyed)
+                barBackSlot.LocalPosition = position + new float3(0f, 0f, 0.001f);
+        }
+
+        void BarUpdateLoop()
+        {
+            if (root == null || root.IsDestroyed ||
+                barSlot == null || barSlot.IsDestroyed ||
+                barCanvas == null || barCanvas.IsDestroyed ||
+                widthField == null || widthField.IsDestroyed ||
+                widthSmooth == null || widthSmooth.IsDestroyed)
+                return;
+
+            float width = widthField.Value.Value;
+            if (width != currentBarWidth)
+            {
+                currentBarWidth = width;
+                ApplyBarLayout(width);
+            }
+
+            float target = widthSmooth.TargetValue.Value;
+            if (Math.Abs(width - target) > 0.5f)
+                root.World.RunInUpdates(1, BarUpdateLoop);
+        }
+
+        toggleBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            if (root == null || root.IsDestroyed || widthSmooth == null || widthSmooth.IsDestroyed) return;
+            barExpanded = !barExpanded;
+            if (expandPanel != null && !expandPanel.IsDestroyed)
+                expandPanel.ActiveSelf = barExpanded;
+            widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
+            root.World.RunInUpdates(1, BarUpdateLoop);
+        };
+
+        ApplyBarLayout(barCollapsedW);
+        root.World.RunInUpdates(1, BarUpdateLoop);
 
         Msg($"[TopBar] Created, user '{userName}'");
 
@@ -623,11 +670,63 @@ public partial class DesktopBuddyMod
 
         ValueUserOverride<bool> streamVisRef = null;
         VideoTextureProvider videoTexRef = null;
+        var previewUsers = new HashSet<FrooxEngine.User>();
 
-        var previewActions = AttachSharedAction(avatarButton, DesktopBuddyButtonAction.TogglePreview);
-        previewActions.ConfigurePreview(displaySlot);
+        avatarButton.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            if (displaySlot == null || displaySlot.IsDestroyed ||
+                streamVisRef == null || streamVisRef.IsDestroyed)
+            {
+                Msg("[Preview] No stream available");
+                return;
+            }
 
-        var resyncActions = AttachSharedAction(resyncBtn, DesktopBuddyButtonAction.ResyncStream);
+            var user = PressingUser(d);
+            if (user == null)
+            {
+                Msg("[Preview] No pressing user");
+                return;
+            }
+
+            bool streamPreview = !previewUsers.Contains(user);
+            if (streamPreview)
+                previewUsers.Add(user);
+            else
+                previewUsers.Remove(user);
+
+            streamVisRef.SetOverride(user, streamPreview);
+            if (user == root.World.LocalUser)
+            {
+                displaySlot.ActiveSelf = !streamPreview;
+                avatarImage.Tint.Value = streamPreview
+                    ? new colorX(1f, 0.05f, 0.03f, 1f)
+                    : colorX.White;
+            }
+
+            Msg($"[Preview] {user.UserName}: stream={streamPreview}, direct={!streamPreview}");
+        };
+
+        resyncBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            Msg("[Resync] Button pressed");
+            if (videoTexRef == null || videoTexRef.IsDestroyed)
+            {
+                Msg("[Resync] No stream available");
+                return;
+            }
+
+            var savedUrl = videoTexRef.URL.Value;
+            Msg($"[Resync] Forcing full reload: {savedUrl}");
+            videoTexRef.URL.Value = null;
+            root.World.RunInUpdates(10, () =>
+            {
+                if (videoTexRef != null && !videoTexRef.IsDestroyed)
+                {
+                    videoTexRef.URL.Value = savedUrl;
+                    Msg($"[Resync] URL restored: {savedUrl}");
+                }
+            });
+        };
 
         bool isAnchored = false;
         var anchorActiveColor = new colorX(0.2f, 0.45f, 0.25f, 1f);
@@ -1024,8 +1123,6 @@ public partial class DesktopBuddyMod
                 streamVis.CreateOverrideOnWrite.Value = false;
                 streamVis.SetOverride(root.World.LocalUser, false);
                 streamVisRef = streamVis;
-                previewActions.ConfigureStream(streamVis, videoTex);
-                resyncActions.ConfigureStream(streamVis, videoTex);
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
@@ -1191,7 +1288,7 @@ public partial class DesktopBuddyMod
             worldHalfW = newW / 2f * canvasScale;
             worldHalfH = newH / 2f * canvasScale;
             barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
-            toggleActions.UpdateLayout(worldHalfW, barYPos);
+            ApplyBarLayout(currentBarWidth);
 
             if (session.Collider != null && !session.Collider.IsDestroyed)
                 session.Collider.Size.Value = new float3(newW * canvasScale, newH * canvasScale, 0.001f);
@@ -1201,11 +1298,6 @@ public partial class DesktopBuddyMod
 
             if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
                 streamCanvasRef.Size.Value = new float2(newW, newH);
-
-            if (barSlot != null && !barSlot.IsDestroyed)
-                barSlot.LocalPosition = new float3(
-                    -worldHalfW + toggleActions.CurrentBarWidth / 2f * canvasScale,
-                    barYPos, 0f);
 
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
                 keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
