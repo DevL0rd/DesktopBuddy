@@ -1,40 +1,50 @@
 using System;
-using System.IO.MemoryMappedFiles;
+using System.Collections.Generic;
+using DesktopBuddy.Shared;
+using InterprocessLib;
 
 namespace DesktopBuddy;
 
 internal sealed class CaptureSessionChannel : IDisposable
 {
-    private MemoryMappedFile _mmf;
-    private MemoryMappedViewAccessor _accessor;
+    private Messenger _messenger;
+    private readonly HashSet<int> _usedSlots = new();
+    private readonly bool[] _running = new bool[CaptureSessionProtocol.MaxSessions];
+    private readonly int[] _widths = new int[CaptureSessionProtocol.MaxSessions];
+    private readonly int[] _heights = new int[CaptureSessionProtocol.MaxSessions];
     private bool _disposed;
 
-    internal bool IsOpen => _mmf != null;
+    internal bool IsOpen => _messenger != null && !_disposed;
 
     internal void Open(string queueName)
     {
-        if (_mmf != null) return;
+        if (_messenger != null) return;
 
-        var name = CaptureSessionProtocol.GetMmfName(queueName);
-        _mmf = MemoryMappedFile.CreateOrOpen(name, CaptureSessionProtocol.TotalSize);
-        _accessor = _mmf.CreateViewAccessor(0, CaptureSessionProtocol.TotalSize);
+        Messenger.OnWarning += OnWarning;
+        Messenger.OnFailure += OnFailure;
 
-        for (int i = 0; i < CaptureSessionProtocol.TotalSize; i++)
-            _accessor.Write(i, (byte)0);
+        _messenger = new Messenger(
+            CaptureSessionProtocol.OwnerId,
+            true,
+            CaptureSessionProtocol.QueueName,
+            SimpleMemoryPackerPool.Instance);
 
-        Log.Msg($"[CaptureSessionChannel] Opened MMF: {name}");
+        _messenger.ReceiveObject<CaptureRunningMessage>(
+            CaptureSessionProtocol.RunningMessageId,
+            OnRunning);
+
+        Log.Msg($"[CaptureSessionChannel] Opened InterprocessLib queue: {CaptureSessionProtocol.QueueName}");
     }
 
     internal int RegisterSession(IntPtr hwnd, IntPtr monitorHandle)
     {
-        if (_accessor == null)
+        if (_messenger == null)
             throw new InvalidOperationException("Channel not open");
 
         int slot = -1;
         for (int i = 0; i < CaptureSessionProtocol.MaxSessions; i++)
         {
-            int off = i * CaptureSessionProtocol.SessionSize;
-            if (_accessor.ReadInt32(off + CaptureSessionProtocol.OffsetStatus) == CaptureSessionProtocol.StatusIdle)
+            if (!_usedSlots.Contains(i))
             {
                 slot = i;
                 break;
@@ -47,11 +57,17 @@ internal sealed class CaptureSessionChannel : IDisposable
             return -1;
         }
 
-        int offset = slot * CaptureSessionProtocol.SessionSize;
-        _accessor.Write(offset + CaptureSessionProtocol.OffsetSessionId, slot);
-        _accessor.Write(offset + CaptureSessionProtocol.OffsetHwnd, hwnd.ToInt64());
-        _accessor.Write(offset + CaptureSessionProtocol.OffsetMonitor, monitorHandle.ToInt64());
-        _accessor.Write(offset + CaptureSessionProtocol.OffsetStatus, CaptureSessionProtocol.StatusStart);
+        _usedSlots.Add(slot);
+        _running[slot] = false;
+        _widths[slot] = 0;
+        _heights[slot] = 0;
+
+        _messenger.SendObject(CaptureSessionProtocol.StartMessageId, new CaptureStartMessage
+        {
+            SessionId = slot,
+            Hwnd = hwnd.ToInt64(),
+            MonitorHandle = monitorHandle.ToInt64()
+        });
 
         Log.Msg($"[CaptureSessionChannel] Registered session slot={slot} hwnd=0x{hwnd:X} monitor=0x{monitorHandle:X}");
         return slot;
@@ -59,17 +75,43 @@ internal sealed class CaptureSessionChannel : IDisposable
 
     internal void StopSession(int slot)
     {
-        if (_accessor == null || _disposed) return;
-        int offset = slot * CaptureSessionProtocol.SessionSize;
-        _accessor.Write(offset + CaptureSessionProtocol.OffsetStatus, CaptureSessionProtocol.StatusStop);
+        if (_messenger == null || _disposed || slot < 0 || slot >= CaptureSessionProtocol.MaxSessions) return;
+
+        if (_usedSlots.Remove(slot))
+        {
+            _messenger.SendObject(CaptureSessionProtocol.StopMessageId, new CaptureStopMessage { SessionId = slot });
+            _running[slot] = false;
+            _widths[slot] = 0;
+            _heights[slot] = 0;
+        }
+
         Log.Msg($"[CaptureSessionChannel] Stopped session slot={slot}");
     }
 
     internal bool IsSessionRunning(int slot)
     {
-        if (_accessor == null) return false;
-        int offset = slot * CaptureSessionProtocol.SessionSize;
-        return _accessor.ReadInt32(offset + CaptureSessionProtocol.OffsetStatus) == CaptureSessionProtocol.StatusRunning;
+        return slot >= 0 && slot < CaptureSessionProtocol.MaxSessions && _running[slot];
+    }
+
+    private void OnRunning(CaptureRunningMessage message)
+    {
+        int slot = message.SessionId;
+        if (slot < 0 || slot >= CaptureSessionProtocol.MaxSessions) return;
+
+        _running[slot] = true;
+        _widths[slot] = message.Width;
+        _heights[slot] = message.Height;
+        Log.Msg($"[CaptureSessionChannel] Session {slot} running: {message.Width}x{message.Height}");
+    }
+
+    private static void OnWarning(string message)
+    {
+        Log.Msg($"[InterprocessLib] WARN {message}");
+    }
+
+    private static void OnFailure(Exception ex)
+    {
+        Log.Msg($"[InterprocessLib] ERROR {ex}");
     }
 
     public void Dispose()
@@ -77,18 +119,20 @@ internal sealed class CaptureSessionChannel : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (_accessor != null)
+        if (_messenger != null)
         {
-            for (int i = 0; i < CaptureSessionProtocol.MaxSessions; i++)
+            foreach (var slot in _usedSlots)
             {
-                int offset = i * CaptureSessionProtocol.SessionSize;
-                int status = _accessor.ReadInt32(offset + CaptureSessionProtocol.OffsetStatus);
-                if (status == CaptureSessionProtocol.StatusStart || status == CaptureSessionProtocol.StatusRunning)
-                    _accessor.Write(offset + CaptureSessionProtocol.OffsetStatus, CaptureSessionProtocol.StatusStop);
+                try { _messenger.SendObject(CaptureSessionProtocol.StopMessageId, new CaptureStopMessage { SessionId = slot }); }
+                catch { }
             }
         }
 
-        _accessor?.Dispose();
-        _mmf?.Dispose();
+        _usedSlots.Clear();
+        _messenger?.Dispose();
+        _messenger = null;
+
+        Messenger.OnWarning -= OnWarning;
+        Messenger.OnFailure -= OnFailure;
     }
 }
