@@ -1,29 +1,38 @@
 # DesktopBuddy
 
-> **WARNING**
-> DesktopBuddy currently supports **Resonite Mod Loader only** on a **vanilla Resonite renderer install**.
-> The setup script installs DesktopBuddy's required renderer dependencies.
-> Other modloaders and unrelated renderer mods are not supported right now. This will be fixed soon.
-
-## How To Install Install
+## How To Install
 
 1. Install [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download `{{ZIP_NAME}}.zip` from the release.
 3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. For a first-time install, run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root. You may need to run this for future updates also even though already installed. I'll be sure to note it above if neccisary.
 5. Launch Resonite and open the context menu, then **Desktop**.
-
-If you already had DesktopBuddy installed and working, you do **not** need to run the setup script again after extracting an update. Run it again only if dependencies are missing, the renderer setup was removed, or you are repairing the install.
-
-The setup script installs/configures the required DesktopBuddy pieces:
-
-- SoftCam virtual camera registration
-- VB-Cable virtual microphone driver
-- VB-Cable loopback registry setting
-- HTTP URL ACL for the stream server on port `48080`
-- RenderiteHook and BepInEx.Renderer dependencies
-- DesktopBuddy renderer plugin presence check
 
 The virtual camera appears as **DesktopBuddy - Camera** and the virtual microphone as **CABLE Output** in Discord, Zoom, Chrome, OBS, and similar apps.
 
 See the [README](https://github.com/DevL0rd/DesktopBuddy#readme) for troubleshooting.
+
+
+> **WARNING**
+> DesktopBuddy currently supports **Resonite Mod Loader only** on a **vanilla Resonite renderer install**.
+> Other modloaders and unrelated renderer mods are not supported right now. This will be fixed soon.
+
+
+
+**USERS WITH EXISTING INSTALLATIONS**
+If you have a existing installation SPECIFICALLY before THIS update, remove old DesktopBuddy files if they exist.
+
+Delete these old renderer plugin files from your Resonite install:
+- Do **not** delete `DesktopBuddySharedTextureBridge.dll`; that is the new renderer-side bridge used by this release.
+- `<Resonite root>\Renderer\BepInEx\plugins\DesktopBuddyRenderer.dll`
+- `<Resonite root>\Renderer\BepInEx\plugins\DesktopBuddyRendererNative.dll`
+
+Delete these old native dependency files from `rml_libs` if they exist:
+
+- `<Resonite root>\rml_libs\avcodec-62.dll`
+- `<Resonite root>\rml_libs\avformat-62.dll`
+- `<Resonite root>\rml_libs\avutil-60.dll`
+- `<Resonite root>\rml_libs\swresample-6.dll`
+- `<Resonite root>\rml_libs\softcam.dll`
+- `<Resonite root>\rml_libs\softcam64.dll`
+- `<Resonite root>\rml_libs\cloudflared.exe`

@@ -81,7 +81,7 @@ function Test-SoftCamRegistered {
         return $true
     }
 
-    $expected = Join-Path $Path "rml_libs\softcam64.dll"
+    $expected = Join-Path $Path "DesktopBuddyNative\softcam64.dll"
     return [string]::Equals($registered.Trim('"'), $expected, [StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -95,7 +95,7 @@ function Register-SoftCam {
     Write-Log "Registering SoftCam DirectShow filter..."
     $found = $false
     foreach ($dll in @("softcam64.dll", "softcam.dll")) {
-        $dllPath = Join-Path $Path "rml_libs\$dll"
+        $dllPath = Join-Path $Path "DesktopBuddyNative\$dll"
         Write-Log "  checking: $dllPath exists=$(Test-Path -LiteralPath $dllPath)"
         if (-not (Test-Path -LiteralPath $dllPath)) {
             continue
@@ -107,7 +107,7 @@ function Register-SoftCam {
     }
 
     if (-not $found) {
-        Write-Log "  SoftCam DLL not found in rml_libs"
+        Write-Log "  SoftCam DLL not found in DesktopBuddyNative"
     }
 }
 
@@ -118,7 +118,7 @@ function Install-VBCable {
         return
     }
 
-    $installer = Join-Path $Path "vbcable\VBCABLE_Setup_x64.exe"
+    $installer = Join-Path $Path "DesktopBuddyNative\VBCABLE_Setup_x64.exe"
     if (-not (Test-Path -LiteralPath $installer)) {
         Write-Log "VB-Cable installer not found: $installer"
         return
@@ -331,11 +331,11 @@ function Install-RendererDependencies {
     Install-RenderiteHook $Path
     Install-BepInExRenderer $Path
 
-    $pluginPath = Join-Path $Path "Renderer\BepInEx\plugins\DesktopBuddyRenderer.dll"
+    $pluginPath = Join-Path $Path "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge.dll"
     if (Test-Path -LiteralPath $pluginPath) {
-        Write-Log "DesktopBuddyRenderer: present at $pluginPath"
+        Write-Log "DesktopBuddySharedTextureBridge: present at $pluginPath"
     } else {
-        Write-Log "DesktopBuddyRenderer: missing at $pluginPath"
+        Write-Log "DesktopBuddySharedTextureBridge: missing at $pluginPath"
     }
 }
 
@@ -364,9 +364,9 @@ if (-not (Test-Admin)) {
 }
 
 Write-Log "rml_mods exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "rml_mods"))"
-Write-Log "rml_libs exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "rml_libs"))"
+Write-Log "DesktopBuddyNative exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "DesktopBuddyNative"))"
 Write-Log "Renderer exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "Renderer"))"
-Write-Log "vbcable exists  : $(Test-Path -LiteralPath (Join-Path $ResonitePath "vbcable"))"
+Write-Log "VB-Cable setup  : $(Test-Path -LiteralPath (Join-Path $ResonitePath "DesktopBuddyNative\VBCABLE_Setup_x64.exe"))"
 Write-Log "DesktopBuddy.dll: $(Test-Path -LiteralPath (Join-Path $ResonitePath "rml_mods\DesktopBuddy.dll"))"
 
 Register-SoftCam $ResonitePath

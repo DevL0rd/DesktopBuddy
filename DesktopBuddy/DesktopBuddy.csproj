@@ -96,7 +96,7 @@
 
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
-    <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
+    <Compile Include="..\Shared\SharedTextureBridgeProtocol.cs" />
     <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
     <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
@@ -104,11 +104,11 @@
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
   <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <RmlLibs Include="$(MSBuildThisFileDirectory)..\rml_libs\*" />
+      <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\*" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(RmlLibs)" DestinationFolder="$(ResonitePath)\rml_libs" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFolder="$(ResonitePath)\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

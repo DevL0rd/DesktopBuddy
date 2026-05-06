@@ -5,6 +5,8 @@
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>DesktopBuddySharedTextureBridge</AssemblyName>
+    <RootNamespace>DesktopBuddySharedTextureBridge</RootNamespace>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -12,9 +14,7 @@
     <RendererManagedPath>$(MSBuildThisFileDirectory)..\lib\renderer</RendererManagedPath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
     <ResoniteRendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</ResoniteRendererManagedPath>
-    <ResoniteRendererPluginPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Plugins\x86_64</ResoniteRendererPluginPath>
     <BepInExCorePath>$(ResonitePath)\Renderer\BepInEx\core</BepInExCorePath>
-    <NativeHelperPath>$(MSBuildThisFileDirectory)..\DesktopBuddyRendererNative\bin\Release\x64\DesktopBuddyRendererNative.dll</NativeHelperPath>
   </PropertyGroup>
 
   <!-- BepInEx 5.x + Harmony (reference-only) -->
@@ -64,7 +64,6 @@
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Unity.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Shared.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Assembly-CSharp.dll" />
-      <RendererReferenceLibs Include="$(ResoniteRendererPluginPath)\uWindowCapture.dll" />
     </ItemGroup>
     <MakeDir Directories="$(LibPath)" />
     <MakeDir Directories="$(RendererManagedPath)" />
@@ -73,13 +72,9 @@
     <Message Text="[lib] Refreshed renderer reference DLLs from $(ResonitePath)" Importance="high" />
   </Target>
 
-  <Target Name="ValidateNativeHelper" BeforeTargets="Build">
-    <Error Condition="!Exists('$(NativeHelperPath)')" Text="Native renderer helper not found: $(NativeHelperPath). Run scripts\build.bat so DesktopBuddyRendererNative is built before the managed renderer plugin." />
-  </Target>
-
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
-    <Compile Include="..\Shared\CaptureSessionProtocol.cs" />
+    <Compile Include="..\Shared\SharedTextureBridgeProtocol.cs" />
     <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
     <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
@@ -87,8 +82,6 @@
   <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->
   <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins" Retries="0" />
-    <Copy SourceFiles="$(NativeHelperPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins" Retries="0" />
-    <Delete Files="$(ResonitePath)\Renderer\BepInEx\plugins\Windows.winmd;$(ResonitePath)\Renderer\BepInEx\plugins\Windows.Foundation.FoundationContract.winmd;$(ResonitePath)\Renderer\BepInEx\plugins\Windows.Foundation.UniversalApiContract.winmd" />
   </Target>
 
 </Project>

@@ -54,10 +54,6 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<string> MediaMtxStreamName =
         new("mediaMtxStreamName", "MediaMTX stream name (path component of the RTSP URL). Leave blank to auto-generate a random name per session.", () => "");
 
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<bool> UseLegacyUwc =
-        new("useLegacyUwc", "Use the legacy uWindowCapture renderer path instead of the default Windows Graphics Capture path.", () => false);
-
     internal static bool IsMediaMtxEnabled =>
         Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
 
@@ -109,8 +105,8 @@ public partial class DesktopBuddyMod : ResoniteMod
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
-    internal static CaptureSessionChannel? CaptureChannel;
-    private static bool _captureChannelOpened;
+    internal static SharedTextureBridgeChannel? TextureBridgeChannel;
+    private static bool _textureBridgeOpened;
 
     internal static readonly System.Collections.Generic.HashSet<DesktopTextureProvider> OurProviders = new();
 
@@ -142,7 +138,15 @@ public partial class DesktopBuddyMod : ResoniteMod
         };
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
         {
+            if (e.Exception.ToString().Contains("ResoniteModLoader.ModConfiguration.SaveInternal"))
+            {
+                Log.Msg($"[Config] RML config save task failed and was marked observed: {e.Exception.GetBaseException().GetType().Name}: {e.Exception.GetBaseException().Message}");
+                e.SetObserved();
+                return;
+            }
+
             Log.Msg($"UNOBSERVED TASK EXCEPTION:\n{e.Exception}");
+            e.SetObserved();
         };
 
         InstallNativeCrashHandler();
@@ -219,7 +223,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         Msg("DesktopBuddy initialized!");
 
-        OpenCaptureChannel();
+        OpenSharedTextureBridge();
     }
 
     private static void PrewarmSharedResources()
@@ -246,20 +250,20 @@ public partial class DesktopBuddyMod : ResoniteMod
         catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }
     }
 
-    private static void OpenCaptureChannel()
+    private static void OpenSharedTextureBridge()
     {
-        if (_captureChannelOpened) return;
+        if (_textureBridgeOpened) return;
 
         try
         {
-            CaptureChannel = new CaptureSessionChannel();
-            CaptureChannel.Open(null);
-            _captureChannelOpened = true;
-            Msg("[CaptureChannel] Opened successfully");
+            TextureBridgeChannel = new SharedTextureBridgeChannel();
+            TextureBridgeChannel.Open();
+            _textureBridgeOpened = true;
+            Msg("[SharedTextureBridge] Opened successfully");
         }
         catch (Exception ex)
         {
-            Msg($"[CaptureChannel] Error: {ex}");
+            Msg($"[SharedTextureBridge] Error: {ex}");
         }
     }
 

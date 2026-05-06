@@ -101,37 +101,40 @@ public partial class DesktopBuddyMod
         var texSlot = displaySlot.AddSlot("Texture");
         var procTex = TextureProviderSettings.ClampWrap(texSlot.AttachComponent<DesktopTextureProvider>());
         OurProviders.Add(procTex);
-        int captureSlot = -1;
-        bool useRendererCapture = CaptureChannel != null && CaptureChannel.IsOpen &&
+        int sharedTextureSlot = -1;
+        bool useTextureBridge = TextureBridgeChannel != null && TextureBridgeChannel.IsOpen &&
             (hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
-        if (useRendererCapture)
+        if (useTextureBridge)
         {
-            captureSlot = CaptureChannel.RegisterSession(hwnd, streamer.MonitorHandle);
-            if (captureSlot < 0)
+            sharedTextureSlot = TextureBridgeChannel.RegisterTexture(
+                streamer.SharedTextureHandle,
+                streamer.SharedTextureWidth,
+                streamer.SharedTextureHeight);
+            if (sharedTextureSlot < 0)
             {
-                Msg($"[StartStreaming] No free capture slots for: {title}");
+                Msg($"[StartStreaming] No free shared texture slots for: {title}");
                 streamer.Dispose();
                 root.Destroy();
                 return;
             }
-            int magicIdx = CaptureSessionProtocol.MagicIndexBase + captureSlot;
-            procTex.DisplayIndex.Value = magicIdx;
-            Msg($"[StartStreaming] Renderer WGC capture: slot {captureSlot}, DisplayIndex={magicIdx}, hwnd=0x{hwnd.ToInt64():X}, monitor=0x{streamer.MonitorHandle.ToInt64():X}");
-            int capturedSlot = captureSlot;
+            int bridgeIndex = SharedTextureBridgeProtocol.MagicIndexBase + sharedTextureSlot;
+            procTex.DisplayIndex.Value = bridgeIndex;
+            Msg($"[StartStreaming] Shared texture bridge: slot {sharedTextureSlot}, bridgeIndex={bridgeIndex}, shared=0x{streamer.SharedTextureHandle.ToInt64():X}");
+            int textureSlot = sharedTextureSlot;
             root.World.RunInUpdates(120, () =>
             {
-                if (CaptureChannel != null && !CaptureChannel.IsSessionRunning(capturedSlot))
-                    Msg($"[StartStreaming] WARNING: Renderer capture slot {capturedSlot} did not report running after 120 updates");
+                if (TextureBridgeChannel != null && !TextureBridgeChannel.IsTextureRunning(textureSlot))
+                    Msg($"[StartStreaming] WARNING: Shared texture slot {textureSlot} did not report running after 120 updates");
             });
         }
         else if (hwnd == IntPtr.Zero && monitorIndex >= 0)
         {
             procTex.DisplayIndex.Value = monitorIndex;
-            Msg($"[StartStreaming] WARNING: Renderer capture channel unavailable; falling back to built-in monitor DisplayIndex={monitorIndex}");
+            Msg($"[StartStreaming] WARNING: Shared texture bridge unavailable; falling back to built-in monitor DisplayIndex={monitorIndex}");
         }
         else
         {
-            Msg($"[StartStreaming] WARNING: Cannot set up texture (hwnd={hwnd}, monitorIndex={monitorIndex}, channel={(CaptureChannel?.IsOpen ?? false)})");
+            Msg($"[StartStreaming] WARNING: Cannot set up texture (hwnd={hwnd}, monitorIndex={monitorIndex}, bridge={(TextureBridgeChannel?.IsOpen ?? false)})");
         }
         Msg("[StartStreaming] Texture component created");
 
@@ -169,7 +172,7 @@ public partial class DesktopBuddyMod
             Hwnd = hwnd,
             ProcessId = processId,
             Collider = collider,
-            CaptureSlot = captureSlot,
+            SharedTextureSlot = sharedTextureSlot,
             LastKnownW = w,
             LastKnownH = h,
         };
@@ -222,26 +225,40 @@ public partial class DesktopBuddyMod
             ClaimSource(data.source);
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.FocusWindow(hwnd);
-            WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
+            uint touchId = GetTouchId(data.source);
+            session.ActiveTouchIds.Add(touchId);
+            WindowInput.SendWhenFocused(
+                hwnd,
+                () => WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
+                $"touch down {touchId}");
         };
 
         btn.LocalPressing += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
+            uint touchId = GetTouchId(data.source);
+            if (!session.ActiveTouchIds.Contains(touchId)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
+            WindowInput.SendWhenFocused(
+                hwnd,
+                () => WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
+                $"touch move {touchId}");
         };
 
         btn.LocalReleased += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
+            uint touchId = GetTouchId(data.source);
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, GetTouchId(data.source), streamer.MonitorHandle);
+            if (!session.ActiveTouchIds.Remove(touchId)) return;
+            WindowInput.SendWhenFocused(
+                hwnd,
+                () => WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
+                $"touch up {touchId}");
         };
 
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
@@ -263,9 +280,11 @@ public partial class DesktopBuddyMod
                 if (scrollY != 0)
                 {
                     ClaimSource(data.source);
-                    WindowInput.FocusWindow(hwnd);
                     int wheelDelta = scrollY > 0 ? 120 : -120;
-                    WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle);
+                    WindowInput.SendWhenFocused(
+                        hwnd,
+                        () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
+                        "mouse wheel");
                 }
             }
 
@@ -287,9 +306,11 @@ public partial class DesktopBuddyMod
                             session.LastScrollTick = tick;
                             session.LastScrollSign = Math.Sign(axisY);
                             ClaimSource(data.source);
-                            WindowInput.FocusWindow(hwnd);
                             int wheelDelta = (int)(axisY * 120f);
-                            WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle);
+                            WindowInput.SendWhenFocused(
+                                hwnd,
+                                () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
+                                "controller wheel");
                         }
                     }
                     else
@@ -307,6 +328,7 @@ public partial class DesktopBuddyMod
         float barGap = 8f;
         float avatarW = 48f;
         float toggleW = 36f;
+        const float deviceIndicatorTopOffset = 0.02f;
 
         var barSlot = root.AddSlot("TopBar");
         barSlot.LocalScale = float3.One * canvasScale;
@@ -631,8 +653,10 @@ public partial class DesktopBuddyMod
         };
 
         {
+            float DeviceIndicatorY() => worldHalfH + deviceIndicatorTopOffset;
+
             var camSlot = root.AddSlot("VirtualCamera");
-            camSlot.LocalPosition = new float3(0f, worldHalfH + 0.02f, -0.001f);
+            camSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), -0.001f);
             camSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
             camSlot.LocalScale = float3.One;
 
@@ -671,7 +695,7 @@ public partial class DesktopBuddyMod
 
             {
                 var micSlot = root.AddSlot("VirtualMic");
-                micSlot.LocalPosition = new float3(0.03f, worldHalfH + 0.02f, -0.001f);
+                micSlot.LocalPosition = new float3(0.03f, DeviceIndicatorY(), -0.001f);
                 micSlot.LocalRotation = floatQ.Identity;
                 micSlot.LocalScale = float3.One;
 
@@ -685,6 +709,7 @@ public partial class DesktopBuddyMod
 
                 var micCollider = micVisual.AttachComponent<BoxCollider>();
                 micCollider.Size.Value = float3.One;
+                session.VMicSlot = micSlot;
                 session.VMicIndicator = micMat;
 
                 var listener = micSlot.AttachComponent<AudioListener>();
@@ -1185,6 +1210,13 @@ public partial class DesktopBuddyMod
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
                 keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
 
+            float deviceY = worldHalfH + deviceIndicatorTopOffset;
+            if (session.VCamSlot != null && !session.VCamSlot.IsDestroyed)
+                session.VCamSlot.LocalPosition = new float3(0f, deviceY, -0.001f);
+
+            if (session.VMicSlot != null && !session.VMicSlot.IsDestroyed)
+                session.VMicSlot.LocalPosition = new float3(0.03f, deviceY, -0.001f);
+
             Msg($"[Resize] UI updated to {newW}x{newH}");
         }
         session.OnResize = UpdateLayout;
@@ -1197,7 +1229,7 @@ public partial class DesktopBuddyMod
         ScheduleUpdate(root.World);
 
         root.Tag = "Desktop Buddy";
-        WindowInput.FocusWindow(hwnd);
+        bool focused = WindowInput.FocusWindow(hwnd);
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
         if (useSpatialAudio && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
@@ -1210,7 +1242,9 @@ public partial class DesktopBuddyMod
             }
         }
 
-        Msg($"[StartStreaming] Window focused, streaming started for: {title}");
+        Msg(focused
+            ? $"[StartStreaming] Window focused, streaming started for: {title}"
+            : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
     }
 
     private static Task<Uri> GetLargeIconUriAsync(Engine engine, IntPtr hwnd)

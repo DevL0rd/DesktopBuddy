@@ -5,8 +5,7 @@ set "SCRIPT_DIR=%~dp0"
 set "ROOT_DIR=%SCRIPT_DIR%.."
 set "MOD_DLL=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.dll"
 set "MOD_SHA=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.sha"
-set "RENDERER_DLL=%ROOT_DIR%\DesktopBuddyRenderer\bin\Debug\net472\DesktopBuddyRenderer.dll"
-set "RENDERER_NATIVE_DLL=%ROOT_DIR%\DesktopBuddyRendererNative\bin\Release\x64\DesktopBuddyRendererNative.dll"
+set "TEXTURE_BRIDGE_DLL=%ROOT_DIR%\DesktopBuddySharedTextureBridge\bin\Debug\net472\DesktopBuddySharedTextureBridge.dll"
 
 for /f %%i in ('git -C "%ROOT_DIR%" rev-parse --short HEAD 2^>nul') do set "SHORT=%%i"
 if not defined SHORT set "SHORT=unknown"
@@ -25,12 +24,8 @@ if not exist "%MOD_DLL%" (
     echo ERROR: DesktopBuddy.dll not found. Run scripts\build.bat first.
     exit /b 1
 )
-if not exist "%RENDERER_DLL%" (
-    echo ERROR: DesktopBuddyRenderer.dll not found. Run scripts\build.bat first.
-    exit /b 1
-)
-if not exist "%RENDERER_NATIVE_DLL%" (
-    echo ERROR: DesktopBuddyRendererNative.dll not found. Run scripts\build.bat first.
+if not exist "%TEXTURE_BRIDGE_DLL%" (
+    echo ERROR: DesktopBuddySharedTextureBridge.dll not found. Run scripts\build.bat first.
     exit /b 1
 )
 if not exist "%INSTALL_SOURCE%" (
@@ -55,18 +50,15 @@ mkdir "%STAGE%\rml_mods"
 copy "%MOD_DLL%" "%STAGE%\rml_mods\DesktopBuddy.dll" >nul
 if exist "%MOD_SHA%" copy "%MOD_SHA%" "%STAGE%\rml_mods\DesktopBuddy.sha" >nul
 
-REM rml_libs: ffmpeg, softcam, cloudflared
-mkdir "%STAGE%\rml_libs"
-copy "%ROOT_DIR%\rml_libs\*" "%STAGE%\rml_libs\" >nul
+REM Native dependencies: FFmpeg, SoftCam, cloudflared, and VB-Cable setup files.
+REM Keep these outside rml_libs so Resonite Mod Loader does not try to load
+REM native DLLs as managed assemblies.
+mkdir "%STAGE%\DesktopBuddyNative"
+copy "%ROOT_DIR%\DesktopBuddyNative\*" "%STAGE%\DesktopBuddyNative\" >nul
 
-REM Renderer BepInEx plugin
+REM Renderer-side shared texture bridge
 mkdir "%STAGE%\Renderer\BepInEx\plugins"
-copy "%RENDERER_DLL%" "%STAGE%\Renderer\BepInEx\plugins\DesktopBuddyRenderer.dll" >nul
-copy "%RENDERER_NATIVE_DLL%" "%STAGE%\Renderer\BepInEx\plugins\DesktopBuddyRendererNative.dll" >nul
-
-REM VBCable installer (keeps its own subfolder so .inf/.sys are next to the exe)
-mkdir "%STAGE%\vbcable"
-xcopy /e /q "%ROOT_DIR%\vbcable\*" "%STAGE%\vbcable\" >nul
+copy "%TEXTURE_BRIDGE_DLL%" "%STAGE%\Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge.dll" >nul
 
 REM Setup scripts
 mkdir "%STAGE%\setup"

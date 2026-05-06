@@ -9,4 +9,5 @@ packages/
 *.ts
 DesktopBuddy*.zip
 DesktopBuddy*.exe
-DesktopBuddyManager/publish/
+.tmp_ilspy*/
+research/

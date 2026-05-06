@@ -6,18 +6,18 @@
 > The setup script installs DesktopBuddy's required renderer dependencies.
 > Any other modloader, renderer modloader, or unrelated renderer mods are **not supported right now**.
 > This will be fixed soon.
+> Run `setup\Setup-DesktopBuddy.bat` as administrator after extracting every update, even if DesktopBuddy was already installed.
+> The setup script is idempotent and skips dependencies that are already installed.
 
-A Resonite mod that spawns world-space desktop/window viewers with touch input, GPU-accelerated capture, remote streaming, and virtual camera/microphone output.
+A Resonite mod that spawns world-space desktop/window viewers with touch input, GPU-accelerated capture, shared GPU textures, remote streaming, and virtual camera/microphone output.
 
 ## Quick Start
 
 1. Install [Resonite](https://store.steampowered.com/app/2519830/Resonite/) and [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download the latest `DesktopBuddy-Alpha-*.zip` from [Releases](https://github.com/DevL0rd/DesktopBuddy/releases).
 3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. For a first-time install, run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root.
+4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root. Run this for upgrades too; it is safe to run repeatedly.
 5. Launch Resonite and open the context menu, then **Desktop**.
-
-If you already had DesktopBuddy installed and working, you do **not** need to run the setup script again after extracting an update. Run it again only if dependencies are missing, the renderer setup was removed, or you are repairing the install.
 
 The zip is already structured for the Resonite root. There is no DesktopBuddy Manager anymore.
 
@@ -30,9 +30,9 @@ The zip is already structured for the Resonite root. There is no DesktopBuddy Ma
 - Disables VB-Cable loopback
 - Adds the HTTP URL ACL for the stream server on port `48080`
 - Installs required renderer dependencies: RenderiteHook and BepInEx.Renderer
-- Checks that `DesktopBuddyRenderer.dll` is in the renderer plugin folder
+- Checks that `DesktopBuddySharedTextureBridge.dll` is in the renderer plugin folder
 
-You do not need to run this script again for normal DesktopBuddy updates if the previous install was already working. Run it again only if any of those dependencies are missing or out of place. A reboot may be required after VB-Cable installation.
+The setup script is safe to run repeatedly. It checks existing dependencies first and skips work that is already done. A reboot may be required after VB-Cable installation.
 
 ## Troubleshooting
 
@@ -44,14 +44,14 @@ You do not need to run this script again for normal DesktopBuddy updates if the 
 
 **Virtual camera "DesktopBuddy - Camera" not showing**
 
-- Register `rml_libs\softcam64.dll` with `regsvr32` from an elevated terminal.
+- Register `DesktopBuddyNative\softcam64.dll` with `regsvr32` from an elevated terminal.
 - Restart Resonite after registration.
 - Restart Discord/Zoom/OBS; many apps cache the device list at startup.
 - Check Windows Settings > Bluetooth & devices > Cameras.
 
 **Virtual microphone "CABLE Output" not showing**
 
-- Run `vbcable\VBCABLE_Setup_x64.exe` as administrator.
+- Run `DesktopBuddyNative\VBCABLE_Setup_x64.exe` as administrator.
 - Reboot after installing VB-Cable.
 - Check Windows Settings > System > Sound > Input.
 
@@ -77,7 +77,7 @@ netsh http add urlacl url=http://+:48080/ sddl="D:(A;;GX;;;S-1-1-0)"
 
 ## Features
 
-- GPU-accelerated capture via Windows.Graphics.Capture and renderer-side capture support
+- GPU-accelerated capture via Windows.Graphics.Capture with a shared DX11 texture bridge into the renderer
 - Hardware H.264/HEVC encoding via NVENC or AMF through FFmpeg
 - Remote streaming via MPEG-TS over Cloudflare Tunnel
 - Per-window audio capture via WASAPI process loopback
@@ -108,7 +108,7 @@ netsh http add urlacl url=http://+:48080/ sddl="D:(A;;GX;;;S-1-1-0)"
 Install:
 
 - .NET 10 SDK
-- Windows SDK 10.0.19041.0+ if you need shader tools
+- Windows SDK 10.0.19041.0+
 
 Then build locally:
 
@@ -116,7 +116,7 @@ Then build locally:
 scripts\build.bat -r
 ```
 
-This builds the game-side mod and renderer component, deploys them into your local Resonite install, and restarts Resonite. Add `-d` for desktop mode:
+This builds the game-side mod and renderer-side shared texture bridge, deploys them into your local Resonite install, and restarts Resonite. Add `-d` for desktop mode:
 
 ```cmd
 scripts\build.bat -r -d
@@ -139,18 +139,17 @@ DesktopBuddy-Alpha-*.zip
   rml_mods/
     DesktopBuddy.dll
     DesktopBuddy.sha
-  rml_libs/
+  DesktopBuddyNative/
     avcodec-62.dll
     avformat-62.dll
     avutil-60.dll
     swresample-6.dll
     softcam64.dll
     cloudflared.exe
-  Renderer/BepInEx/plugins/
-    DesktopBuddyRenderer.dll
-  vbcable/
     VBCABLE_Setup_x64.exe
-    driver files
+    VB-Cable driver files
+  Renderer/BepInEx/plugins/
+    DesktopBuddySharedTextureBridge.dll
 ```
 
 ## Credits
@@ -161,8 +160,8 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 
 | Project | What DesktopBuddy uses it for |
 | --- | --- |
-| [ResoniteInterprocessLib](https://github.com/Nytra/ResoniteInterprocessLib) | Shared-source IPC between the Resonite mod and renderer plugin |
-| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `rml_libs` |
+| [ResoniteInterprocessLib](https://github.com/Nytra/ResoniteInterprocessLib) | Shared-source control messages between the Resonite mod and renderer-side shared texture bridge |
+| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `DesktopBuddyNative` |
 | [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg |
 | [SoftCam](https://github.com/tshino/softcam) | DirectShow virtual camera filter |
 | [cloudflared](https://github.com/cloudflare/cloudflared) | Cloudflare Tunnel executable for remote stream access |
@@ -182,7 +181,6 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 | [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader) | Game-side mod loading |
 | [Harmony](https://github.com/pardeike/Harmony) | Runtime patching |
 | [BepInEx](https://github.com/BepInEx/BepInEx) | Renderer plugin runtime |
-| [uWindowCapture](https://github.com/hecomi/uWindowCapture) | Renderer-side Windows capture plugin |
 | [ILRepack](https://github.com/gluck/il-repack) | Merging packaged game-side dependencies |
 | [CsWinRT](https://github.com/microsoft/CsWinRT) | Windows Runtime interop support used by Windows.Graphics.Capture |
 

@@ -1,18 +1,17 @@
-using System;
 using InterprocessLib;
 using Renderite.Shared;
 
 namespace DesktopBuddy.Shared
 {
-    internal static class CaptureSessionProtocol
+    internal static class SharedTextureBridgeProtocol
     {
-        public const string OwnerId = "DesktopBuddy.Capture";
-        public const string QueueName = "DesktopBuddy.Capture";
+        public const string OwnerId = "DesktopBuddy.SharedTexture";
+        public const string QueueName = "DesktopBuddy.SharedTexture";
         public const string StartMessageId = "Start";
         public const string StopMessageId = "Stop";
         public const string RunningMessageId = "Running";
 
-        public const int MaxSessions = 4096;
+        public const int MaxTextureSlots = 4096;
         public const int MagicIndexBase = 10000;
     }
 
@@ -31,61 +30,61 @@ namespace DesktopBuddy.Shared
         }
     }
 
-    internal sealed class CaptureStartMessage : IMemoryPackable
+    internal sealed class SharedTextureStartMessage : IMemoryPackable
     {
-        public int SessionId;
-        public long Hwnd;
-        public long MonitorHandle;
-        public bool UseLegacyUwc;
+        public int SlotId;
+        public long SharedTextureHandle;
+        public int SharedTextureWidth;
+        public int SharedTextureHeight;
 
         public void Pack(ref MemoryPacker packer)
         {
-            packer.Write(SessionId);
-            packer.Write(Hwnd);
-            packer.Write(MonitorHandle);
-            packer.Write(UseLegacyUwc);
+            packer.Write(SlotId);
+            packer.Write(SharedTextureHandle);
+            packer.Write(SharedTextureWidth);
+            packer.Write(SharedTextureHeight);
         }
 
         public void Unpack(ref MemoryUnpacker unpacker)
         {
-            unpacker.Read(ref SessionId);
-            unpacker.Read(ref Hwnd);
-            unpacker.Read(ref MonitorHandle);
-            unpacker.Read(ref UseLegacyUwc);
+            unpacker.Read(ref SlotId);
+            unpacker.Read(ref SharedTextureHandle);
+            unpacker.Read(ref SharedTextureWidth);
+            unpacker.Read(ref SharedTextureHeight);
         }
     }
 
-    internal sealed class CaptureStopMessage : IMemoryPackable
+    internal sealed class SharedTextureStopMessage : IMemoryPackable
     {
-        public int SessionId;
+        public int SlotId;
 
         public void Pack(ref MemoryPacker packer)
         {
-            packer.Write(SessionId);
+            packer.Write(SlotId);
         }
 
         public void Unpack(ref MemoryUnpacker unpacker)
         {
-            unpacker.Read(ref SessionId);
+            unpacker.Read(ref SlotId);
         }
     }
 
-    internal sealed class CaptureRunningMessage : IMemoryPackable
+    internal sealed class SharedTextureRunningMessage : IMemoryPackable
     {
-        public int SessionId;
+        public int SlotId;
         public int Width;
         public int Height;
 
         public void Pack(ref MemoryPacker packer)
         {
-            packer.Write(SessionId);
+            packer.Write(SlotId);
             packer.Write(Width);
             packer.Write(Height);
         }
 
         public void Unpack(ref MemoryUnpacker unpacker)
         {
-            unpacker.Read(ref SessionId);
+            unpacker.Read(ref SlotId);
             unpacker.Read(ref Width);
             unpacker.Read(ref Height);
         }

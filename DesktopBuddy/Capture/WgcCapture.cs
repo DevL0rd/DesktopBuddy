@@ -68,12 +68,41 @@ public sealed class WgcCapture : IDisposable
         public long AdapterLuid;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DXGI_SAMPLE_DESC
+    {
+        public uint Count;
+        public uint Quality;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11_TEXTURE2D_DESC
+    {
+        public uint Width;
+        public uint Height;
+        public uint MipLevels;
+        public uint ArraySize;
+        public uint Format;
+        public DXGI_SAMPLE_DESC SampleDesc;
+        public uint Usage;
+        public uint BindFlags;
+        public uint CPUAccessFlags;
+        public uint MiscFlags;
+    }
+
     private const int D3D_DRIVER_TYPE_UNKNOWN = 0;
     private const int D3D_DRIVER_TYPE_HARDWARE = 1;
     private const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
 
     private const int ID3D11DeviceContext_ClearState = 110;
     private const int ID3D11DeviceContext_Flush = 111;
+    private const int ID3D11Device_CreateTexture2D = 5;
+    private const int ID3D11DeviceContext_CopyResource = 47;
+
+    private const uint DXGI_FORMAT_B8G8R8A8_TYPELESS = 90;
+    private const uint D3D11_USAGE_DEFAULT = 0;
+    private const uint D3D11_BIND_SHADER_RESOURCE = 0x8;
+    private const uint D3D11_RESOURCE_MISC_SHARED = 0x2;
 
     private static IntPtr _cachedPreferredAdapter = IntPtr.Zero;
     private static bool _adapterCacheReady;
@@ -247,11 +276,15 @@ public sealed class WgcCapture : IDisposable
 
     private static readonly Guid DxgiAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
     private static readonly Guid TexGuid = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+    private static readonly Guid DxgiResourceGuid = new("035F3AB4-482E-4E50-B41F-8A7F8BD8960B");
 
     public int Width { get; private set; }
     public int Height { get; private set; }
     public int FramesCaptured => _framesCaptured;
     public IntPtr D3dDevice => _d3dDevice;
+    public IntPtr SharedTextureHandle { get; private set; }
+    public int SharedTextureWidth { get; private set; }
+    public int SharedTextureHeight { get; private set; }
     public bool IsValid => !_disposed && !_closed && _item != null && (_isDesktop || (IsWindow(_hwnd) && !IsIconic(_hwnd)));
 
     public void RecreatePoolIfNeeded()
@@ -264,8 +297,9 @@ public sealed class WgcCapture : IDisposable
             {
                 _framePool?.Recreate(_winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2,
                     new SizeInt32 { Width = Width, Height = Height });
+                TryCreateSharedTexture(Width, Height);
                 _needsPoolRecreate = false;
-                Log.Msg($"[WgcCapture] FramePool recreated for {Width}x{Height}");
+                Log.Msg($"[WgcCapture] FramePool/shared texture recreated for {Width}x{Height}");
             }
             catch (Exception ex)
             {
@@ -304,6 +338,7 @@ public sealed class WgcCapture : IDisposable
 
             Width = _item.Size.Width;
             Height = _item.Size.Height;
+            TryCreateSharedTexture(Width, Height);
 
             _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
                 _winrtDevice,
@@ -484,6 +519,8 @@ public sealed class WgcCapture : IDisposable
 
         try
         {
+            CopyFrameToSharedTexture(srcTexture, w, h);
+
             using (DesktopBuddyMod.Perf.Time("queue_frame"))
             {
                 var gpuCb = OnGpuFrame;
@@ -508,6 +545,106 @@ public sealed class WgcCapture : IDisposable
     }
 
     private readonly object _disposeLock = new();
+    private IntPtr _sharedTexture;
+
+    private unsafe void TryCreateSharedTexture(int width, int height)
+    {
+        if (_d3dDevice == IntPtr.Zero || width <= 0 || height <= 0)
+            return;
+
+        if (_sharedTexture != IntPtr.Zero && SharedTextureWidth == width && SharedTextureHeight == height)
+            return;
+
+        ReleaseSharedTexture();
+
+        var desc = new D3D11_TEXTURE2D_DESC
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            SampleDesc = new DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
+            Usage = D3D11_USAGE_DEFAULT,
+            BindFlags = D3D11_BIND_SHADER_RESOURCE,
+            CPUAccessFlags = 0,
+            MiscFlags = D3D11_RESOURCE_MISC_SHARED
+        };
+
+        lock (_sharedD3dLock)
+        {
+            var vtable = *(IntPtr**)_d3dDevice;
+            var createTexture = (delegate* unmanaged[Stdcall]<IntPtr, D3D11_TEXTURE2D_DESC*, IntPtr, IntPtr*, int>)vtable[ID3D11Device_CreateTexture2D];
+            IntPtr texture;
+            int hr = createTexture(_d3dDevice, &desc, IntPtr.Zero, &texture);
+            if (hr < 0 || texture == IntPtr.Zero)
+            {
+                Log.Msg($"[WgcCapture] Shared texture CreateTexture2D failed hr=0x{hr:X8} size={width}x{height}");
+                return;
+            }
+
+            var dxgiGuid = DxgiResourceGuid;
+            hr = Marshal.QueryInterface(texture, ref dxgiGuid, out IntPtr dxgiResource);
+            if (hr < 0 || dxgiResource == IntPtr.Zero)
+            {
+                Marshal.Release(texture);
+                Log.Msg($"[WgcCapture] Shared texture IDXGIResource QueryInterface failed hr=0x{hr:X8}");
+                return;
+            }
+
+            try
+            {
+                var dxgiVtable = *(IntPtr**)dxgiResource;
+                var getSharedHandle = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)dxgiVtable[8];
+                IntPtr handle;
+                hr = getSharedHandle(dxgiResource, &handle);
+                if (hr < 0 || handle == IntPtr.Zero)
+                {
+                    Marshal.Release(texture);
+                    Log.Msg($"[WgcCapture] GetSharedHandle failed hr=0x{hr:X8}");
+                    return;
+                }
+
+                _sharedTexture = texture;
+                SharedTextureHandle = handle;
+                SharedTextureWidth = width;
+                SharedTextureHeight = height;
+                Log.Msg($"[WgcCapture] Shared texture ready handle=0x{handle:X} ptr=0x{texture:X} {width}x{height}");
+            }
+            finally
+            {
+                Marshal.Release(dxgiResource);
+            }
+        }
+    }
+
+    private unsafe void CopyFrameToSharedTexture(IntPtr srcTexture, int width, int height)
+    {
+        if (_sharedTexture == IntPtr.Zero || srcTexture == IntPtr.Zero)
+            return;
+        if (width != SharedTextureWidth || height != SharedTextureHeight)
+            return;
+
+        lock (_sharedD3dLock)
+        {
+            var vtable = *(IntPtr**)_d3dContext;
+            var copyResource = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, void>)vtable[ID3D11DeviceContext_CopyResource];
+            copyResource(_d3dContext, _sharedTexture, srcTexture);
+        }
+    }
+
+    private void ReleaseSharedTexture()
+    {
+        SharedTextureHandle = IntPtr.Zero;
+        SharedTextureWidth = 0;
+        SharedTextureHeight = 0;
+        if (_sharedTexture != IntPtr.Zero)
+        {
+            try { Marshal.Release(_sharedTexture); }
+            catch { }
+            _sharedTexture = IntPtr.Zero;
+        }
+    }
 
     public object D3dContextLock => _sharedD3dLock;
 
@@ -576,6 +713,7 @@ public sealed class WgcCapture : IDisposable
         _winrtDevice = null;
         _d3dDevice = IntPtr.Zero;
         _d3dContext = IntPtr.Zero;
+        ReleaseSharedTexture();
         Log.Msg($"[WgcCapture:Dispose] Detached from shared D3D device hwnd={_hwnd}");
     }
 }
