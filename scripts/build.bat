@@ -8,6 +8,7 @@ REM Check for restart flag (-r, --restart) and desktop flag (-d)
 REM Supports any combination: -r, -d, -r -d, -d -r, etc.
 set RESTART=0
 set DESKTOP=0
+set CONFIGURATION=Release
 
 REM Check all arguments
 for %%A in (%*) do (
@@ -27,14 +28,14 @@ if !RESTART! equ 1 (
 )
 
 REM Build the mod (game-side)
-dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj"
+dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj" -c %CONFIGURATION%
 if !ERRORLEVEL! neq 0 (
     echo MOD BUILD FAILED — not launching Resonite
     exit /b !ERRORLEVEL!
 )
 
 REM Build the renderer-side shared texture bridge
-dotnet build "%SCRIPT_DIR%..\DesktopBuddySharedTextureBridge\DesktopBuddySharedTextureBridge.csproj"
+dotnet build "%SCRIPT_DIR%..\DesktopBuddySharedTextureBridge\DesktopBuddySharedTextureBridge.csproj" -c %CONFIGURATION%
 if !ERRORLEVEL! neq 0 (
     echo SHARED TEXTURE BRIDGE BUILD FAILED - not launching Resonite
     exit /b !ERRORLEVEL!
