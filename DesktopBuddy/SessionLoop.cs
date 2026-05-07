@@ -507,13 +507,40 @@ public partial class DesktopBuddyMod
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
         if (streamer != null) streamer.OnGpuFrame = null;
+        DesktopSession replacementDriver = null;
+        FfmpegEncoder replacementEncoder = null;
         if (session.StreamId > 0)
         {
             lock (_sharedStreams)
             {
-                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) && shared.Encoder != null)
-                    shared.Encoder.Stop();
+                if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) &&
+                    shared.StreamId == session.StreamId &&
+                    shared.DriverSession == session)
+                {
+                    shared.DriverSession = null;
+                    foreach (var candidate in ActiveSessions)
+                    {
+                        if (candidate == session ||
+                            candidate.Cleaned ||
+                            candidate.Hwnd != session.Hwnd ||
+                            candidate.StreamId != session.StreamId ||
+                            candidate.Streamer == null)
+                        {
+                            continue;
+                        }
+
+                        replacementDriver = candidate;
+                        replacementEncoder = shared.Encoder;
+                        shared.DriverSession = candidate;
+                        break;
+                    }
+                }
             }
+        }
+        if (replacementDriver != null && replacementEncoder != null)
+        {
+            ConnectEncoder(replacementDriver, replacementEncoder);
+            Msg($"[Cleanup] Transferred stream {session.StreamId} encoder driver to hwnd={replacementDriver.Hwnd}");
         }
         int streamId = session.StreamId;
         IntPtr hwnd = session.Hwnd;
@@ -545,6 +572,10 @@ public partial class DesktopBuddyMod
                                 audioToDispose = shared.Audio;
                                 encoderToDispose = shared.Encoder;
                                 shouldStopEncoder = true;
+                            }
+                            else if (shared.DriverSession == session)
+                            {
+                                shared.DriverSession = null;
                             }
                         }
                         else

@@ -13,8 +13,6 @@ public class DesktopSession
     public Canvas Canvas;
     public Slot Root;
     public bool UpdateInProgress;
-    public double TimeSinceLastCapture;
-    public double TargetInterval;
     public int SharedTextureSlot = -1;
     public int LastKnownW, LastKnownH;
 

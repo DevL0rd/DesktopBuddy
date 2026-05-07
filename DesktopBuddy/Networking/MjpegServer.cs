@@ -108,23 +108,44 @@ public sealed class MjpegServer : IDisposable
             return;
         }
 
+        int keyframeWaitCount = 0;
+        while (encoder.IsRunning && !encoder.HasReadableVideoKeyframe && keyframeWaitCount < 300)
+        {
+            await Task.Delay(10).ConfigureAwait(false);
+            keyframeWaitCount++;
+        }
+        if (!encoder.HasReadableVideoKeyframe)
+        {
+            Log.Msg($"[MjpegServer] Stream {streamId} has no readable keyframe after {keyframeWaitCount * 10}ms: {encoder.ReadableStreamState}");
+            ctx.Response.StatusCode = 503;
+            ctx.Response.Close();
+            return;
+        }
+
+        if (keyframeWaitCount > 0)
+            Log.Msg($"[MjpegServer] Stream {streamId} readable after {keyframeWaitCount * 10}ms: {encoder.ReadableStreamState}");
+
         Log.Msg($"[MjpegServer] Serving stream {streamId} to {ctx.Request.RemoteEndPoint}");
         ctx.Response.ContentType = "video/mp2t";
         ctx.Response.SendChunked = true;
         ctx.Response.StatusCode = 200;
+        ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, max-age=0";
+        ctx.Response.Headers["Pragma"] = "no-cache";
+        ctx.Response.Headers["X-Accel-Buffering"] = "no";
 
         long totalBytes = 0;
         long readPos = 0;
         bool aligned = false;
         try
         {
-            var buffer = new byte[65536];
+            var buffer = new byte[16 * 1024];
             while (_running && encoder.IsRunning)
             {
                 int read = encoder.ReadStream(buffer, ref readPos, ref aligned);
                 if (read > 0)
                 {
                     await ctx.Response.OutputStream.WriteAsync(buffer, 0, read).ConfigureAwait(false);
+                    await ctx.Response.OutputStream.FlushAsync().ConfigureAwait(false);
                     totalBytes += read;
                 }
                 else

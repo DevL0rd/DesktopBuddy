@@ -31,6 +31,15 @@ public static class WindowInput
     private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 
     [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+    [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
     [DllImport("user32.dll")]
@@ -49,7 +58,10 @@ public static class WindowInput
     private static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, IntPtr dwExtraInfo);
 
     private const uint MOUSEEVENTF_WHEEL = 0x0800;
+    private const uint GW_OWNER = 4;
     private const uint GA_ROOTOWNER = 3;
+    private const uint GUI_INMENUMODE = 0x00000004;
+    private const uint GUI_POPUPMENUMODE = 0x00000010;
     private static readonly IntPtr HWND_TOP = IntPtr.Zero;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
@@ -97,6 +109,20 @@ public static class WindowInput
         public IntPtr lParam;
         public uint time;
         public POINT pt;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GUITHREADINFO
+    {
+        public int cbSize;
+        public uint flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -359,6 +385,113 @@ public static class WindowInput
 
         if (requestFocus) RequestFocus(hWnd);
         FlushFocusedQueues();
+    }
+
+    public static void SendAtPointWhenTargetAcceptable(
+        IntPtr hWnd,
+        float u,
+        float v,
+        int clientW,
+        int clientH,
+        IntPtr monitorHandle,
+        Action sendInput,
+        string description = "input")
+    {
+        if (sendInput == null) return;
+        if (hWnd == IntPtr.Zero)
+        {
+            sendInput();
+            return;
+        }
+
+        var screenPoint = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
+        if (IsPointAcceptedForInput(hWnd, screenPoint, out var hitHwnd, out var reason))
+        {
+            if (!IsFocusedForInput(hWnd) && description.IndexOf("move", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                Log.Msg($"[WindowInput] Sending {description} without parent refocus; point hit target popup/family hwnd={hitHwnd} reason={reason}");
+            }
+            sendInput();
+            return;
+        }
+
+        SendWhenFocused(hWnd, sendInput, description);
+    }
+
+    private static bool IsPointAcceptedForInput(IntPtr hWnd, POINT screenPoint, out IntPtr hitHwnd, out string reason)
+    {
+        hitHwnd = WindowFromPoint(screenPoint);
+        reason = "none";
+
+        if (hitHwnd == IntPtr.Zero) return false;
+        if (IsFocusedForInput(hWnd))
+        {
+            reason = "focused";
+            return true;
+        }
+
+        if (IsTargetFamilyWindow(hWnd, hitHwnd))
+        {
+            reason = "target-family";
+            return true;
+        }
+
+        if (IsTargetMenuActiveAtPoint(hWnd, hitHwnd))
+        {
+            reason = "target-menu";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsTargetFamilyWindow(IntPtr targetHwnd, IntPtr candidateHwnd)
+    {
+        if (targetHwnd == IntPtr.Zero || candidateHwnd == IntPtr.Zero) return false;
+        if (candidateHwnd == targetHwnd) return true;
+
+        var targetRoot = FocusRoot(targetHwnd);
+        var candidateRoot = FocusRoot(candidateHwnd);
+        if (targetRoot != IntPtr.Zero && candidateRoot == targetRoot) return true;
+
+        return OwnerChainContains(candidateHwnd, targetHwnd) ||
+               (targetRoot != IntPtr.Zero && OwnerChainContains(candidateHwnd, targetRoot));
+    }
+
+    private static bool OwnerChainContains(IntPtr hwnd, IntPtr target)
+    {
+        if (hwnd == IntPtr.Zero || target == IntPtr.Zero) return false;
+
+        var current = GetWindow(hwnd, GW_OWNER);
+        int guard = 0;
+        while (current != IntPtr.Zero && guard++ < 32)
+        {
+            if (current == target) return true;
+            current = GetWindow(current, GW_OWNER);
+        }
+
+        return false;
+    }
+
+    private static bool IsTargetMenuActiveAtPoint(IntPtr targetHwnd, IntPtr hitHwnd)
+    {
+        uint targetThread = GetWindowThreadProcessId(targetHwnd, out uint targetProcess);
+        uint hitThread = GetWindowThreadProcessId(hitHwnd, out uint hitProcess);
+        if (targetThread == 0 || hitThread == 0) return false;
+        if (targetProcess != 0 && hitProcess != 0 && targetProcess != hitProcess) return false;
+
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(targetThread, ref info)) return false;
+
+        bool inMenu = (info.flags & (GUI_INMENUMODE | GUI_POPUPMENUMODE)) != 0;
+        if (!inMenu) return false;
+
+        if (IsTargetFamilyWindow(targetHwnd, info.hwndMenuOwner)) return true;
+        if (info.hwndActive != IntPtr.Zero && IsTargetFamilyWindow(targetHwnd, info.hwndActive)) return true;
+        if (info.hwndFocus != IntPtr.Zero && IsTargetFamilyWindow(targetHwnd, info.hwndFocus)) return true;
+        if (OwnerChainContains(hitHwnd, info.hwndMenuOwner)) return true;
+
+        return false;
     }
 
     private static bool RequestFocus(IntPtr hWnd)
