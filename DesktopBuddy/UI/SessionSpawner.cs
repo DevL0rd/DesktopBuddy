@@ -80,12 +80,11 @@ public partial class DesktopBuddyMod
             return;
         }
 
-        int fps = Config!.GetValue(FrameRate);
         int w = streamer.Width;
         int h = streamer.Height;
         Grabbable grabbable = null;
 
-        Msg($"[StartStreaming] Window size: {w}x{h}, target {fps}fps");
+        Msg($"[StartStreaming] Window size: {w}x{h}, WGC event-driven capture");
 
         float canvasScale = 0.0005f;
         float worldHalfH = h / 2f * canvasScale;
@@ -161,6 +160,23 @@ public partial class DesktopBuddyMod
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
         Msg($"[StartStreaming] Process ID: {processId}");
 
+        var seenRelatedHwnds = new HashSet<IntPtr>();
+        if (processId != 0)
+        {
+            try
+            {
+                foreach (var win in WindowEnumerator.GetProcessWindows(processId))
+                {
+                    seenRelatedHwnds.Add(win.Handle);
+                }
+                Msg($"[StartStreaming] Baseline related windows for PID {processId}: {seenRelatedHwnds.Count}");
+            }
+            catch (Exception ex)
+            {
+                Msg($"[StartStreaming] Baseline related windows failed for PID {processId}: {ex.Message}");
+            }
+        }
+
         var session = new DesktopSession
         {
             Streamer = streamer,
@@ -168,13 +184,13 @@ public partial class DesktopBuddyMod
             TextureImage = rawImage,
             Canvas = ui.Canvas,
             Root = root,
-            TargetInterval = 1.0 / fps,
             Hwnd = hwnd,
             ProcessId = processId,
             Collider = collider,
             SharedTextureSlot = sharedTextureSlot,
             LastKnownW = w,
             LastKnownH = h,
+            SeenRelatedHwnds = seenRelatedHwnds,
         };
         ActiveSessions.Add(session);
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
@@ -227,8 +243,13 @@ public partial class DesktopBuddyMod
             float v = 1f - data.normalizedPressPoint.y;
             uint touchId = GetTouchId(data.source);
             session.ActiveTouchIds.Add(touchId);
-            WindowInput.SendWhenFocused(
+            WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
+                u,
+                v,
+                streamer.Width,
+                streamer.Height,
+                streamer.MonitorHandle,
                 () => WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch down {touchId}");
         };
@@ -241,8 +262,13 @@ public partial class DesktopBuddyMod
             if (!session.ActiveTouchIds.Contains(touchId)) return;
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
-            WindowInput.SendWhenFocused(
+            WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
+                u,
+                v,
+                streamer.Width,
+                streamer.Height,
+                streamer.MonitorHandle,
                 () => WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch move {touchId}");
         };
@@ -255,8 +281,13 @@ public partial class DesktopBuddyMod
             float u = data.normalizedPressPoint.x;
             float v = 1f - data.normalizedPressPoint.y;
             if (!session.ActiveTouchIds.Remove(touchId)) return;
-            WindowInput.SendWhenFocused(
+            WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
+                u,
+                v,
+                streamer.Width,
+                streamer.Height,
+                streamer.MonitorHandle,
                 () => WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch up {touchId}");
         };
@@ -281,8 +312,13 @@ public partial class DesktopBuddyMod
                 {
                     ClaimSource(data.source);
                     int wheelDelta = scrollY > 0 ? 120 : -120;
-                    WindowInput.SendWhenFocused(
+                    WindowInput.SendAtPointWhenTargetAcceptable(
                         hwnd,
+                        hu,
+                        hv,
+                        streamer.Width,
+                        streamer.Height,
+                        streamer.MonitorHandle,
                         () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
                         "mouse wheel");
                 }
@@ -307,8 +343,13 @@ public partial class DesktopBuddyMod
                             session.LastScrollSign = Math.Sign(axisY);
                             ClaimSource(data.source);
                             int wheelDelta = (int)(axisY * 120f);
-                            WindowInput.SendWhenFocused(
+                            WindowInput.SendAtPointWhenTargetAcceptable(
                                 hwnd,
+                                hu,
+                                hv,
+                                streamer.Width,
+                                streamer.Height,
+                                streamer.MonitorHandle,
                                 () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
                                 "controller wheel");
                         }
@@ -1075,8 +1116,17 @@ public partial class DesktopBuddyMod
                 if (session.SpatialAudioSource != null && shared.Audio != null)
                     session.SpatialAudioSource.SetAudioCapture(shared.Audio);
 
-                bool isFirstForHwnd = shared.RefCount == 1;
-                if (isFirstForHwnd)
+                bool shouldDriveEncoder;
+                lock (_sharedStreams)
+                {
+                    shouldDriveEncoder = shared.DriverSession == null ||
+                        shared.DriverSession.Cleaned ||
+                        shared.DriverSession.Streamer == null;
+                    if (shouldDriveEncoder)
+                        shared.DriverSession = session;
+                }
+
+                if (shouldDriveEncoder)
                 {
                     ConnectEncoder(session, nvEncoder);
                     Msg($"[RemoteStream] This panel drives the encoder for stream {shared.StreamId}");
@@ -1088,11 +1138,14 @@ public partial class DesktopBuddyMod
 
                 var videoSlot = root.AddSlot("StreamProvider");
                 var videoTex = TextureProviderSettings.ClampWrap(videoSlot.AttachComponent<VideoTextureProvider>());
-                videoTex.URL.Value = shared.StreamUrl;
+                videoTex.ForcePlaybackEngine.Value = "libVLC";
                 videoTex.Stream.Value = true;
+                videoTex.URL.Value = null;
                 videoTex.Volume.Value = 0f;
                 videoTexRef = videoTex;
                 session.VideoTexture = videoTex;
+                var streamUrl = shared.StreamUrl;
+                bool waitForHttpKeyframe = !useMediaMtx;
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
@@ -1140,7 +1193,41 @@ public partial class DesktopBuddyMod
                 streamMat.OffsetUnits.Value = -100f;
                 streamImg.Material.Target = streamMat;
 
-                Msg($"[RemoteStream] Created, URL={shared.StreamUrl}, streamId={shared.StreamId}, refs={shared.RefCount}");
+                Msg($"[RemoteStream] Created, URL={streamUrl}, streamId={shared.StreamId}, refs={shared.RefCount}");
+
+                const int StreamBindRetryUpdates = 6;
+                const int StreamBindMaxAttempts = 300;
+                bool streamUrlBound = false;
+                root.World.RunInUpdates(1, () => BindStreamUrlWhenReady(0));
+
+                void BindStreamUrlWhenReady(int attempt)
+                {
+                    if (videoTex == null || videoTex.IsDestroyed || root.IsDestroyed) return;
+
+                    bool ready = waitForHttpKeyframe
+                        ? nvEncoder.HasReadableVideoKeyframe
+                        : nvEncoder.IsRunning;
+
+                    if (ready && !isPrivate)
+                    {
+                        videoTex.URL.Value = streamUrl;
+                        videoTex.Play();
+                        streamUrlBound = true;
+                        Msg($"[RemoteStream] URL bound after encoder readiness: attempt={attempt} streamId={shared.StreamId} {nvEncoder.ReadableStreamState}");
+                        return;
+                    }
+
+                    if (attempt >= StreamBindMaxAttempts)
+                    {
+                        Msg($"[RemoteStream] URL not bound: encoder did not become readable in time, private={isPrivate}, streamId={shared.StreamId}, {nvEncoder.ReadableStreamState}");
+                        return;
+                    }
+
+                    if (attempt == 0 || attempt % 30 == 0)
+                        Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={isPrivate}, waitForHttpKeyframe={waitForHttpKeyframe}, {nvEncoder.ReadableStreamState}");
+
+                    root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
+                }
 
                 int checkCount = 0;
                 root.World.RunInUpdates(30, () => CheckVideoState());
@@ -1152,9 +1239,9 @@ public partial class DesktopBuddyMod
                     string playbackEngine = videoTex.CurrentPlaybackEngine?.Value ?? "null";
                     bool isPlaying = videoTex.IsPlaying;
                     float clockErr = videoTex.CurrentClockError?.Value ?? -1f;
-                    Msg($"[RemoteStream] Check #{checkCount}: avail={assetAvail} engine={playbackEngine} playing={isPlaying} clockErr={clockErr:F2}");
+                    Msg($"[RemoteStream] Check #{checkCount}: urlBound={streamUrlBound} avail={assetAvail} engine={playbackEngine} playing={isPlaying} clockErr={clockErr:F2}");
 
-                    if (assetAvail && !isPlaying)
+                    if (streamUrlBound && assetAvail && !isPlaying)
                     {
                         videoTex.Play();
                         Msg("[RemoteStream] Called Play() on VideoTextureProvider");

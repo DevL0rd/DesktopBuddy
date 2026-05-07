@@ -18,13 +18,10 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.0";
+    public override string Version => "1.0.1";
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
     internal static ModConfiguration? Config;
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> FrameRate =
-        new("frameRate", "Target capture frame rate", () => 30);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
@@ -36,7 +33,27 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> Bitrate =
-        new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
+        new("bitrate", "Video encoding bitrate in Mbps.", () => 25);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> KeyframeIntervalMs =
+        new("keyframeIntervalMs", "Maximum time between forced video keyframes in milliseconds. Lower reduces stream startup/catch-up latency but costs bitrate/quality.", () => 100);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> LibVlcNetworkCachingMs =
+        new("libVlcNetworkCachingMs", "libVLC network cache in milliseconds for DesktopBuddy streams.", () => 200);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> LibVlcLiveCachingMs =
+        new("libVlcLiveCachingMs", "libVLC live cache in milliseconds for DesktopBuddy streams.", () => 200);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> LibVlcFileCachingMs =
+        new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 100);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> LibVlcClockJitterMs =
+        new("libVlcClockJitterMs", "libVLC clock jitter in milliseconds for DesktopBuddy streams.", () => 50);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> UseMediaMtx =
@@ -93,6 +110,7 @@ public partial class DesktopBuddyMod : ResoniteMod
         public AudioCapture Audio;
         public Uri StreamUrl;
         public int RefCount;
+        public DesktopSession DriverSession;
     }
 
     internal static MjpegServer? StreamServer;
@@ -126,9 +144,26 @@ public partial class DesktopBuddyMod : ResoniteMod
     private static string _latestVersion;
     private static bool _updateShown;
 
+    public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
+    {
+        builder.Version(new Version(1, 0, 1));
+    }
+
+    public override IncompatibleConfigurationHandlingOption HandleIncompatibleConfigurationVersions(Version serializedVersion, Version definedVersion)
+    {
+        if (serializedVersion < definedVersion)
+        {
+            Msg($"[Config] Resetting old config {serializedVersion} for config schema {definedVersion}");
+            return IncompatibleConfigurationHandlingOption.CLOBBER;
+        }
+
+        return IncompatibleConfigurationHandlingOption.ERROR;
+    }
+
     public override void OnEngineInit()
     {
         Config = GetConfiguration();
+        SaveCurrentConfigDefaults();
 
         Log.StartSession();
 
@@ -224,6 +259,32 @@ public partial class DesktopBuddyMod : ResoniteMod
         Msg("DesktopBuddy initialized!");
 
         OpenSharedTextureBridge();
+    }
+
+    private static void SaveCurrentConfigDefaults()
+    {
+        try
+        {
+            if (Config == null) return;
+
+            Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
+            Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
+            Config.Set(Bitrate, Config.GetValue(Bitrate));
+            Config.Set(KeyframeIntervalMs, Config.GetValue(KeyframeIntervalMs));
+            Config.Set(LibVlcNetworkCachingMs, Math.Max(200, Config.GetValue(LibVlcNetworkCachingMs)));
+            Config.Set(LibVlcLiveCachingMs, Math.Max(200, Config.GetValue(LibVlcLiveCachingMs)));
+            Config.Set(LibVlcFileCachingMs, Config.GetValue(LibVlcFileCachingMs));
+            Config.Set(LibVlcClockJitterMs, Math.Max(50, Config.GetValue(LibVlcClockJitterMs)));
+            Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
+            Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
+            Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
+            Config.Set(MediaMtxStreamName, Config.GetValue(MediaMtxStreamName));
+            Config.Save();
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Config] Failed to save current defaults: {ex.Message}");
+        }
     }
 
     private static void PrewarmSharedResources()
