@@ -29,6 +29,7 @@ namespace DesktopBuddySharedTextureBridge
         public Texture UnityTexture => _unityTexture;
         public int Width { get; }
         public int Height { get; }
+        public int RequestCount => _requests.Count;
         public bool IsValid => !_disposed && _started && _unityTexture != null;
         public string SourceName => "SharedTexture";
 

@@ -215,8 +215,19 @@ public partial class DesktopBuddyMod
                             break;
 
                         case WindowEventType.NewTopLevelWindow:
-                            Msg($"[WindowPoller] Detected new top-level window: hwnd={evt.WindowHwnd} title='{evt.Title}'");
-                            SpawnStreaming(evt.Session.Root.World, evt.WindowHwnd, evt.Title);
+                            if (!WindowEnumerator.TryValidateStandaloneProcessWindow(
+                                    evt.WindowHwnd,
+                                    evt.Session.ProcessId,
+                                    out string currentTitle,
+                                    out string validationReason))
+                            {
+                                Msg($"[WindowPoller] Ignored new window hwnd={evt.WindowHwnd} title='{evt.Title}': {validationReason}");
+                                break;
+                            }
+
+                            var spawnTitle = !string.IsNullOrWhiteSpace(currentTitle) ? currentTitle : evt.Title;
+                            Msg($"[WindowPoller] Detected new top-level window: hwnd={evt.WindowHwnd} title='{spawnTitle}'");
+                            SpawnStreaming(evt.Session.Root.World, evt.WindowHwnd, spawnTitle);
                             break;
                     }
                 }

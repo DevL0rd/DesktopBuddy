@@ -15,6 +15,9 @@ public static class WindowEnumerator
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
@@ -154,6 +157,8 @@ public static class WindowEnumerator
     public static bool IsStandaloneTopLevelWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return false;
+        if (!IsWindow(hwnd)) return false;
+        if (!IsWindowVisible(hwnd)) return false;
 
         long style = GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64();
         long exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
@@ -169,6 +174,47 @@ public static class WindowEnumerator
         bool toolWindow = (exStyle & WS_EX_TOOLWINDOW) != 0;
         bool appWindow = (exStyle & WS_EX_APPWINDOW) != 0;
         if (toolWindow && !appWindow) return false;
+
+        return true;
+    }
+
+    public static bool TryValidateStandaloneProcessWindow(
+        IntPtr hwnd,
+        uint expectedProcessId,
+        out string title,
+        out string reason)
+    {
+        title = "";
+        reason = "";
+
+        if (hwnd == IntPtr.Zero) { reason = "zero hwnd"; return false; }
+        if (!IsWindow(hwnd)) { reason = "invalid hwnd"; return false; }
+        if (!IsWindowVisible(hwnd)) { reason = "not visible"; return false; }
+
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (expectedProcessId != 0 && pid != expectedProcessId)
+        {
+            reason = $"pid mismatch expected={expectedProcessId} actual={pid}";
+            return false;
+        }
+
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out bool cloaked, Marshal.SizeOf<bool>());
+        if (cloaked) { reason = "cloaked"; return false; }
+
+        if (!IsStandaloneTopLevelWindow(hwnd))
+        {
+            reason = "not standalone top-level";
+            return false;
+        }
+
+        int length = GetWindowTextLength(hwnd);
+        if (length > 0)
+        {
+            _titleBuf ??= new StringBuilder(256);
+            _titleBuf.Clear().EnsureCapacity(length + 1);
+            GetWindowTextW(hwnd, _titleBuf, _titleBuf.Capacity);
+            title = _titleBuf.ToString();
+        }
 
         return true;
     }

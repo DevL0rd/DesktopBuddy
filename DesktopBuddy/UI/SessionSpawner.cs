@@ -24,6 +24,19 @@ public partial class DesktopBuddyMod
         try
         {
             Msg($"[SpawnStreaming] Starting for '{title}' hwnd={hwnd} monitorIndex={monitorIndex}");
+            if (hwnd != IntPtr.Zero)
+            {
+                WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
+                if (!WindowEnumerator.TryValidateStandaloneProcessWindow(hwnd, processId, out string currentTitle, out string validationReason))
+                {
+                    Msg($"[SpawnStreaming] Ignored hwnd={hwnd}: {validationReason}");
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(currentTitle))
+                    title = currentTitle;
+            }
+
             var localUser = world.LocalUser;
             if (localUser == null) { Msg("[SpawnStreaming] LocalUser is null, aborting"); return; }
             var userRoot = localUser.Root;
@@ -65,6 +78,11 @@ public partial class DesktopBuddyMod
             {
                 Msg($"[StartStreaming] Failed initial capture for: {title}");
                 streamer.Dispose();
+                world.RunInUpdates(0, () =>
+                {
+                    if (root != null && !root.IsDestroyed)
+                        root.Destroy();
+                });
                 return;
             }
             world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, streamer, monitorIndex));
