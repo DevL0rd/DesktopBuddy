@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -167,9 +168,17 @@ public sealed class MjpegServer : IDisposable
                     continue;
 
                 long writeStart = Stopwatch.GetTimestamp();
-                using (DesktopBuddyMod.Perf.Time("stream_http_write"))
-                    await ctx.Response.OutputStream.WriteAsync(chunk.Buffer, 0, chunk.Length).ConfigureAwait(false);
-                long writeTicks = Stopwatch.GetTimestamp() - writeStart;
+                long writeTicks;
+                try
+                {
+                    using (DesktopBuddyMod.Perf.Time("stream_http_write"))
+                        await ctx.Response.OutputStream.WriteAsync(chunk.Buffer, 0, chunk.Length).ConfigureAwait(false);
+                    writeTicks = Stopwatch.GetTimestamp() - writeStart;
+                }
+                finally
+                {
+                    chunk.Release();
+                }
 
                 writeOps++;
                 totalWriteTicks += writeTicks;
@@ -322,13 +331,20 @@ public sealed class MjpegServer : IDisposable
                     int read = _encoder.ReadStream(buffer, ref _readPos, ref _aligned, ref _catchupRequestedAfterRingPos, out bool startsAtKeyframe, out _);
                     if (read > 0)
                     {
-                        var chunkBuffer = new byte[read];
+                        var chunkBuffer = ArrayPool<byte>.Shared.Rent(read);
                         Buffer.BlockCopy(buffer, 0, chunkBuffer, 0, read);
                         var chunk = new StreamChunk(chunkBuffer, read, Interlocked.Increment(ref _sequence), startsAtKeyframe);
-                        foreach (var kvp in _clients)
+                        try
                         {
-                            kvp.Value.Enqueue(chunk);
-                            enqueues++;
+                            foreach (var kvp in _clients)
+                            {
+                                if (kvp.Value.Enqueue(chunk))
+                                    enqueues++;
+                            }
+                        }
+                        finally
+                        {
+                            chunk.Release();
                         }
 
                         readBytes += read;
@@ -400,6 +416,7 @@ public sealed class MjpegServer : IDisposable
         private readonly object _lock = new();
         private readonly Queue<StreamChunk> _queue = new();
         private readonly SemaphoreSlim _signal = new(0, int.MaxValue);
+        private bool _signalPending;
         private bool _catchupPending;
         private long _catchupRequestSequence;
         private long _queuedBytes;
@@ -425,14 +442,14 @@ public sealed class MjpegServer : IDisposable
             MaxQueueBytes = Math.Max(256 * 1024, maxQueueBytes);
         }
 
-        public void Enqueue(StreamChunk chunk)
+        public bool Enqueue(StreamChunk chunk)
         {
-            if (_disposed) return;
+            if (_disposed) return false;
 
             bool release = false;
             lock (_lock)
             {
-                if (_disposed) return;
+                if (_disposed) return false;
 
                 if (_catchupPending)
                 {
@@ -440,7 +457,7 @@ public sealed class MjpegServer : IDisposable
                     {
                         Interlocked.Add(ref _droppedBytes, chunk.Length);
                         Interlocked.Increment(ref _droppedChunks);
-                        return;
+                        return false;
                     }
 
                     _catchupPending = false;
@@ -457,16 +474,22 @@ public sealed class MjpegServer : IDisposable
                     {
                         Interlocked.Add(ref _droppedBytes, chunk.Length);
                         Interlocked.Increment(ref _droppedChunks);
-                        return;
+                        return false;
                     }
 
                     _catchupPending = false;
                     Interlocked.Increment(ref _catchups);
                 }
 
+                chunk.AddRef();
+                bool wasEmpty = _queue.Count == 0;
                 _queue.Enqueue(chunk);
                 _queuedBytes += chunk.Length;
-                release = true;
+                if (wasEmpty && !_signalPending)
+                {
+                    _signalPending = true;
+                    release = true;
+                }
             }
 
             if (release)
@@ -474,6 +497,8 @@ public sealed class MjpegServer : IDisposable
                 try { _signal.Release(); }
                 catch (ObjectDisposedException) { }
             }
+
+            return true;
         }
 
         public Task<bool> WaitForChunkAsync(int timeoutMs)
@@ -484,19 +509,35 @@ public sealed class MjpegServer : IDisposable
 
         public bool TryDequeue(out StreamChunk chunk)
         {
+            bool release = false;
             lock (_lock)
             {
+                _signalPending = false;
                 if (_queue.Count > 0)
                 {
                     chunk = _queue.Dequeue();
                     _queuedBytes -= chunk.Length;
                     if (_queuedBytes < 0) _queuedBytes = 0;
-                    return true;
+                    if (_queue.Count > 0 && !_signalPending)
+                    {
+                        _signalPending = true;
+                        release = true;
+                    }
+                }
+                else
+                {
+                    chunk = null;
+                    return false;
                 }
             }
 
-            chunk = null;
-            return false;
+            if (release)
+            {
+                try { _signal.Release(); }
+                catch (ObjectDisposedException) { }
+            }
+
+            return true;
         }
 
         private void DropQueuedChunksLocked()
@@ -506,6 +547,7 @@ public sealed class MjpegServer : IDisposable
                 var old = _queue.Dequeue();
                 Interlocked.Add(ref _droppedBytes, old.Length);
                 Interlocked.Increment(ref _droppedChunks);
+                old.Release();
             }
             _queuedBytes = 0;
         }
@@ -515,8 +557,11 @@ public sealed class MjpegServer : IDisposable
             _disposed = true;
             lock (_lock)
             {
+                while (_queue.Count > 0)
+                    _queue.Dequeue().Release();
                 _queue.Clear();
                 _queuedBytes = 0;
+                _signalPending = false;
             }
             try { _signal.Release(); } catch { }
             try { _signal.Dispose(); } catch { }
@@ -529,6 +574,7 @@ public sealed class MjpegServer : IDisposable
         public readonly int Length;
         public readonly long Sequence;
         public readonly bool StartsAtKeyframe;
+        private int _refCount;
 
         public StreamChunk(byte[] buffer, int length, long sequence, bool startsAtKeyframe)
         {
@@ -536,6 +582,18 @@ public sealed class MjpegServer : IDisposable
             Length = length;
             Sequence = sequence;
             StartsAtKeyframe = startsAtKeyframe;
+            _refCount = 1;
+        }
+
+        public void AddRef()
+        {
+            Interlocked.Increment(ref _refCount);
+        }
+
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _refCount) == 0)
+                ArrayPool<byte>.Shared.Return(Buffer);
         }
     }
 }

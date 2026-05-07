@@ -943,7 +943,7 @@ public partial class DesktopBuddyMod
         var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
         ownerRef.Reference.Target = root.World.LocalUser;
 
-        if (!(Config?.GetValue(SpatialAudioEnabled) ?? true))
+        if (!(Config?.GetValue(SpatialAudioEnabled) ?? false))
         {
             volSlider.Value.OnValueChange += (SyncField<float> field) =>
             {
@@ -1428,7 +1428,7 @@ public partial class DesktopBuddyMod
         root.Tag = "Desktop Buddy";
         bool focused = WindowInput.FocusWindow(hwnd);
 
-        bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? true;
+        bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
         if (useSpatialAudio && !isDesktopCapture && processId != 0 && VBCableSetup.IsInstalled())
         {
             string cableId = VBCableSetup.FindCableInputDeviceId();

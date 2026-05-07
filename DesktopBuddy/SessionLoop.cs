@@ -676,5 +676,16 @@ public partial class DesktopBuddyMod
             enc.StartInitializeAsync(device, (uint)fw, (uint)fh, contextLock, audioForEncoder);
             enc.QueueFrame(texture, (uint)fw, (uint)fh);
         };
+
+        IntPtr latestTexture = session.Streamer.SharedTexture;
+        int latestWidth = session.Streamer.SharedTextureWidth;
+        int latestHeight = session.Streamer.SharedTextureHeight;
+        IntPtr latestDevice = session.Streamer.D3dDevice;
+        if (latestTexture != IntPtr.Zero && latestDevice != IntPtr.Zero && latestWidth > 0 && latestHeight > 0)
+        {
+            enc.StartInitializeAsync(latestDevice, (uint)latestWidth, (uint)latestHeight, contextLock, audioForEncoder);
+            enc.QueueFrame(latestTexture, (uint)latestWidth, (uint)latestHeight);
+            Msg($"[RemoteStream] Seeded encoder from latest captured frame {latestWidth}x{latestHeight}");
+        }
     }
 }

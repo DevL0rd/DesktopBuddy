@@ -18,10 +18,11 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.3";
+    public override string Version => "1.0.5";
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
     internal static ModConfiguration? Config;
+    private static bool _configResetForNewDefaults;
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
@@ -40,12 +41,8 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("keyframeIntervalMs", "Maximum time between forced video keyframes in milliseconds. Lower reduces stream startup/catch-up latency but costs bitrate/quality.", () => 1000);
 
     [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> MaxStreamWidth =
-        new("maxStreamWidth", "Maximum encoded stream width. Larger captures are GPU-scaled down before encoding.", () => 2560);
-
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> MaxStreamHeight =
-        new("maxStreamHeight", "Maximum encoded stream height. Larger captures are GPU-scaled down before encoding.", () => 1440);
+    internal static readonly ModConfigurationKey<int> MaxStreamResolution =
+        new("maxStreamResolution", "Maximum encoded stream long-edge resolution. 2560 is 2K/QHD.", () => 2560);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcNetworkCachingMs =
@@ -150,7 +147,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
     {
-        builder.Version(new Version(1, 0, 3));
+        builder.Version(new Version(1, 0, 5));
     }
 
     public override IncompatibleConfigurationHandlingOption HandleIncompatibleConfigurationVersions(Version serializedVersion, Version definedVersion)
@@ -158,6 +155,7 @@ public partial class DesktopBuddyMod : ResoniteMod
         if (serializedVersion < definedVersion)
         {
             Msg($"[Config] Resetting old config {serializedVersion} for config schema {definedVersion}");
+            _configResetForNewDefaults = true;
             return IncompatibleConfigurationHandlingOption.CLOBBER;
         }
 
@@ -270,12 +268,23 @@ public partial class DesktopBuddyMod : ResoniteMod
         {
             if (Config == null) return;
 
-            Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
+            if (_configResetForNewDefaults)
+            {
+                Config.Set(SpatialAudioEnabled, false);
+                Config.Set(Bitrate, 10);
+                Config.Set(KeyframeIntervalMs, 1000);
+                Config.Set(MaxStreamResolution, 2560);
+                Msg("[Config] Applied 1.0.5 streaming defaults: spatialAudio=false bitrate=10 keyframeIntervalMs=1000 maxStreamResolution=2560");
+            }
+            else
+            {
+                Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
+                Config.Set(Bitrate, Config.GetValue(Bitrate));
+                Config.Set(KeyframeIntervalMs, Config.GetValue(KeyframeIntervalMs));
+                Config.Set(MaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
+            }
+
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
-            Config.Set(Bitrate, Config.GetValue(Bitrate));
-            Config.Set(KeyframeIntervalMs, Config.GetValue(KeyframeIntervalMs));
-            Config.Set(MaxStreamWidth, Math.Clamp(Config.GetValue(MaxStreamWidth), 128, 8192));
-            Config.Set(MaxStreamHeight, Math.Clamp(Config.GetValue(MaxStreamHeight), 128, 8192));
             Config.Set(LibVlcNetworkCachingMs, Math.Max(200, Config.GetValue(LibVlcNetworkCachingMs)));
             Config.Set(LibVlcLiveCachingMs, Math.Max(200, Config.GetValue(LibVlcLiveCachingMs)));
             Config.Set(LibVlcFileCachingMs, Config.GetValue(LibVlcFileCachingMs));
@@ -284,6 +293,7 @@ public partial class DesktopBuddyMod : ResoniteMod
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
             Config.Set(MediaMtxStreamName, Config.GetValue(MediaMtxStreamName));
             Config.Save();
+            _configResetForNewDefaults = false;
         }
         catch (Exception ex)
         {
