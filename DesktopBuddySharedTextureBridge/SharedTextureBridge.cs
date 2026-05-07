@@ -34,6 +34,19 @@ namespace DesktopBuddySharedTextureBridge
             return textureSlot;
         }
 
+        internal int ActiveSlotCount => _activeSlots.Count;
+        internal int PendingBindCount => _pendingBinds.Count;
+        internal int TotalTextureRequestCount
+        {
+            get
+            {
+                int total = 0;
+                foreach (var slot in _activeSlots.Values)
+                    total += slot.RequestCount;
+                return total;
+            }
+        }
+
         internal void Update()
         {
             TryEnsureMessenger();

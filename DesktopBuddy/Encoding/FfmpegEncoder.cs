@@ -36,17 +36,18 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _ringWritePos;
     private readonly object _ringLock = new();
     private readonly object _muxerLock = new();
-    private readonly ManualResetEventSlim _dataAvailable = new(false);
+    private readonly SemaphoreSlim _dataAvailable = new(0, int.MaxValue);
 
+    private uint _sourceWidth, _sourceHeight;
     private uint _width, _height;
     private int _totalFrames;
     private const uint NOMINAL_ENCODER_FPS = 30;
 
-    private const int RING_SIZE = 4 * 1024 * 1024;
+    private const int RING_SIZE = 16 * 1024 * 1024;
     private const int AVIO_BUFFER_SIZE = 65536;
     private const byte MPEGTS_SYNC = 0x47;
     private const int MPEGTS_PACKET_SIZE = 188;
-    private const int DEFAULT_KEYFRAME_INTERVAL_MS = 100;
+    private const int DEFAULT_KEYFRAME_INTERVAL_MS = 1000;
 
     private volatile bool _disposed;
     private int _disposeGuard;
@@ -61,14 +62,24 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private volatile uint _pendingWidth, _pendingHeight;
 
     private bool _needsVideoProcessor;
+    private bool _needsGpuScale;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
-    private IntPtr _vpOutputView, _vpNv12Texture;
+    private IntPtr _vpOutputView, _vpOutputTexture;
     private IntPtr _vpInputView, _vpInputViewTex;
     private long _startTicks;
     private long _lastVideoPts = -1;
     private long _lastKeyframeRingPos = -1;
     private long _lastKeyframeRequestTicks;
-    private long _maxReaderBacklogBytes = 512 * 1024;
+    private const int READER_CATCHUP_THRESHOLD_MS = 500;
+    private long _readerCatchupThresholdBytes = 2 * 1024 * 1024;
+    private long _readerOverrunEvents;
+    private long _readerOverrunMaxBacklogBytes;
+    private long _readerLastOverrunLogTicks;
+    private long _readerCatchupRequests;
+    private long _readerCatchups;
+    private long _readerCatchupMaxBacklogBytes;
+    private long _readerLastCatchupLogTicks;
+    private long _lastResourceLogTicks;
 
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
@@ -116,6 +127,20 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
         }
     }
+
+    public string GetReaderDiagnostics(long readPos, bool aligned)
+    {
+        lock (_ringLock)
+        {
+            long writePos = _ringWritePos;
+            long backlog = writePos - readPos;
+            long latestKeyframePos = Interlocked.Read(ref _lastKeyframeRingPos);
+            long keyframeAgeBytes = latestKeyframePos >= 0 ? writePos - latestKeyframePos : -1;
+            return $"readPos={readPos} writePos={writePos} backlog={backlog} aligned={aligned} latestKeyframe={latestKeyframePos} keyframeAgeBytes={keyframeAgeBytes} catchupThreshold={_readerCatchupThresholdBytes} ringSize={RING_SIZE} frames={_totalFrames} keepAlive={_keepAliveFramesEncoded}";
+        }
+    }
+
+    public long LiveCatchupThresholdBytes => Interlocked.Read(ref _readerCatchupThresholdBytes);
 
     public void Stop()
     {
@@ -194,20 +219,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     public System.Threading.Tasks.Task WaitForDataAsync(int timeoutMs)
     {
-        if (_dataAvailable.IsSet)
-        {
-            _dataAvailable.Reset();
-            return System.Threading.Tasks.Task.CompletedTask;
-        }
-        return System.Threading.Tasks.Task.Run(() =>
-        {
-            _dataAvailable.Wait(timeoutMs);
-            _dataAvailable.Reset();
-        });
+        return _dataAvailable.WaitAsync(Math.Max(1, timeoutMs));
     }
 
-    public int ReadStream(byte[] buffer, ref long readPos, ref bool aligned)
+    public int ReadStream(byte[] buffer, ref long readPos, ref bool aligned, ref long catchupRequestedAfterRingPos, out bool startsAtKeyframe, out bool shouldFlush)
     {
+        startsAtKeyframe = false;
+        shouldFlush = false;
         lock (_ringLock)
         {
             long available = _ringWritePos - readPos;
@@ -215,22 +233,37 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (available > RING_SIZE)
             {
-                readPos = _ringWritePos - RING_SIZE;
-                available = RING_SIZE;
+                RecordReaderOverrun(readPos, _ringWritePos, available);
+                readPos = _ringWritePos;
                 aligned = false;
+                return -1;
             }
 
             long latestKeyframePos = Interlocked.Read(ref _lastKeyframeRingPos);
-            if (aligned && available > _maxReaderBacklogBytes &&
-                latestKeyframePos >= 0 &&
-                latestKeyframePos > readPos &&
-                latestKeyframePos >= _ringWritePos - RING_SIZE &&
-                latestKeyframePos < _ringWritePos)
+            if (aligned && available > _readerCatchupThresholdBytes)
             {
-                long oldReadPos = readPos;
-                readPos = latestKeyframePos;
-                available = _ringWritePos - readPos;
-                Log.Msg($"[FfmpegEnc:{_streamId}] Reader fell behind; skipped from ringPos={oldReadPos} to latest keyframe={readPos}, liveWritePos={_ringWritePos}, backlog={available} bytes");
+                if (catchupRequestedAfterRingPos < 0)
+                {
+                    catchupRequestedAfterRingPos = _ringWritePos;
+                    Interlocked.Increment(ref _readerCatchupRequests);
+                    Log.Msg($"[FfmpegEnc:{_streamId}] Reader catch-up requested: readPos={readPos}, liveWritePos={_ringWritePos}, backlog={available}, threshold={_readerCatchupThresholdBytes}; waiting for next keyframe");
+                }
+
+                if (latestKeyframePos > catchupRequestedAfterRingPos &&
+                    latestKeyframePos >= _ringWritePos - RING_SIZE &&
+                    latestKeyframePos < _ringWritePos)
+                {
+                    long oldReadPos = readPos;
+                    long skippedBacklog = available;
+                    readPos = latestKeyframePos;
+                    available = _ringWritePos - readPos;
+                    catchupRequestedAfterRingPos = -1;
+                    RecordReaderCatchup(oldReadPos, readPos, _ringWritePos, skippedBacklog, available);
+                }
+            }
+            else if (available <= _readerCatchupThresholdBytes / 2)
+            {
+                catchupRequestedAfterRingPos = -1;
             }
 
             if (!aligned)
@@ -267,6 +300,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
 
             int toRead = (int)Math.Min(available, buffer.Length);
+            startsAtKeyframe = latestKeyframePos >= 0 && readPos == latestKeyframePos;
+            if (latestKeyframePos > readPos && latestKeyframePos < readPos + toRead)
+                toRead = (int)(latestKeyframePos - readPos);
+            shouldFlush = true;
+
             int ringPos = (int)(readPos % RING_SIZE);
             int firstChunk = Math.Min(toRead, RING_SIZE - ringPos);
             Buffer.BlockCopy(_ringBuffer, ringPos, buffer, 0, firstChunk);
@@ -292,18 +330,20 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             SetFfmpegPath();
             if (!_ffmpegPathSet) { _initFailed = true; return false; }
 
-            _width = width & ~1u;
-            _height = height & ~1u;
+            _sourceWidth = width & ~1u;
+            _sourceHeight = height & ~1u;
+            CalculateEncoderSize(_sourceWidth, _sourceHeight, out _width, out _height);
+            _needsGpuScale = _width != _sourceWidth || _height != _sourceHeight;
 
             if (_width < 128 || _height < 128)
             {
-                Log.Msg($"[FfmpegEnc:{_streamId}] Window too small for encoding: {_width}x{_height} (min 128x128)");
+                Log.Msg($"[FfmpegEnc:{_streamId}] Window too small for encoding: source={_sourceWidth}x{_sourceHeight}, encode={_width}x{_height} (min 128x128)");
                 _initFailed = true; return false;
             }
 
-            Log.Msg($"[FfmpegEnc:{_streamId}] Initializing: {_width}x{_height}, nominal encoder rate {NOMINAL_ENCODER_FPS}fps (capture remains event-driven)");
+            Log.Msg($"[FfmpegEnc:{_streamId}] Initializing: source={_sourceWidth}x{_sourceHeight}, encode={_width}x{_height}, gpuScale={_needsGpuScale}, nominal encoder rate {NOMINAL_ENCODER_FPS}fps (capture remains event-driven)");
 
-            bool useHevc = width > 4096 || height > 4096;
+            bool useHevc = _width > 4096 || _height > 4096;
             string[] encoders = useHevc
                 ? new[] { "hevc_nvenc", "hevc_amf" }
                 : new[] { "h264_nvenc", "h264_amf" };
@@ -311,7 +351,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             AVCodec* codec = null;
             string codecName = null;
             int ret = -1;
-
             foreach (var name in encoders)
             {
                 codec = ffmpeg.avcodec_find_encoder_by_name(name);
@@ -333,7 +372,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
                 int vbvBuffer = (int)Math.Clamp(bitrate / 4, 500_000L, int.MaxValue);
                 long streamBytesPerSecond = (bitrate + 256_000L) / 8;
-                _maxReaderBacklogBytes = Math.Clamp(streamBytesPerSecond / 20, 96 * 1024, RING_SIZE / 4);
+                _readerCatchupThresholdBytes = Math.Clamp(
+                    streamBytesPerSecond * READER_CATCHUP_THRESHOLD_MS / 1000,
+                    256 * 1024,
+                    RING_SIZE / 2);
                 _codecCtx->max_b_frames = 0;
                 _codecCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_D3D11;
                 _codecCtx->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY | ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -344,7 +386,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->gop_size = keyframeIntervalFrames;
                 _codecCtx->keyint_min = 1;
                 _codecCtx->bit_rate = bitrate;
-                _codecCtx->rc_max_rate = bitrate;
+                _codecCtx->rc_max_rate = isAmf ? bitrate : (long)(bitrate * 1.2);
                 _codecCtx->rc_buffer_size = vbvBuffer;
 
                 var swFormat = isAmf
@@ -357,7 +399,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 {
                     ffmpeg.av_dict_set(&opts, "preset", "p1", 0);
                     ffmpeg.av_dict_set(&opts, "tune", "ull", 0);
-                    ffmpeg.av_dict_set(&opts, "rc", "cbr", 0);
+                    ffmpeg.av_dict_set(&opts, "rc", "vbr", 0);
                     ffmpeg.av_dict_set(&opts, "zerolatency", "1", 0);
                     ffmpeg.av_dict_set(&opts, "delay", "0", 0);
                     ffmpeg.av_dict_set(&opts, "rc-lookahead", "0", 0);
@@ -405,8 +447,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             var d3d11DevCtxData = (AVD3D11VADeviceContext*)hwDevCtxData->hwctx;
             _deviceContext = (IntPtr)d3d11DevCtxData->device_context;
 
-            if (_needsVideoProcessor)
-                SetupVideoProcessor(d3dDevice, _width, _height);
+            if (_needsVideoProcessor || _needsGpuScale)
+                SetupVideoProcessor(d3dDevice, _sourceWidth, _sourceHeight, _width, _height, _needsVideoProcessor);
 
             if (_rtspUrl == null)
             {
@@ -442,6 +484,25 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _initThread.Start();
     }
 
+    private static void CalculateEncoderSize(uint sourceWidth, uint sourceHeight, out uint encoderWidth, out uint encoderHeight)
+    {
+        encoderWidth = sourceWidth & ~1u;
+        encoderHeight = sourceHeight & ~1u;
+
+        uint maxWidth = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamWidth) ?? 2560, 128, 8192) & ~1u;
+        uint maxHeight = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamHeight) ?? 1440, 128, 8192) & ~1u;
+
+        if (encoderWidth <= maxWidth && encoderHeight <= maxHeight)
+            return;
+
+        double scale = Math.Min(
+            (double)maxWidth / encoderWidth,
+            (double)maxHeight / encoderHeight);
+
+        encoderWidth = Math.Max(2u, ((uint)Math.Floor(encoderWidth * scale)) & ~1u);
+        encoderHeight = Math.Max(2u, ((uint)Math.Floor(encoderHeight * scale)) & ~1u);
+    }
+
     private void SetupHardwareContext(IntPtr d3dDevice, AVPixelFormat swFormat)
     {
         _hwDeviceCtx = ffmpeg.av_hwdevice_ctx_alloc(AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA);
@@ -467,7 +528,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         framesCtx->sw_format = swFormat;
         framesCtx->width = (int)_width;
         framesCtx->height = (int)_height;
-        framesCtx->initial_pool_size = 0;
+            framesCtx->initial_pool_size = 32;
 
         Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");
         int ret2 = ffmpeg.av_hwframe_ctx_init(_hwFramesCtx);
@@ -664,7 +725,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _ringWritePos += buf_size;
         }
 
-        _dataAvailable.Set();
+        try { _dataAvailable.Release(); }
+        catch (SemaphoreFullException) { }
 
         return buf_size;
     }
@@ -672,10 +734,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
         if (_disposed || _initFailed || !_initialized) return;
-        if ((width & ~1u) != _width || (height & ~1u) != _height)
+        if ((width & ~1u) != _sourceWidth || (height & ~1u) != _sourceHeight)
         {
             if (_totalFrames == 0)
-                Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch init={_width}x{_height} frame={width}x{height}");
+                Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch source={_sourceWidth}x{_sourceHeight} encode={_width}x{_height} frame={width}x{height}");
             return;
         }
 
@@ -784,6 +846,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         int ret;
         long ringBefore = _ringWritePos;
 
+        try
         {
             if (_disposed) return;
 
@@ -793,23 +856,29 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 if (ret < 0) { Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_get_buffer failed: {FfmpegError(ret)}"); return; }
             }
 
-            if (_needsVideoProcessor)
+            if (_needsVideoProcessor || _needsGpuScale)
             {
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    VideoProcessorConvert(srcTexture);
-                    IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
-                    int dstIndex = (int)_hwFrame->data[1];
-                    CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, _vpNv12Texture, (int)_width, (int)_height);
+                    CopyWithD3dContextLock(() =>
+                    {
+                        VideoProcessorConvert(srcTexture);
+                        IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
+                        int dstIndex = (int)_hwFrame->data[1];
+                        CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, _vpOutputTexture, (int)_width, (int)_height);
+                    });
                 }
             }
             else
             {
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
-                    int dstIndex = (int)_hwFrame->data[1];
-                    CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, srcTexture, (int)_width, (int)_height);
+                    CopyWithD3dContextLock(() =>
+                    {
+                        IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
+                        int dstIndex = (int)_hwFrame->data[1];
+                        CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, srcTexture, (int)_width, (int)_height);
+                    });
                 }
             }
 
@@ -872,7 +941,17 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
 
             if (_rtspUrl == null)
-                lock (_muxerLock) ffmpeg.avio_flush(_fmtCtx->pb);
+            {
+                lock (_muxerLock)
+                {
+                    ffmpeg.avio_flush(_fmtCtx->pb);
+                }
+            }
+        }
+        finally
+        {
+            if (_hwFrame != null)
+                ffmpeg.av_frame_unref(_hwFrame);
         }
 
         _totalFrames++;
@@ -882,7 +961,36 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _totalFrames % 300 == 0 ||
             (keepAliveFrame && (_keepAliveFramesEncoded <= 8 || _keepAliveFramesEncoded % 16 == 0));
         if (logFrame)
-            Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), keepAlive={_keepAliveFramesEncoded}, keepAliveFrame={keepAliveFrame}, keyframeRequests={_keyframesRequested}, bytesWritten={ringAfter - ringBefore}, ringPos={ringAfter}, maxReaderBacklog={_maxReaderBacklogBytes}");
+            Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), keepAlive={_keepAliveFramesEncoded}, keepAliveFrame={keepAliveFrame}, keyframeRequests={_keyframesRequested}, bytesWritten={ringAfter - ringBefore}, ringPos={ringAfter}");
+        LogResourcesIfDue();
+    }
+
+    private void LogResourcesIfDue()
+    {
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long previousTicks = Interlocked.Read(ref _lastResourceLogTicks);
+        if (previousTicks != 0)
+        {
+            double elapsedMs = (double)(nowTicks - previousTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (elapsedMs < 2000.0) return;
+        }
+
+        if (Interlocked.CompareExchange(ref _lastResourceLogTicks, nowTicks, previousTicks) != previousTicks)
+            return;
+
+        try
+        {
+            var process = System.Diagnostics.Process.GetCurrentProcess();
+            process.Refresh();
+            double privateMb = process.PrivateMemorySize64 / 1048576.0;
+            double workingMb = process.WorkingSet64 / 1048576.0;
+            double managedMb = GC.GetTotalMemory(false) / 1048576.0;
+            Log.Msg($"[FfmpegEnc:{_streamId}] Resources: private={privateMb:F1}MB working={workingMb:F1}MB managed={managedMb:F1}MB frames={_totalFrames} keepAlive={_keepAliveFramesEncoded} ringPos={Interlocked.Read(ref _ringWritePos)}");
+        }
+        catch (Exception ex)
+        {
+            Log.Msg($"[FfmpegEnc:{_streamId}] Resource log failed: {ex.Message}");
+        }
     }
 
     private bool ShouldRequestKeyframe(long nowTicks)
@@ -995,6 +1103,74 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         fn(deviceContext, dstTexture, (uint)dstArrayIndex, 0, 0, 0, srcTexture, 0, box);
     }
 
+    private void CopyWithD3dContextLock(Action copy)
+    {
+        if (_d3dContextLock == null)
+        {
+            copy();
+            return;
+        }
+
+        lock (_d3dContextLock)
+            copy();
+    }
+
+    private void RecordReaderOverrun(long readPos, long liveWritePos, long backlogBytes)
+    {
+        DesktopBuddyMod.Perf.IncrementCounter("stream_reader_overrun");
+        Interlocked.Increment(ref _readerOverrunEvents);
+        UpdateMax(ref _readerOverrunMaxBacklogBytes, backlogBytes);
+
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long previousLogTicks = Interlocked.Read(ref _readerLastOverrunLogTicks);
+        if (previousLogTicks != 0)
+        {
+            double elapsedMs = (double)(nowTicks - previousLogTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (elapsedMs < 5000.0) return;
+        }
+
+        if (Interlocked.CompareExchange(ref _readerLastOverrunLogTicks, nowTicks, previousLogTicks) != previousLogTicks)
+            return;
+
+        long events = Interlocked.Exchange(ref _readerOverrunEvents, 0);
+        long maxBacklog = Interlocked.Exchange(ref _readerOverrunMaxBacklogBytes, 0);
+        Log.Msg($"[FfmpegEnc:{_streamId}] Reader overrun summary: events={events}, maxBacklog={maxBacklog} bytes, ringSize={RING_SIZE} bytes, lastReadPos={readPos}, liveWritePos={liveWritePos}, backlog={backlogBytes} bytes; closing reader for clean reconnect");
+    }
+
+    private void RecordReaderCatchup(long oldReadPos, long newReadPos, long liveWritePos, long skippedBacklogBytes, long remainingBacklogBytes)
+    {
+        DesktopBuddyMod.Perf.IncrementCounter("stream_reader_catchup");
+        Interlocked.Increment(ref _readerCatchups);
+        UpdateMax(ref _readerCatchupMaxBacklogBytes, skippedBacklogBytes);
+
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long previousLogTicks = Interlocked.Read(ref _readerLastCatchupLogTicks);
+        if (previousLogTicks != 0)
+        {
+            double elapsedMs = (double)(nowTicks - previousLogTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (elapsedMs < 5000.0) return;
+        }
+
+        if (Interlocked.CompareExchange(ref _readerLastCatchupLogTicks, nowTicks, previousLogTicks) != previousLogTicks)
+            return;
+
+        long requests = Interlocked.Exchange(ref _readerCatchupRequests, 0);
+        long catchups = Interlocked.Exchange(ref _readerCatchups, 0);
+        long maxBacklog = Interlocked.Exchange(ref _readerCatchupMaxBacklogBytes, 0);
+        Log.Msg($"[FfmpegEnc:{_streamId}] Reader catch-up summary: requests={requests}, catchups={catchups}, maxSkippedBacklog={maxBacklog} bytes, threshold={_readerCatchupThresholdBytes} bytes, lastSkip={oldReadPos}->{newReadPos}, liveWritePos={liveWritePos}, skippedBacklog={skippedBacklogBytes} bytes, remainingBacklog={remainingBacklogBytes} bytes");
+    }
+
+    private static void UpdateMax(ref long target, long value)
+    {
+        long current;
+        do
+        {
+            current = Interlocked.Read(ref target);
+            if (value <= current) return;
+        }
+        while (Interlocked.CompareExchange(ref target, value, current) != current);
+    }
+
     private static readonly Guid IID_ID3D11VideoDevice = new(0x10EC4D5B, 0x975A, 0x4689, 0xB9, 0xE4, 0xD0, 0xAA, 0xC3, 0x0F, 0xE3, 0x33);
     private static readonly Guid IID_ID3D11VideoContext = new(0x61F21C45, 0x3C0E, 0x4A74, 0x9C, 0xEA, 0x67, 0x10, 0x0D, 0x9A, 0xD5, 0xE4);
 
@@ -1038,7 +1214,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         public uint BindFlags, CPUAccessFlags, MiscFlags;
     }
 
-    private void SetupVideoProcessor(IntPtr d3dDevice, uint w, uint h)
+    private void SetupVideoProcessor(IntPtr d3dDevice, uint inputW, uint inputH, uint outputW, uint outputH, bool outputNv12)
     {
         int hr;
         var iidVD = IID_ID3D11VideoDevice;
@@ -1054,9 +1230,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         {
             InputFrameFormat = 0,
             InputFrameRateNum = 30, InputFrameRateDen = 1,
-            InputWidth = w, InputHeight = h,
+            InputWidth = inputW, InputHeight = inputH,
             OutputFrameRateNum = 30, OutputFrameRateDen = 1,
-            OutputWidth = w, OutputHeight = h,
+            OutputWidth = outputW, OutputHeight = outputH,
             Usage = 1
         };
         var vpDevVt = *(IntPtr**)_vpDevice;
@@ -1068,10 +1244,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         hr = createProcFn(_vpDevice, _vpEnum, 0, out _vpProcessor);
         if (hr < 0) throw new Exception($"CreateVideoProcessor failed hr=0x{hr:X8}");
 
-        var nv12Desc = new TEX2D_DESC
+        var outputDesc = new TEX2D_DESC
         {
-            Width = w, Height = h, MipLevels = 1, ArraySize = 1,
-            Format = 103,
+            Width = outputW, Height = outputH, MipLevels = 1, ArraySize = 1,
+            Format = outputNv12 ? 103 : 87,
             SampleCount = 1, SampleQuality = 0,
             Usage = 0,
             BindFlags = 0x20,
@@ -1079,16 +1255,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         };
         var devVt = *(IntPtr**)d3dDevice;
         var createTexFn = (delegate* unmanaged[Stdcall]<IntPtr, TEX2D_DESC*, IntPtr, out IntPtr, int>)devVt[5];
-        hr = createTexFn(d3dDevice, &nv12Desc, IntPtr.Zero, out _vpNv12Texture);
-        if (hr < 0) throw new Exception($"CreateTexture2D NV12 failed hr=0x{hr:X8}");
+        hr = createTexFn(d3dDevice, &outputDesc, IntPtr.Zero, out _vpOutputTexture);
+        if (hr < 0) throw new Exception($"CreateTexture2D video processor output failed hr=0x{hr:X8}");
 
         var ovDesc = new VP_OUTPUT_VIEW_DESC { ViewDimension = 1, MipSlice = 0 };
         var createOVFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, VP_OUTPUT_VIEW_DESC*, out IntPtr, int>)vpDevVt[9];
-        hr = createOVFn(_vpDevice, _vpNv12Texture, _vpEnum, &ovDesc, out _vpOutputView);
+        hr = createOVFn(_vpDevice, _vpOutputTexture, _vpEnum, &ovDesc, out _vpOutputView);
         if (hr < 0) throw new Exception($"CreateVideoProcessorOutputView failed hr=0x{hr:X8}");
 
         var vpCtxVt = *(IntPtr**)_vpContext;
-        var outCs = new VP_COLOR_SPACE { Value = 0x6 };
+        var outCs = new VP_COLOR_SPACE { Value = outputNv12 ? 0x6u : 0u };
         var setOutCsFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, VP_COLOR_SPACE*, void>)vpCtxVt[15];
         setOutCsFn(_vpContext, _vpProcessor, &outCs);
 
@@ -1099,7 +1275,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         var setInCsFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, VP_COLOR_SPACE*, void>)vpCtxVt[28];
         setInCsFn(_vpContext, _vpProcessor, 0, &inCs);
 
-        Log.Msg($"[FfmpegEnc:{_streamId}] Video Processor ready: BGRA {w}x{h} → NV12");
+        Log.Msg($"[FfmpegEnc:{_streamId}] Video Processor ready: BGRA {inputW}x{inputH} -> {(outputNv12 ? "NV12" : "BGRA")} {outputW}x{outputH}, inCs=0, outCs=0x{outCs.Value:X}");
     }
 
     private void VideoProcessorConvert(IntPtr bgraTexture)
@@ -1150,7 +1326,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === START ===");
         _initialized = false;
         _disposed = true;
-        try { _dataAvailable.Set(); } catch { }
         try { _encodeEvent.Set(); } catch { }
 
         _initThread?.Join(5000);
@@ -1188,7 +1363,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             {
                 if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; _vpInputViewTex = IntPtr.Zero; }
                 if (_vpOutputView != IntPtr.Zero) { Marshal.Release(_vpOutputView); _vpOutputView = IntPtr.Zero; }
-                if (_vpNv12Texture != IntPtr.Zero) { Marshal.Release(_vpNv12Texture); _vpNv12Texture = IntPtr.Zero; }
+                if (_vpOutputTexture != IntPtr.Zero) { Marshal.Release(_vpOutputTexture); _vpOutputTexture = IntPtr.Zero; }
                 if (_vpProcessor != IntPtr.Zero) { Marshal.Release(_vpProcessor); _vpProcessor = IntPtr.Zero; }
                 if (_vpEnum != IntPtr.Zero) { Marshal.Release(_vpEnum); _vpEnum = IntPtr.Zero; }
                 if (_vpContext != IntPtr.Zero) { Marshal.Release(_vpContext); _vpContext = IntPtr.Zero; }

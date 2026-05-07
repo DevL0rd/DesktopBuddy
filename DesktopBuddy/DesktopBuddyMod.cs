@@ -18,7 +18,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.1";
+    public override string Version => "1.0.3";
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
     internal static ModConfiguration? Config;
@@ -33,11 +33,19 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> Bitrate =
-        new("bitrate", "Video encoding bitrate in Mbps.", () => 25);
+        new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> KeyframeIntervalMs =
-        new("keyframeIntervalMs", "Maximum time between forced video keyframes in milliseconds. Lower reduces stream startup/catch-up latency but costs bitrate/quality.", () => 100);
+        new("keyframeIntervalMs", "Maximum time between forced video keyframes in milliseconds. Lower reduces stream startup/catch-up latency but costs bitrate/quality.", () => 1000);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> MaxStreamWidth =
+        new("maxStreamWidth", "Maximum encoded stream width. Larger captures are GPU-scaled down before encoding.", () => 2560);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> MaxStreamHeight =
+        new("maxStreamHeight", "Maximum encoded stream height. Larger captures are GPU-scaled down before encoding.", () => 1440);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcNetworkCachingMs =
@@ -50,10 +58,6 @@ public partial class DesktopBuddyMod : ResoniteMod
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcFileCachingMs =
         new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 100);
-
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> LibVlcClockJitterMs =
-        new("libVlcClockJitterMs", "libVLC clock jitter in milliseconds for DesktopBuddy streams.", () => 50);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> UseMediaMtx =
@@ -146,7 +150,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
     {
-        builder.Version(new Version(1, 0, 1));
+        builder.Version(new Version(1, 0, 3));
     }
 
     public override IncompatibleConfigurationHandlingOption HandleIncompatibleConfigurationVersions(Version serializedVersion, Version definedVersion)
@@ -162,10 +166,9 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     public override void OnEngineInit()
     {
+        Log.StartSession();
         Config = GetConfiguration();
         SaveCurrentConfigDefaults();
-
-        Log.StartSession();
 
         AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
         {
@@ -271,10 +274,11 @@ public partial class DesktopBuddyMod : ResoniteMod
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
             Config.Set(Bitrate, Config.GetValue(Bitrate));
             Config.Set(KeyframeIntervalMs, Config.GetValue(KeyframeIntervalMs));
+            Config.Set(MaxStreamWidth, Math.Clamp(Config.GetValue(MaxStreamWidth), 128, 8192));
+            Config.Set(MaxStreamHeight, Math.Clamp(Config.GetValue(MaxStreamHeight), 128, 8192));
             Config.Set(LibVlcNetworkCachingMs, Math.Max(200, Config.GetValue(LibVlcNetworkCachingMs)));
             Config.Set(LibVlcLiveCachingMs, Math.Max(200, Config.GetValue(LibVlcLiveCachingMs)));
             Config.Set(LibVlcFileCachingMs, Config.GetValue(LibVlcFileCachingMs));
-            Config.Set(LibVlcClockJitterMs, Math.Max(50, Config.GetValue(LibVlcClockJitterMs)));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
