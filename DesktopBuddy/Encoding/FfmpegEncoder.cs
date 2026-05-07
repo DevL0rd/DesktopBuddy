@@ -246,7 +246,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 {
                     catchupRequestedAfterRingPos = _ringWritePos;
                     Interlocked.Increment(ref _readerCatchupRequests);
-                    Log.Msg($"[FfmpegEnc:{_streamId}] Reader catch-up requested: readPos={readPos}, liveWritePos={_ringWritePos}, backlog={available}, threshold={_readerCatchupThresholdBytes}; waiting for next keyframe");
                 }
 
                 if (latestKeyframePos > catchupRequestedAfterRingPos &&
