@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 using HarmonyLib;
 using ResoniteModLoader;
@@ -18,9 +20,10 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.5";
+    public override string Version => "1.0.6";
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
+    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 6);
     internal static ModConfiguration? Config;
     private static bool _configResetForNewDefaults;
 
@@ -147,14 +150,14 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
     {
-        builder.Version(new Version(1, 0, 5));
+        builder.Version(CurrentConfigSchemaVersion);
     }
 
     public override IncompatibleConfigurationHandlingOption HandleIncompatibleConfigurationVersions(Version serializedVersion, Version definedVersion)
     {
-        if (serializedVersion < definedVersion)
+        if (serializedVersion != definedVersion)
         {
-            Msg($"[Config] Resetting old config {serializedVersion} for config schema {definedVersion}");
+            Msg($"[Config] Resetting config {serializedVersion} for config schema {definedVersion}");
             _configResetForNewDefaults = true;
             return IncompatibleConfigurationHandlingOption.CLOBBER;
         }
@@ -165,6 +168,7 @@ public partial class DesktopBuddyMod : ResoniteMod
     public override void OnEngineInit()
     {
         Log.StartSession();
+        DetectStoredConfigVersionMismatch();
         Config = GetConfiguration();
         SaveCurrentConfigDefaults();
 
@@ -270,11 +274,8 @@ public partial class DesktopBuddyMod : ResoniteMod
 
             if (_configResetForNewDefaults)
             {
-                Config.Set(SpatialAudioEnabled, false);
-                Config.Set(Bitrate, 10);
-                Config.Set(KeyframeIntervalMs, 1000);
-                Config.Set(MaxStreamResolution, 2560);
-                Msg("[Config] Applied 1.0.5 streaming defaults: spatialAudio=false bitrate=10 keyframeIntervalMs=1000 maxStreamResolution=2560");
+                ApplyFreshConfigDefaults();
+                Msg("[Config] Applied 1.0.6 fresh defaults: spatialAudio=false bitrate=10 keyframeIntervalMs=1000 maxStreamResolution=2560");
             }
             else
             {
@@ -299,6 +300,78 @@ public partial class DesktopBuddyMod : ResoniteMod
         {
             Msg($"[Config] Failed to save current defaults: {ex.Message}");
         }
+    }
+
+    private static void ApplyFreshConfigDefaults()
+    {
+        Config.Set(SpatialAudioEnabled, false);
+        Config.Set(CheckForUpdates, true);
+        Config.Set(Bitrate, 10);
+        Config.Set(KeyframeIntervalMs, 1000);
+        Config.Set(MaxStreamResolution, 2560);
+        Config.Set(LibVlcNetworkCachingMs, 200);
+        Config.Set(LibVlcLiveCachingMs, 200);
+        Config.Set(LibVlcFileCachingMs, 100);
+        Config.Set(UseMediaMtx, false);
+        Config.Set(MediaMtxHost, "");
+        Config.Set(MediaMtxPort, 8554);
+        Config.Set(MediaMtxStreamName, "");
+    }
+
+    private static void DetectStoredConfigVersionMismatch()
+    {
+        try
+        {
+            string path = FindRmlConfigPath();
+            if (path == null || !File.Exists(path)) return;
+
+            string json = File.ReadAllText(path);
+            var match = Regex.Match(json, "\"version\"\\s*:\\s*\"([^\"]+)\"");
+            if (!match.Success || !System.Version.TryParse(match.Groups[1].Value, out var storedVersion))
+            {
+                Msg($"[Config] Existing config has no readable version; applying fresh defaults for schema {CurrentConfigSchemaVersion}");
+                _configResetForNewDefaults = true;
+                return;
+            }
+
+            if (storedVersion != CurrentConfigSchemaVersion)
+            {
+                Msg($"[Config] Existing config version {storedVersion} differs from schema {CurrentConfigSchemaVersion}; applying fresh defaults");
+                _configResetForNewDefaults = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Config] Could not inspect existing config version: {ex.Message}");
+        }
+    }
+
+    private static string FindRmlConfigPath()
+    {
+        string assemblyDir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? "";
+        string current = Directory.GetCurrentDirectory() ?? "";
+
+        string[] candidates =
+        {
+            Path.Combine(assemblyDir, "..", "rml_config", "DesktopBuddy.json"),
+            Path.Combine(assemblyDir, "..", "..", "rml_config", "DesktopBuddy.json"),
+            Path.Combine(baseDir, "rml_config", "DesktopBuddy.json"),
+            Path.Combine(baseDir, "..", "rml_config", "DesktopBuddy.json"),
+            Path.Combine(current, "rml_config", "DesktopBuddy.json"),
+        };
+
+        foreach (string candidate in candidates)
+        {
+            try
+            {
+                string full = Path.GetFullPath(candidate);
+                if (File.Exists(full)) return full;
+            }
+            catch { }
+        }
+
+        return null;
     }
 
     private static void PrewarmSharedResources()
