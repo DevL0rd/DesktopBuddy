@@ -392,7 +392,17 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 var swFormat = isAmf
                     ? AVPixelFormat.AV_PIX_FMT_NV12
                     : AVPixelFormat.AV_PIX_FMT_BGRA;
-                SetupHardwareContext(d3dDevice, swFormat);
+
+                try
+                {
+                    SetupHardwareContext(d3dDevice, swFormat);
+                }
+                catch (Exception ex)
+                {
+                    Log.Msg($"[FfmpegEnc:{_streamId}] {name} setup failed: {ex.Message}");
+                    ret = -1;
+                    continue;
+                }
 
                 AVDictionary* opts = null;
                 if (name.Contains("nvenc"))
@@ -489,15 +499,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         encoderWidth = sourceWidth & ~1u;
         encoderHeight = sourceHeight & ~1u;
 
-        uint maxWidth = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamWidth) ?? 2560, 128, 8192) & ~1u;
-        uint maxHeight = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamHeight) ?? 1440, 128, 8192) & ~1u;
+        uint maxResolution = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamResolution) ?? 2560, 128, 8192) & ~1u;
+        uint longestEdge = Math.Max(encoderWidth, encoderHeight);
 
-        if (encoderWidth <= maxWidth && encoderHeight <= maxHeight)
+        if (longestEdge <= maxResolution)
             return;
 
-        double scale = Math.Min(
-            (double)maxWidth / encoderWidth,
-            (double)maxHeight / encoderHeight);
+        double scale = (double)maxResolution / longestEdge;
 
         encoderWidth = Math.Max(2u, ((uint)Math.Floor(encoderWidth * scale)) & ~1u);
         encoderHeight = Math.Max(2u, ((uint)Math.Floor(encoderHeight * scale)) & ~1u);
@@ -528,7 +536,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         framesCtx->sw_format = swFormat;
         framesCtx->width = (int)_width;
         framesCtx->height = (int)_height;
-            framesCtx->initial_pool_size = 32;
+        // Some AMD drivers reject preallocated D3D11/NV12 pools; lazy allocation is slower to start but much more compatible.
+        framesCtx->initial_pool_size = 0;
 
         Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");
         int ret2 = ffmpeg.av_hwframe_ctx_init(_hwFramesCtx);

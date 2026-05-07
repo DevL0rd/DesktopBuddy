@@ -282,6 +282,7 @@ public sealed class WgcCapture : IDisposable
     public int Height { get; private set; }
     public int FramesCaptured => _framesCaptured;
     public IntPtr D3dDevice => _d3dDevice;
+    public IntPtr SharedTexture => _sharedTexture;
     public IntPtr SharedTextureHandle { get; private set; }
     public int SharedTextureWidth { get; private set; }
     public int SharedTextureHeight { get; private set; }
