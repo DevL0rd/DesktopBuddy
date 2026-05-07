@@ -3,9 +3,16 @@ SETLOCAL ENABLEDELAYEDEXPANSION
 
 set "SCRIPT_DIR=%~dp0"
 set "ROOT_DIR=%SCRIPT_DIR%.."
-set "MOD_DLL=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.dll"
-set "MOD_SHA=%ROOT_DIR%\DesktopBuddy\bin\Debug\net10.0-windows10.0.22621.0\DesktopBuddy.sha"
-set "TEXTURE_BRIDGE_DLL=%ROOT_DIR%\DesktopBuddySharedTextureBridge\bin\Debug\net472\DesktopBuddySharedTextureBridge.dll"
+set "CONFIGURATION=Release"
+set "TEXTURE_BRIDGE_DLL=%ROOT_DIR%\DesktopBuddySharedTextureBridge\bin\%CONFIGURATION%\net472\DesktopBuddySharedTextureBridge.dll"
+
+for /f "delims=" %%D in ('dir /b /ad /o-n "%ROOT_DIR%\DesktopBuddy\bin\%CONFIGURATION%\net10.0-windows*" 2^>nul') do (
+    if not defined MOD_DLL if exist "%ROOT_DIR%\DesktopBuddy\bin\%CONFIGURATION%\%%D\DesktopBuddy.dll" (
+        set "MOD_OUT_DIR=%ROOT_DIR%\DesktopBuddy\bin\%CONFIGURATION%\%%D"
+        set "MOD_DLL=!MOD_OUT_DIR!\DesktopBuddy.dll"
+        set "MOD_SHA=!MOD_OUT_DIR!\DesktopBuddy.sha"
+    )
+)
 
 for /f %%i in ('git -C "%ROOT_DIR%" rev-parse --short HEAD 2^>nul') do set "SHORT=%%i"
 if not defined SHORT set "SHORT=unknown"
@@ -20,8 +27,12 @@ set "INSTALL_SOURCE=%ROOT_DIR%\INSTALL.txt"
 set "SETUP_BAT=%ROOT_DIR%\scripts\setup\Setup-DesktopBuddy.bat"
 set "SETUP_PS1=%ROOT_DIR%\scripts\setup\Setup-DesktopBuddy.ps1"
 
+if not defined MOD_DLL (
+    echo ERROR: DesktopBuddy.dll not found under DesktopBuddy\bin\%CONFIGURATION%\net10.0-windows*. Run scripts\build.bat first.
+    exit /b 1
+)
 if not exist "%MOD_DLL%" (
-    echo ERROR: DesktopBuddy.dll not found. Run scripts\build.bat first.
+    echo ERROR: DesktopBuddy.dll not found under DesktopBuddy\bin\%CONFIGURATION%\net10.0-windows*. Run scripts\build.bat first.
     exit /b 1
 )
 if not exist "%TEXTURE_BRIDGE_DLL%" (
@@ -42,6 +53,7 @@ if not exist "%SETUP_PS1%" (
 )
 
 echo Building zip layout in: %STAGE%
+echo Using DesktopBuddy build output: %MOD_OUT_DIR%
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
 mkdir "%STAGE%"
 
