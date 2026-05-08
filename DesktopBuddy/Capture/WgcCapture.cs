@@ -671,9 +671,6 @@ public sealed class WgcCapture : IDisposable
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
         try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Item closed unhook error: {ex.Message}"); }
 
-        // Do not explicitly dispose CsWinRT capture wrappers here. The crash evidence
-        // points at WinRT.IObjectReference finalizers, so let the projection release
-        // its wrappers naturally while the raw D3D refs remain alive.
         _session = null;
         _framePool = null;
         _itemClosedHandler = null;

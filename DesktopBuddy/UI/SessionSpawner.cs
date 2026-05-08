@@ -770,12 +770,19 @@ public partial class DesktopBuddyMod
                 deviceIndicatorsSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), DeviceIndicatorZ());
         }
 
-        var barRenderRoot = root.AddSlot("TopBarRender");
+                var barRenderHost = root.World.RootSlot.AddSlot("DesktopBuddyTopBarRenderHost", false);
+        root.Destroyed += _ =>
+        {
+            if (barRenderHost != null && !barRenderHost.IsDestroyed)
+                barRenderHost.Destroy();
+        };
+
+        var barRenderRoot = barRenderHost.AddSlot("TopBarRender");
         barRenderRoot.AttachComponent<HiddenLayer>();
-        var barBackRenderRoot = root.AddSlot("TopBarBackRender");
+        var barBackRenderRoot = barRenderHost.AddSlot("TopBarBackRender");
         barBackRenderRoot.AttachComponent<HiddenLayer>();
 
-        var barCameraSlot = root.AddSlot("TopBarCamera");
+        var barCameraSlot = barRenderHost.AddSlot("TopBarCamera");
         barCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
         var barRenderTex = barCameraSlot.AttachComponent<RenderTextureProvider>();
         barRenderTex.Size.Value = new int2(w, (int)barH);
@@ -796,7 +803,7 @@ public partial class DesktopBuddyMod
         barCamera.RenderTexture.Target = barRenderTex;
         barCamera.SelectiveRender.Add(barRenderRoot);
 
-        var barBackCameraSlot = root.AddSlot("TopBarBackCamera");
+        var barBackCameraSlot = barRenderHost.AddSlot("TopBarBackCamera");
         barBackCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
         var barBackRenderTex = barBackCameraSlot.AttachComponent<RenderTextureProvider>();
         barBackRenderTex.Size.Value = new int2(w, (int)barH);
@@ -825,6 +832,9 @@ public partial class DesktopBuddyMod
 
         const float topBarBackgroundOffset = 500f;
         const float topBarForegroundOffset = -500f;
+        const float topBarFillOffset = -1000f;
+        const float topBarTopOffset = -1500f;
+        const float topBarTextOffset = -2000f;
 
         var barMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barMat.BlendMode.Value = BlendMode.Alpha;
@@ -843,21 +853,21 @@ public partial class DesktopBuddyMod
         barFillMat.Sidedness.Value = Sidedness.Front;
         barFillMat.ZWrite.Value = ZWrite.On;
         barFillMat.OffsetFactor.Value = -1f;
-        barFillMat.OffsetUnits.Value = -1000f;
+        barFillMat.OffsetUnits.Value = topBarFillOffset;
 
         var barTopMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barTopMat.BlendMode.Value = BlendMode.Alpha;
         barTopMat.Sidedness.Value = Sidedness.Front;
         barTopMat.ZWrite.Value = ZWrite.On;
         barTopMat.OffsetFactor.Value = -1f;
-        barTopMat.OffsetUnits.Value = -1500f;
+        barTopMat.OffsetUnits.Value = topBarTopOffset;
 
         var barTextMat = barSlot.AttachComponent<UI_TextUnlitMaterial>();
         barTextMat.BlendMode.Value = BlendMode.Alpha;
         barTextMat.Sidedness.Value = Sidedness.Front;
         barTextMat.ZWrite.Value = ZWrite.On;
         barTextMat.OffsetFactor.Value = -1f;
-        barTextMat.OffsetUnits.Value = topBarForegroundOffset;
+        barTextMat.OffsetUnits.Value = topBarTextOffset;
 
         var barBackSlot = barBackRenderRoot.AddSlot("TopBarBackPanel");
         barBackSlot.LocalScale = float3.One;
@@ -876,7 +886,7 @@ public partial class DesktopBuddyMod
         barBackTextMat.Sidedness.Value = Sidedness.Double;
         barBackTextMat.ZWrite.Value = ZWrite.On;
         barBackTextMat.OffsetFactor.Value = -1f;
-        barBackTextMat.OffsetUnits.Value = topBarForegroundOffset;
+        barBackTextMat.OffsetUnits.Value = topBarTextOffset;
 
         var barUi = new UIBuilder(barCanvas);
         var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
@@ -948,7 +958,7 @@ public partial class DesktopBuddyMod
                 {
                     autoMat.Sidedness.Value = Sidedness.Double;
                     autoMat.OffsetFactor.Value = -1f;
-                    autoMat.OffsetUnits.Value = topBarForegroundOffset;
+                    autoMat.OffsetUnits.Value = topBarTextOffset;
                 }
             }
             catch (Exception ex) { Msg($"[TopBarBackPanel] Text material fix error: {ex.Message}"); }
@@ -1284,7 +1294,6 @@ public partial class DesktopBuddyMod
             widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
             root.World.RunInUpdates(1, BarUpdateLoop);
         };
-
         topBarStripRef = AddCurvedRenderPlane(
             root,
             "TopBarCurvedMesh",
