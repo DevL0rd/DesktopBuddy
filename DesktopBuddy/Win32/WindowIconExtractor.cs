@@ -50,11 +50,6 @@ public static class WindowIconExtractor
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr hObject);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint PrivateExtractIconsW(
-        string szFileName, int nIconIndex, int cxIcon, int cyIcon,
-        IntPtr[] phicon, uint[] piconid, uint nIcons, uint flags);
-
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     private const uint WM_GETICON = 0x007F;
     private const int ICON_BIG = 1;
@@ -152,37 +147,6 @@ public static class WindowIconExtractor
         {
             Log.Msg($"[IconExtractor] Executable path error: {ex.Message}");
             return null;
-        }
-    }
-
-    public static byte[] GetLargeIconRGBA(IntPtr hwnd, out int width, out int height, int requestedSize = 128)
-    {
-        width = height = 0;
-        if (hwnd == IntPtr.Zero) return null;
-
-        try
-        {
-            string exePath = GetExecutablePath(hwnd);
-            if (string.IsNullOrEmpty(exePath)) return GetIconRGBA(hwnd, out width, out height);
-            Log.Msg($"[IconExtractor] Exe path for hwnd={hwnd}: {exePath}");
-
-            var icons = new IntPtr[1];
-            var ids = new uint[1];
-            uint count = PrivateExtractIconsW(exePath, 0, requestedSize, requestedSize, icons, ids, 1, 0);
-            if (count == 0 || icons[0] == IntPtr.Zero)
-            {
-                Log.Msg($"[IconExtractor] PrivateExtractIcons returned 0, falling back to WM_GETICON");
-                return GetIconRGBA(hwnd, out width, out height);
-            }
-
-            Log.Msg($"[IconExtractor] Extracted {requestedSize}x{requestedSize} icon from exe");
-            var result = ExtractIconPixels(icons[0], out width, out height, destroyIcon: true);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[IconExtractor] Large icon error: {ex.Message}");
-            return GetIconRGBA(hwnd, out width, out height);
         }
     }
 

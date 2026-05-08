@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -16,8 +15,237 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-    private static readonly ConcurrentDictionary<string, Uri> _largeIconCache = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly ConcurrentDictionary<string, Task<Uri>> _largeIconTasks = new(StringComparer.OrdinalIgnoreCase);
+    private const float DesktopPanelCurvature = 0.18f;
+    private const int DesktopPanelCurveSegments = 48;
+
+    private static CurvedPlaneMesh AddCurvedTexturePlane(
+        Slot parent,
+        string name,
+        int width,
+        int height,
+        float scale,
+        IAssetProvider<ITexture2D> texture,
+        float zOffset,
+        bool flipY,
+        float offsetUnits)
+    {
+        var slot = parent.AddSlot(name);
+        slot.LocalPosition = new float3(0f, 0f, zOffset);
+        slot.LocalScale = float3.One * scale;
+
+        var renderer = slot.AttachComponent<MeshRenderer>();
+        var mesh = slot.AttachComponent<CurvedPlaneMesh>();
+        mesh.Size.Value = new float2(width, height);
+        mesh.Curvature.Value = DesktopPanelCurvature;
+        mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
+        mesh.Segments.Value = DesktopPanelCurveSegments;
+        renderer.Mesh.Target = mesh;
+
+        var collider = slot.AttachComponent<MeshCollider>();
+        collider.Mesh.Target = mesh;
+        collider.Sidedness.Value = MeshColliderSidedness.Front;
+
+        var material = slot.AttachComponent<UnlitMaterial>();
+        material.Texture.Target = texture;
+        material.BlendMode.Value = BlendMode.Opaque;
+        material.Sidedness.Value = Sidedness.Double;
+        material.ZWrite.Value = ZWrite.On;
+        material.OffsetUnits.Value = offsetUnits;
+        if (flipY)
+        {
+            material.TextureScale.Value = new float2(1f, -1f);
+            material.TextureOffset.Value = new float2(0f, 1f);
+        }
+        renderer.Materials.Add(material);
+
+        return mesh;
+    }
+
+    private static CurvedPlaneMesh AddCurvedBackPlane(Slot parent, int width, int height, float scale)
+    {
+        var slot = parent.AddSlot("BackPanelCurvedPlane");
+        slot.LocalPosition = new float3(0f, 0f, 0.001f);
+        slot.LocalScale = float3.One * scale;
+
+        var renderer = slot.AttachComponent<MeshRenderer>();
+        var mesh = slot.AttachComponent<CurvedPlaneMesh>();
+        mesh.Size.Value = new float2(width, height);
+        mesh.Curvature.Value = DesktopPanelCurvature;
+        mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
+        mesh.Segments.Value = DesktopPanelCurveSegments;
+        renderer.Mesh.Target = mesh;
+
+        var collider = slot.AttachComponent<MeshCollider>();
+        collider.Mesh.Target = mesh;
+        collider.Sidedness.Value = MeshColliderSidedness.DualSided;
+
+        var material = slot.AttachComponent<PBS_DualSidedMetallic>();
+        material.AlbedoColor.Value = new colorX(0.08f, 0.08f, 0.1f, 1f);
+        material.Culling.Value = Culling.Front;
+        material.AlphaHandling.Value = FrooxEngine.AlphaHandling.Opaque;
+        material.Metallic.Value = 0f;
+        material.Smoothness.Value = 0.35f;
+        renderer.Materials.Add(material);
+
+        return mesh;
+    }
+
+    private static CurvedPlaneMesh AddCurvedStripPlane(Slot parent, string name, int width, float height, float scale, float yOffset, float zOffset)
+    {
+        var slot = parent.AddSlot(name);
+        slot.LocalPosition = new float3(0f, yOffset, zOffset);
+        slot.LocalScale = float3.One * scale;
+
+        var renderer = slot.AttachComponent<MeshRenderer>();
+        var mesh = slot.AttachComponent<CurvedPlaneMesh>();
+        mesh.Size.Value = new float2(width, height);
+        mesh.Curvature.Value = DesktopPanelCurvature;
+        mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
+        mesh.Segments.Value = DesktopPanelCurveSegments;
+        renderer.Mesh.Target = mesh;
+
+        var material = slot.AttachComponent<UnlitMaterial>();
+        material.TintColor.Value = new colorX(1f, 1f, 1f, 0f);
+        material.BlendMode.Value = BlendMode.Alpha;
+        material.Sidedness.Value = Sidedness.Double;
+        material.ZWrite.Value = ZWrite.Off;
+        renderer.Materials.Add(material);
+
+        return mesh;
+    }
+
+    private static CurvedPlaneMesh AddCurvedRenderPlane(
+        Slot parent,
+        string name,
+        int width,
+        float height,
+        float scale,
+        float yOffset,
+        float zOffset,
+        IAssetProvider<ITexture2D> texture,
+        Camera rayExit,
+        Slot raycastTargetRoot,
+        bool addCollider = true,
+        Sidedness sidedness = Sidedness.Front,
+        ZWrite zWrite = ZWrite.On,
+        float offsetUnits = 120f,
+        BlendMode blendMode = BlendMode.Alpha,
+        int renderQueue = -1,
+        float alphaCutoff = 0.01f,
+        float2? textureScale = null,
+        float2? textureOffset = null)
+    {
+        var slot = parent.AddSlot(name);
+        slot.LocalPosition = new float3(0f, yOffset, zOffset);
+        slot.LocalScale = float3.One * scale;
+
+        var renderer = slot.AttachComponent<MeshRenderer>();
+        var mesh = slot.AttachComponent<CurvedPlaneMesh>();
+        mesh.Size.Value = new float2(width, height);
+        mesh.Curvature.Value = DesktopPanelCurvature;
+        mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
+        mesh.Segments.Value = DesktopPanelCurveSegments;
+        renderer.Mesh.Target = mesh;
+
+        if (addCollider)
+        {
+            var collider = slot.AttachComponent<MeshCollider>();
+            collider.Mesh.Target = mesh;
+            collider.Sidedness.Value = MeshColliderSidedness.Front;
+        }
+
+        if (rayExit != null)
+        {
+            var portal = slot.AttachComponent<MeshUVRaycastPortal>();
+            portal.RayExit.Target = rayExit;
+            portal.OverrideHitTriggers.Value = true;
+            portal.RepeatUV.Value = false;
+        }
+
+        var material = slot.AttachComponent<UnlitMaterial>();
+        material.Texture.Target = texture;
+        material.BlendMode.Value = blendMode;
+        material.AlphaCutoff.Value = alphaCutoff;
+        material.Sidedness.Value = sidedness;
+        material.ZWrite.Value = zWrite;
+        material.OffsetUnits.Value = offsetUnits;
+        material.RenderQueue.Value = renderQueue;
+        if (textureScale.HasValue)
+            material.TextureScale.Value = textureScale.Value;
+        if (textureOffset.HasValue)
+            material.TextureOffset.Value = textureOffset.Value;
+        renderer.Materials.Add(material);
+
+        return mesh;
+    }
+
+    private static bool IsSlotOrChild(Slot slot, Slot parent)
+    {
+        for (var current = slot; current != null; current = current.Parent)
+        {
+            if (current == parent)
+                return true;
+        }
+        return false;
+    }
+
+    private static float GetCurvedPanelDepth(CurvedPlaneMesh mesh, float scale)
+    {
+        if (mesh == null || mesh.IsDestroyed)
+            return 0f;
+
+        return GetCurvedPanelDepthAtU(mesh, 0.5f, scale);
+    }
+
+    private static float GetCurvedPanelDepthAtU(CurvedPlaneMesh mesh, float u, float scale)
+    {
+        if (mesh == null || mesh.IsDestroyed)
+            return 0f;
+
+        float curvature = MathX.Clamp01(mesh.Curvature.Value);
+        if (curvature < 0.01f)
+            return 0f;
+
+        float2 size = CurvedPlaneMesh.CompensateSize(mesh.Size.Value, curvature, mesh.AspectRatioCompensation.Value);
+        float radius = size.x * 0.5f;
+        float totalAngle = MathF.PI * curvature;
+        float startAngle = (MathF.PI - totalAngle) * 0.5f;
+        float angle = startAngle + totalAngle * MathX.Clamp01(u);
+        return (MathX.Sin(angle) * radius - MathX.Sin(startAngle) * radius) * scale;
+    }
+
+    private static bool TryGetCurvedPlaneUV(CurvedPlaneMesh mesh, in float3 globalPoint, out float2 uv)
+    {
+        uv = default;
+        if (mesh == null || mesh.IsDestroyed)
+            return false;
+
+        float3 localPoint = mesh.Slot.GlobalPointToLocal(in globalPoint);
+        float curvature = MathX.Clamp01(mesh.Curvature.Value);
+        float2 size = CurvedPlaneMesh.CompensateSize(mesh.Size.Value, curvature, mesh.AspectRatioCompensation.Value);
+        if (size.x <= 0f || size.y <= 0f)
+            return false;
+
+        float u;
+        if (curvature < 0.01f)
+        {
+            u = localPoint.x / size.x + 0.5f;
+        }
+        else
+        {
+            float radius = size.x * 0.5f;
+            float totalAngle = MathF.PI * curvature;
+            float startAngle = (MathF.PI - totalAngle) * 0.5f;
+            float widthAdjust = 1f / MathX.Cos(startAngle);
+            float cosAngle = MathX.Clamp(localPoint.x / (-widthAdjust * radius), -1f, 1f);
+            float angle = MathF.Acos(cosAngle);
+            u = (angle - startAngle) / totalAngle;
+        }
+
+        float v = 0.5f - localPoint.y / size.y;
+        uv = new float2(MathX.Clamp01(u), MathX.Clamp01(v));
+        return true;
+    }
 
     internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
     {
@@ -107,12 +335,41 @@ public partial class DesktopBuddyMod
         float canvasScale = 0.0005f;
         float worldHalfH = h / 2f * canvasScale;
         float worldHalfW = w / 2f * canvasScale;
-        var collider = root.AttachComponent<BoxCollider>();
-        collider.Size.Value = new float3(w * canvasScale, h * canvasScale, 0.001f);
-        collider.Offset.Value = float3.Zero;
-        Msg("[StartStreaming] Collider added to root");
+        BoxCollider collider = null;
+        Msg("[StartStreaming] Panel grab/click colliders are curved mesh colliders");
+        CurvedPlaneMesh frontPlaneRef = null;
+        CurvedPlaneMesh backPlaneRef = null;
+        CurvedPlaneMesh streamPlaneRef = null;
+        CurvedPlaneMesh topBarStripRef = null;
+        CurvedPlaneMesh topBarBackStripRef = null;
+        DesktopUVRayExit displayRayExitRef = null;
+        TextRenderer titleTextRef = null;
+        Slot deviceIndicatorsSlot = null;
+        string panelCurvePreferenceKey = GetPanelCurvePreferenceKey(hwnd);
+        float currentPanelCurvature = GetPanelCurvePreference(panelCurvePreferenceKey, DesktopPanelCurvature);
+
+        void ApplyPanelCurvature(float curvature)
+        {
+            currentPanelCurvature = MathX.Clamp(curvature, 0f, 1f);
+
+            if (frontPlaneRef != null && !frontPlaneRef.IsDestroyed)
+                frontPlaneRef.Curvature.Value = currentPanelCurvature;
+
+            if (backPlaneRef != null && !backPlaneRef.IsDestroyed)
+                backPlaneRef.Curvature.Value = currentPanelCurvature;
+
+            if (streamPlaneRef != null && !streamPlaneRef.IsDestroyed)
+                streamPlaneRef.Curvature.Value = currentPanelCurvature;
+
+            if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
+                topBarStripRef.Curvature.Value = currentPanelCurvature;
+
+            if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
+                topBarBackStripRef.Curvature.Value = currentPanelCurvature;
+        }
 
         var displaySlot = root.AddLocalSlot("Display", false);
+        displaySlot.LocalScale = float3.One * canvasScale;
         Msg("[StartStreaming] Display slot (local) created");
 
         var texSlot = displaySlot.AddSlot("Texture");
@@ -155,13 +412,20 @@ public partial class DesktopBuddyMod
         }
         Msg("[StartStreaming] Texture component created");
 
-        var ui = new UIBuilder(displaySlot, w, h, canvasScale);
+        var interactionSlot = displaySlot.AddSlot("InteractionCanvas");
+        interactionSlot.LocalScale = float3.One;
+        var interactionCanvas = interactionSlot.AttachComponent<Canvas>();
+        interactionCanvas.Size.Value = new float2(w, h);
+        var ui = new UIBuilder(interactionCanvas);
+        ui.Canvas.Collider.Target.SetTrigger();
 
         var displayBg = ui.Image(new colorX(0f, 0f, 0f, 1f));
+        displayBg.Tint.Value = colorX.Clear;
         ui.NestInto(displayBg.RectTransform);
 
         var rawImage = ui.RawImage(procTex);
         rawImage.UVRect.Value = new Rect(new float2(0f, 1f), new float2(1f, -1f));
+        rawImage.Tint.Value = new colorX(1f, 1f, 1f, 0f);
         Msg("[StartStreaming] Canvas + RawImage created");
 
         var mat = displaySlot.AttachComponent<UI_UnlitMaterial>();
@@ -174,6 +438,15 @@ public partial class DesktopBuddyMod
         btn.PassThroughHorizontalMovement.Value = false;
         btn.PassThroughVerticalMovement.Value = false;
         Msg("[StartStreaming] Button attached");
+
+        var displayCameraSlot = interactionSlot.AddSlot("InteractionCamera");
+        displayCameraSlot.LocalPosition = float3.Zero;
+        displayCameraSlot.LocalRotation = floatQ.Identity;
+        displayRayExitRef = displayCameraSlot.AttachComponent<DesktopUVRayExit>();
+        displayRayExitRef.Size = new float2(w, h);
+
+        frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f);
+        ApplyPanelCurvature(currentPanelCurvature);
 
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
         Msg($"[StartStreaming] Process ID: {processId}");
@@ -252,14 +525,21 @@ public partial class DesktopBuddyMod
             return 0;
         }
 
-        btn.LocalPressed += (IButton b, ButtonEventData data) =>
+        float2 GetDesktopPoint(ButtonEventData data)
+        {
+            float aspect = h > 0 ? (float)w / h : 1f;
+            float u = 0.5f + (data.normalizedPressPoint.x - 0.5f) * aspect;
+            return new float2(MathX.Clamp01(u), 1f - data.normalizedPressPoint.y);
+        }
+
+        void SendDesktopPressed(Component source, float2 point)
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
-            ClaimSource(data.source);
-            float u = data.normalizedPressPoint.x;
-            float v = 1f - data.normalizedPressPoint.y;
-            uint touchId = GetTouchId(data.source);
+            ClaimSource(source);
+            float u = point.x;
+            float v = point.y;
+            uint touchId = GetTouchId(source);
             session.ActiveTouchIds.Add(touchId);
             WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
@@ -270,16 +550,16 @@ public partial class DesktopBuddyMod
                 streamer.MonitorHandle,
                 () => WindowInput.SendTouchDown(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch down {touchId}");
-        };
+        }
 
-        btn.LocalPressing += (IButton b, ButtonEventData data) =>
+        void SendDesktopPressing(Component source, float2 point)
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
-            uint touchId = GetTouchId(data.source);
+            uint touchId = GetTouchId(source);
             if (!session.ActiveTouchIds.Contains(touchId)) return;
-            float u = data.normalizedPressPoint.x;
-            float v = 1f - data.normalizedPressPoint.y;
+            float u = point.x;
+            float v = point.y;
             WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
                 u,
@@ -289,15 +569,15 @@ public partial class DesktopBuddyMod
                 streamer.MonitorHandle,
                 () => WindowInput.SendTouchMove(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch move {touchId}");
-        };
+        }
 
-        btn.LocalReleased += (IButton b, ButtonEventData data) =>
+        void SendDesktopReleased(Component source, float2 point)
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
-            uint touchId = GetTouchId(data.source);
-            float u = data.normalizedPressPoint.x;
-            float v = 1f - data.normalizedPressPoint.y;
+            uint touchId = GetTouchId(source);
+            float u = point.x;
+            float v = point.y;
             if (!session.ActiveTouchIds.Remove(touchId)) return;
             WindowInput.SendAtPointWhenTargetAcceptable(
                 hwnd,
@@ -308,14 +588,101 @@ public partial class DesktopBuddyMod
                 streamer.MonitorHandle,
                 () => WindowInput.SendTouchUp(hwnd, u, v, streamer.Width, streamer.Height, touchId, streamer.MonitorHandle),
                 $"touch up {touchId}");
+        }
+
+        void SendDesktopHovering(Component source, float2 point)
+        {
+            if (grabbable != null && grabbable.IsGrabbed) return;
+            if (IsDesktopMode(root.World)) return;
+            float hu = point.x;
+            float hv = point.y;
+
+            if (IsActiveSource(source))
+            {
+                WindowInput.SendHover(hwnd, hu, hv, streamer.Width, streamer.Height, streamer.MonitorHandle);
+            }
+
+            var mouse = root.World.InputInterface.Mouse;
+            if (mouse != null)
+            {
+                float scrollY = mouse.ScrollWheelDelta.Value.y;
+                if (scrollY != 0)
+                {
+                    ClaimSource(source);
+                    int wheelDelta = scrollY > 0 ? 120 : -120;
+                    WindowInput.SendAtPointWhenTargetAcceptable(
+                        hwnd,
+                        hu,
+                        hv,
+                        streamer.Width,
+                        streamer.Height,
+                        streamer.MonitorHandle,
+                        () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
+                        "mouse wheel");
+                }
+            }
+
+            try
+            {
+                var handler = FindHandler(source);
+                var controller = handler != null
+                    ? root.World.InputInterface.GetControllerNode(handler.Side.Value)
+                    : null;
+                if (controller != null)
+                {
+                    float axisY = controller.Axis.Value.y;
+                    if (Math.Abs(axisY) > 0.15f)
+                    {
+                        double tick = root.World.Time.WorldTime;
+                        bool sameDir = session.LastScrollSign == 0 || Math.Sign(axisY) == session.LastScrollSign;
+                        if (tick != session.LastScrollTick && sameDir)
+                        {
+                            session.LastScrollTick = tick;
+                            session.LastScrollSign = Math.Sign(axisY);
+                            ClaimSource(source);
+                            int wheelDelta = (int)(axisY * 120f);
+                            WindowInput.SendAtPointWhenTargetAcceptable(
+                                hwnd,
+                                hu,
+                                hv,
+                                streamer.Width,
+                                streamer.Height,
+                                streamer.MonitorHandle,
+                                () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
+                                "controller wheel");
+                        }
+                    }
+                    else
+                    {
+                        session.LastScrollSign = 0;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        btn.LocalPressed += (IButton b, ButtonEventData data) =>
+        {
+            SendDesktopPressed(data.source, GetDesktopPoint(data));
+        };
+
+        btn.LocalPressing += (IButton b, ButtonEventData data) =>
+        {
+            SendDesktopPressing(data.source, GetDesktopPoint(data));
+        };
+
+        btn.LocalReleased += (IButton b, ButtonEventData data) =>
+        {
+            SendDesktopReleased(data.source, GetDesktopPoint(data));
         };
 
         btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
         {
             if (grabbable != null && grabbable.IsGrabbed) return;
             if (IsDesktopMode(root.World)) return;
-            float hu = data.normalizedPressPoint.x;
-            float hv = 1f - data.normalizedPressPoint.y;
+            float2 point = GetDesktopPoint(data);
+            float hu = point.x;
+            float hv = point.y;
 
             if (IsActiveSource(data.source))
             {
@@ -381,6 +748,13 @@ public partial class DesktopBuddyMod
             catch { }
         };
 
+        var directInput = frontPlaneRef.Slot.AttachComponent<DesktopCurvedScreenInput>();
+        directInput.ScreenMesh = frontPlaneRef;
+        directInput.Pressed = SendDesktopPressed;
+        directInput.Pressing = SendDesktopPressing;
+        directInput.Released = SendDesktopReleased;
+        directInput.Hovering = SendDesktopHovering;
+
         float barH = 64f;
         float barMarginTop = 10f * canvasScale;
         float barPad = 8f;
@@ -388,20 +762,105 @@ public partial class DesktopBuddyMod
         float avatarW = 48f;
         float toggleW = 36f;
         const float deviceIndicatorTopOffset = 0.02f;
+        float DeviceIndicatorY() => worldHalfH + deviceIndicatorTopOffset;
+        float DeviceIndicatorZ() => -0.001f + GetCurvedPanelDepth(frontPlaneRef, canvasScale);
+        void UpdateDeviceIndicators()
+        {
+            if (deviceIndicatorsSlot != null && !deviceIndicatorsSlot.IsDestroyed)
+                deviceIndicatorsSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), DeviceIndicatorZ());
+        }
 
-        var barSlot = root.AddSlot("TopBar");
-        barSlot.LocalScale = float3.One * canvasScale;
+        var barRenderRoot = root.AddSlot("TopBarRender");
+        barRenderRoot.AttachComponent<HiddenLayer>();
+        var barBackRenderRoot = root.AddSlot("TopBarBackRender");
+        barBackRenderRoot.AttachComponent<HiddenLayer>();
+
+        var barCameraSlot = root.AddSlot("TopBarCamera");
+        barCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
+        var barRenderTex = barCameraSlot.AttachComponent<RenderTextureProvider>();
+        barRenderTex.Size.Value = new int2(w, (int)barH);
+        barRenderTex.WrapModeU.Value = TextureWrapMode.Clamp;
+        barRenderTex.WrapModeV.Value = TextureWrapMode.Clamp;
+
+        var barCamera = barCameraSlot.AttachComponent<Camera>();
+        barCamera.Projection.Value = CameraProjection.Orthographic;
+        barCamera.OrthographicSize.Value = barH * 0.5f;
+        barCamera.UseTransformScale.Value = false;
+        barCamera.Clear.Value = CameraClearMode.Color;
+        barCamera.ClearColor.Value = colorX.Clear;
+        barCamera.NearClipping.Value = 0.01f;
+        barCamera.FarClipping.Value = 4f;
+        barCamera.Postprocessing.Value = false;
+        barCamera.RenderShadows.Value = false;
+        barCamera.ForwardOnly.Value = true;
+        barCamera.RenderTexture.Target = barRenderTex;
+        barCamera.SelectiveRender.Add(barRenderRoot);
+
+        var barBackCameraSlot = root.AddSlot("TopBarBackCamera");
+        barBackCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
+        var barBackRenderTex = barBackCameraSlot.AttachComponent<RenderTextureProvider>();
+        barBackRenderTex.Size.Value = new int2(w, (int)barH);
+        barBackRenderTex.WrapModeU.Value = TextureWrapMode.Clamp;
+        barBackRenderTex.WrapModeV.Value = TextureWrapMode.Clamp;
+
+        var barBackCamera = barBackCameraSlot.AttachComponent<Camera>();
+        barBackCamera.Projection.Value = CameraProjection.Orthographic;
+        barBackCamera.OrthographicSize.Value = barH * 0.5f;
+        barBackCamera.UseTransformScale.Value = false;
+        barBackCamera.Clear.Value = CameraClearMode.Color;
+        barBackCamera.ClearColor.Value = colorX.Clear;
+        barBackCamera.NearClipping.Value = 0.01f;
+        barBackCamera.FarClipping.Value = 4f;
+        barBackCamera.Postprocessing.Value = false;
+        barBackCamera.RenderShadows.Value = false;
+        barBackCamera.ForwardOnly.Value = true;
+        barBackCamera.RenderTexture.Target = barBackRenderTex;
+        barBackCamera.SelectiveRender.Add(barBackRenderRoot);
+
+        var barSlot = barRenderRoot.AddSlot("TopBar");
+        barSlot.LocalScale = float3.One;
 
         var barCanvas = barSlot.AttachComponent<Canvas>();
+        barCanvas.Collider.Target.SetTrigger();
+
+        const float topBarBackgroundOffset = 500f;
+        const float topBarForegroundOffset = -500f;
 
         var barMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barMat.BlendMode.Value = BlendMode.Alpha;
         barMat.ZWrite.Value = ZWrite.On;
-        barMat.OffsetUnits.Value = 100f;
+        barMat.OffsetUnits.Value = topBarBackgroundOffset;
 
-        var barBackSlot = root.AddSlot("TopBarBackPanel");
-        barBackSlot.LocalScale = float3.One * canvasScale;
-        barBackSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
+        var barElementMat = barSlot.AttachComponent<UI_UnlitMaterial>();
+        barElementMat.BlendMode.Value = BlendMode.Alpha;
+        barElementMat.Sidedness.Value = Sidedness.Front;
+        barElementMat.ZWrite.Value = ZWrite.On;
+        barElementMat.OffsetFactor.Value = -1f;
+        barElementMat.OffsetUnits.Value = topBarForegroundOffset;
+
+        var barFillMat = barSlot.AttachComponent<UI_UnlitMaterial>();
+        barFillMat.BlendMode.Value = BlendMode.Alpha;
+        barFillMat.Sidedness.Value = Sidedness.Front;
+        barFillMat.ZWrite.Value = ZWrite.On;
+        barFillMat.OffsetFactor.Value = -1f;
+        barFillMat.OffsetUnits.Value = -1000f;
+
+        var barTopMat = barSlot.AttachComponent<UI_UnlitMaterial>();
+        barTopMat.BlendMode.Value = BlendMode.Alpha;
+        barTopMat.Sidedness.Value = Sidedness.Front;
+        barTopMat.ZWrite.Value = ZWrite.On;
+        barTopMat.OffsetFactor.Value = -1f;
+        barTopMat.OffsetUnits.Value = -1500f;
+
+        var barTextMat = barSlot.AttachComponent<UI_TextUnlitMaterial>();
+        barTextMat.BlendMode.Value = BlendMode.Alpha;
+        barTextMat.Sidedness.Value = Sidedness.Front;
+        barTextMat.ZWrite.Value = ZWrite.On;
+        barTextMat.OffsetFactor.Value = -1f;
+        barTextMat.OffsetUnits.Value = topBarForegroundOffset;
+
+        var barBackSlot = barBackRenderRoot.AddSlot("TopBarBackPanel");
+        barBackSlot.LocalScale = float3.One;
 
         var barBackCanvas = barBackSlot.AttachComponent<Canvas>();
         barBackCanvas.Collider.RawTarget.Enabled = false;
@@ -410,7 +869,14 @@ public partial class DesktopBuddyMod
         barBackMat.BlendMode.Value = BlendMode.Alpha;
         barBackMat.Sidedness.Value = Sidedness.Double;
         barBackMat.ZWrite.Value = ZWrite.On;
-        barBackMat.OffsetUnits.Value = 100f;
+        barBackMat.OffsetUnits.Value = topBarBackgroundOffset;
+
+        var barBackTextMat = barBackSlot.AttachComponent<UI_TextUnlitMaterial>();
+        barBackTextMat.BlendMode.Value = BlendMode.Alpha;
+        barBackTextMat.Sidedness.Value = Sidedness.Double;
+        barBackTextMat.ZWrite.Value = ZWrite.On;
+        barBackTextMat.OffsetFactor.Value = -1f;
+        barBackTextMat.OffsetUnits.Value = topBarForegroundOffset;
 
         var barUi = new UIBuilder(barCanvas);
         var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
@@ -428,6 +894,66 @@ public partial class DesktopBuddyMod
         barBackBg.Material.Target = barBackMat;
         barBackBg.Sprite.Target = roundedSprite;
         barBackBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
+        barBackUi.NestInto(barBackBg.RectTransform);
+        var barBackLayout = barBackUi.HorizontalLayout(8f, padding: 10f, childAlignment: Alignment.MiddleLeft);
+        barBackLayout.ForceExpandWidth.Value = false;
+
+        barBackUi.Style.MinWidth = 40f;
+        barBackUi.Style.PreferredWidth = 40f;
+        barBackUi.Style.MinHeight = 40f;
+        barBackUi.Style.PreferredHeight = 40f;
+        barBackUi.Style.FlexibleWidth = -1f;
+        barBackUi.Style.FlexibleHeight = -1f;
+
+        StaticTexture2D barBackIconTex = hwnd != IntPtr.Zero
+            ? ContextMenuPatch.GetIconTexture(hwnd, root.Engine, barBackSlot)
+            : ContextMenuPatch.GetDesktopIconTexture(root.Engine, barBackSlot);
+        if (barBackIconTex != null)
+        {
+            var barBackIconMat = barBackSlot.AttachComponent<UI_UnlitMaterial>();
+            barBackIconMat.Texture.Target = barBackIconTex;
+            barBackIconMat.BlendMode.Value = BlendMode.Alpha;
+            barBackIconMat.Sidedness.Value = Sidedness.Double;
+            barBackIconMat.ZWrite.Value = ZWrite.On;
+            barBackIconMat.OffsetFactor.Value = -1f;
+            barBackIconMat.OffsetUnits.Value = topBarForegroundOffset;
+
+            var barBackIcon = barBackUi.RawImage(barBackIconTex);
+            barBackIcon.PreserveAspect.Value = true;
+            barBackIcon.Material.Target = barBackIconMat;
+        }
+        else
+        {
+            barBackUi.Empty("IconPlaceholder");
+        }
+
+        barBackUi.Style.MinWidth = 80f;
+        barBackUi.Style.PreferredWidth = 180f;
+        barBackUi.Style.MinHeight = 48f;
+        barBackUi.Style.PreferredHeight = 48f;
+        barBackUi.Style.FlexibleWidth = 1f;
+        barBackUi.Style.FlexibleHeight = -1f;
+        var barBackTitle = barBackUi.Text(title, bestFit: true, alignment: Alignment.MiddleLeft);
+        barBackTitle.RectTransform.AddFixedPadding(0f, 0f, 0f, 4f);
+        titleTextRef = barBackTitle.Slot.GetComponent<TextRenderer>();
+        barBackTitle.Size.Value = 20f;
+        barBackTitle.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
+        barBackTitle.Material.Target = barBackTextMat;
+        root.World.RunInUpdates(2, () =>
+        {
+            try
+            {
+                var autoMat = barBackTitle.Slot.GetComponentInParents<UI_TextUnlitMaterial>();
+                if (autoMat != null)
+                {
+                    autoMat.Sidedness.Value = Sidedness.Double;
+                    autoMat.OffsetFactor.Value = -1f;
+                    autoMat.OffsetUnits.Value = topBarForegroundOffset;
+                }
+            }
+            catch (Exception ex) { Msg($"[TopBarBackPanel] Text material fix error: {ex.Message}"); }
+        });
+        barBackUi.NestOut();
 
         var barMask = barBg.Slot.AttachComponent<Mask>();
         barMask.ShowMaskGraphic.Value = true;
@@ -447,7 +973,8 @@ public partial class DesktopBuddyMod
         barUi.Style.FlexibleHeight = -1f;
 
         var imageSpaceSlot = barUi.Empty("Image Space");
-        imageSpaceSlot.AttachComponent<Mask>();
+        var avatarMask = imageSpaceSlot.AttachComponent<Mask>();
+        avatarMask.ShowMaskGraphic.Value = false;
         var imgMaskImage = imageSpaceSlot.GetComponent<Image>();
         var avatarMaskSprite = TextureProviderSettings.ClampWrap(imageSpaceSlot.AttachComponent<SpriteProvider>());
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
@@ -455,6 +982,7 @@ public partial class DesktopBuddyMod
         avatarMaskSprite.FixedSize.Value = 18f;
         imgMaskImage.Sprite.Target = avatarMaskSprite;
         imgMaskImage.NineSliceSizing.Value = NineSliceSizing.FixedSize;
+        imgMaskImage.Material.Target = barElementMat;
 
         barUi.NestInto(imageSpaceSlot);
         barUi.Style.FlexibleWidth = -1f;
@@ -475,6 +1003,7 @@ public partial class DesktopBuddyMod
         if (localUser.UserID != null) imgMux.Index.ForceSet(1);
 
         var avatarImage = barUi.Image(avatarTex);
+        avatarImage.Material.Target = barTopMat;
         var avatarButton = avatarImage.Slot.AttachComponent<Button>();
         barUi.NestOut();
 
@@ -488,9 +1017,10 @@ public partial class DesktopBuddyMod
         var nameText = barUi.Text(userName, bestFit: false, alignment: Alignment.MiddleLeft);
         nameText.Size.Value = 18f;
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
+        nameText.Material.Target = barTextMat;
 
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = 4f * 30f + 7f * 6f + 14f + 30f + 100f;
+        float expandContentW = 430f;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         void StyleButton(Button btn)
@@ -500,6 +1030,7 @@ public partial class DesktopBuddyMod
             {
                 textComp.Size.Value = 18f;
                 textComp.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
+                textComp.Material.Target = barTextMat;
             }
             var txtRenderer = btn.Slot.GetComponentInChildren<TextRenderer>();
             if (txtRenderer != null)
@@ -519,6 +1050,7 @@ public partial class DesktopBuddyMod
             {
                 image.Tint.Value = colorX.Clear;
                 image.Sprite.Target = null;
+                image.Material.Target = barElementMat;
             }
         }
 
@@ -566,7 +1098,8 @@ public partial class DesktopBuddyMod
         ep.Style.PreferredHeight = 32f;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = -1f;
-        ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        var separatorA = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        separatorA.Material.Target = barElementMat;
 
         ep.Style.MinWidth = 30f;
         ep.Style.PreferredWidth = 30f;
@@ -583,7 +1116,8 @@ public partial class DesktopBuddyMod
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
-        ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        var separatorB = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        separatorB.Material.Target = barElementMat;
 
         ep.Style.MinWidth = 30f;
         ep.Style.PreferredWidth = 30f;
@@ -593,6 +1127,55 @@ public partial class DesktopBuddyMod
         ep.Style.FlexibleHeight = -1f;
         var resyncBtn = ep.Button("🔄");  StyleButton(resyncBtn);
 
+        ep.Style.MinWidth = 1f;
+        ep.Style.PreferredWidth = 1f;
+        ep.Style.MinHeight = 32f;
+        ep.Style.PreferredHeight = 32f;
+        var separatorC = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        separatorC.Material.Target = barElementMat;
+
+        ep.Style.MinWidth = 38f;
+        ep.Style.PreferredWidth = 38f;
+        ep.Style.MinHeight = 48f;
+        ep.Style.PreferredHeight = 48f;
+        ep.Style.FlexibleWidth = -1f;
+        var curveText = ep.Text("Curve", bestFit: true, alignment: Alignment.MiddleCenter);
+        curveText.Size.Value = 14f;
+        curveText.Color.Value = new colorX(0.6f, 0.6f, 0.6f, 1f);
+        curveText.Material.Target = barTextMat;
+
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.MinWidth = 80f;
+        ep.Style.PreferredWidth = 80f;
+        ep.Style.MinHeight = 48f;
+        ep.Style.PreferredHeight = 48f;
+
+        var curveRow = ep.Empty("Curve");
+        var curveUi = new UIBuilder(curveRow);
+        curveUi.Style.FlexibleWidth = 1f;
+        curveUi.Style.FlexibleHeight = 1f;
+        var curveSlider = curveUi.Slider<float>(20f, currentPanelCurvature, 0f, 1f, false,
+            out var curveLine, out var curveFillLine, out var curveHandle);
+        curveLine.Material.Target = barElementMat;
+        curveFillLine.Material.Target = barFillMat;
+        curveHandle.Material.Target = barTopMat;
+        curveRow.GetComponentInChildren<Image>(image => image.Slot.Name == "Background").Material.Target = barElementMat;
+        curveRow.ForeachComponentInChildren<FrooxEngine.UIX.Text>(text => text.Material.Target = barTextMat);
+        float pendingPanelCurvature = currentPanelCurvature;
+        curveSlider.Value.OnValueChange += (SyncField<float> field) =>
+        {
+            pendingPanelCurvature = MathX.Clamp(field.Value, 0f, 1f);
+            SetPanelCurvePreference(panelCurvePreferenceKey, pendingPanelCurvature);
+        };
+        curveSlider.IsPressed.OnValueChange += (SyncField<bool> field) =>
+        {
+            if (!field.Value)
+            {
+                ApplyPanelCurvature(pendingPanelCurvature);
+                UpdateDeviceIndicators();
+            }
+        };
+
         ep.Style.MinWidth = 24f;
         ep.Style.PreferredWidth = 24f;
         ep.Style.MinHeight = 48f;
@@ -601,6 +1184,7 @@ public partial class DesktopBuddyMod
         var volIcon = ep.Text("🔊", bestFit: false, alignment: Alignment.MiddleCenter);
         volIcon.Size.Value = 16f;
         volIcon.Color.Value = new colorX(0.6f, 0.6f, 0.6f, 1f);
+        volIcon.Material.Target = barTextMat;
 
         ep.Style.FlexibleWidth = -1f;
         ep.Style.MinWidth = 80f;
@@ -612,7 +1196,13 @@ public partial class DesktopBuddyMod
         var streamVolUi = new UIBuilder(streamVolRow);
         streamVolUi.Style.FlexibleWidth = 1f;
         streamVolUi.Style.FlexibleHeight = 1f;
-        var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false);
+        var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false,
+            out var volLine, out var volFillLine, out var volHandle);
+        volLine.Material.Target = barElementMat;
+        volFillLine.Material.Target = barFillMat;
+        volHandle.Material.Target = barTopMat;
+        streamVolRow.GetComponentInChildren<Image>(image => image.Slot.Name == "Background").Material.Target = barElementMat;
+        streamVolRow.ForeachComponentInChildren<FrooxEngine.UIX.Text>(text => text.Material.Target = barTextMat);
 
         var widthField = barSlot.AttachComponent<ValueField<float>>();
         widthField.Value.Value = barCollapsedW;
@@ -631,21 +1221,37 @@ public partial class DesktopBuddyMod
         void ApplyBarLayout(float width)
         {
             if (barCanvas != null && !barCanvas.IsDestroyed)
-                barCanvas.Size.Value = new float2(width, barH);
+                barCanvas.Size.Value = new float2(w, barH);
 
-            var position = new float3(
-                -worldHalfW + width / 2f * canvasScale,
-                barYPos,
-                0f);
+            if (barRenderTex != null && !barRenderTex.IsDestroyed)
+                barRenderTex.Size.Value = new int2(w, (int)barH);
+
+            if (barBackRenderTex != null && !barBackRenderTex.IsDestroyed)
+                barBackRenderTex.Size.Value = new int2(w, (int)barH);
+
+            if (barBg != null && !barBg.IsDestroyed)
+                barBg.RectTransform.SetFixedRect(new Rect(0f, -barH * 0.5f, width, barH), new float2(0f, 0.5f));
 
             if (barSlot != null && !barSlot.IsDestroyed)
-                barSlot.LocalPosition = position;
+                barSlot.LocalPosition = float3.Zero;
 
             if (barBackCanvas != null && !barBackCanvas.IsDestroyed)
-                barBackCanvas.Size.Value = new float2(width, barH);
+                barBackCanvas.Size.Value = new float2(w, barH);
 
-            if (barBackSlot != null && !barBackSlot.IsDestroyed)
-                barBackSlot.LocalPosition = position + new float3(0f, 0f, 0.001f);
+            if (barBackBg != null && !barBackBg.IsDestroyed)
+                barBackBg.RectTransform.SetFixedRect(new Rect(-width, -barH * 0.5f, width, barH), new float2(1f, 0.5f));
+
+            if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
+            {
+                topBarStripRef.Size.Value = new float2(w, barH);
+                topBarStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0f);
+            }
+
+            if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
+            {
+                topBarBackStripRef.Size.Value = new float2(w, barH);
+                topBarBackStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0.004f);
+            }
         }
 
         void BarUpdateLoop()
@@ -679,6 +1285,45 @@ public partial class DesktopBuddyMod
             root.World.RunInUpdates(1, BarUpdateLoop);
         };
 
+        topBarStripRef = AddCurvedRenderPlane(
+            root,
+            "TopBarCurvedMesh",
+            w,
+            barH,
+            canvasScale,
+            barYPos,
+            0f,
+            barRenderTex,
+            barCamera,
+            barRenderRoot,
+            addCollider: true,
+            sidedness: Sidedness.Front,
+            zWrite: ZWrite.Off,
+            offsetUnits: 120f,
+            blendMode: BlendMode.Alpha,
+            renderQueue: 3001,
+            alphaCutoff: 0.01f);
+        topBarBackStripRef = AddCurvedRenderPlane(
+            root,
+            "TopBarBackCurvedMesh",
+            w,
+            barH,
+            canvasScale,
+            barYPos,
+            0.004f,
+            barBackRenderTex,
+            null,
+            null,
+            addCollider: false,
+            sidedness: Sidedness.Back,
+            zWrite: ZWrite.Off,
+            offsetUnits: 121f,
+            blendMode: BlendMode.Alpha,
+            renderQueue: 3002,
+            alphaCutoff: 0.01f,
+            textureScale: new float2(-1f, 1f),
+            textureOffset: new float2(1f, 0f));
+        ApplyPanelCurvature(currentPanelCurvature);
         ApplyBarLayout(barCollapsedW);
         root.World.RunInUpdates(1, BarUpdateLoop);
 
@@ -811,10 +1456,13 @@ public partial class DesktopBuddyMod
         };
 
         {
-            float DeviceIndicatorY() => worldHalfH + deviceIndicatorTopOffset;
+            deviceIndicatorsSlot = root.AddSlot("DeviceIndicators");
+            deviceIndicatorsSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), DeviceIndicatorZ());
+            deviceIndicatorsSlot.LocalRotation = floatQ.Identity;
+            deviceIndicatorsSlot.LocalScale = float3.One;
 
-            var camSlot = root.AddSlot("VirtualCamera");
-            camSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), -0.001f);
+            var camSlot = deviceIndicatorsSlot.AddSlot("VirtualCamera");
+            camSlot.LocalPosition = float3.Zero;
             camSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
             camSlot.LocalScale = float3.One;
 
@@ -852,8 +1500,8 @@ public partial class DesktopBuddyMod
             bool spatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
 
             {
-                var micSlot = root.AddSlot("VirtualMic");
-                micSlot.LocalPosition = new float3(0.03f, DeviceIndicatorY(), -0.001f);
+                var micSlot = deviceIndicatorsSlot.AddSlot("VirtualMic");
+                micSlot.LocalPosition = new float3(0.03f, 0f, 0f);
                 micSlot.LocalRotation = floatQ.Identity;
                 micSlot.LocalScale = float3.One;
 
@@ -957,110 +1605,12 @@ public partial class DesktopBuddyMod
             };
         }
 
-        Canvas backCanvasRef = null;
         Canvas streamCanvasRef = null;
-        TextRenderer titleTextRef = null;
 
         {
-            var backSlot = root.AddSlot("BackPanel");
-            backSlot.LocalPosition = new float3(0f, 0f, 0.001f);
-            backSlot.LocalRotation = floatQ.Euler(0f, 180f, 0f);
-            backSlot.LocalScale = float3.One * canvasScale;
-
-            var backCanvas = backSlot.AttachComponent<Canvas>();
-            backCanvas.Collider.RawTarget.Enabled = false;
-            backCanvasRef = backCanvas;
-            backCanvas.Size.Value = new float2(w, h);
-            var backUi = new UIBuilder(backCanvas);
-
-            var backMat = backSlot.AttachComponent<UI_UnlitMaterial>();
-            backMat.BlendMode.Value = BlendMode.Alpha;
-            backMat.Sidedness.Value = Sidedness.Double;
-            backMat.ZWrite.Value = ZWrite.On;
-            backMat.OffsetUnits.Value = 100f;
-
-            var bg = backUi.Image(new colorX(0.08f, 0.08f, 0.1f, 1f));
-            bg.Material.Target = backMat;
-
-            backUi.NestInto(bg.RectTransform);
-            backUi.VerticalLayout(16f);
-            backUi.Style.FlexibleWidth = 1f;
-            backUi.Style.FlexibleHeight = 1f;
-
-            backUi.Spacer(1f);
-
-            float iconSize = Math.Min(w, h) * 0.25f;
-            if (hwnd != IntPtr.Zero)
-            {
-                try
-                {
-                    backUi.Style.MinHeight = iconSize;
-                    backUi.Style.PreferredHeight = iconSize;
-                    backUi.Style.FlexibleHeight = -1f;
-
-                    var iconTex = TextureProviderSettings.ClampWrap(backSlot.AttachComponent<StaticTexture2D>());
-                    var iconMat = backSlot.AttachComponent<UI_UnlitMaterial>();
-                    iconMat.Texture.Target = iconTex;
-                    iconMat.OffsetFactor.Value = -1f;
-                    var iconImg = backUi.RawImage(iconTex);
-                    iconImg.PreserveAspect.Value = true;
-                    iconImg.Material.Target = iconMat;
-
-                    var capturedHwnd = hwnd;
-                    var capturedRoot = root;
-                    var capturedTex = iconTex;
-                    Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var uri = await GetLargeIconUriAsync(capturedRoot.Engine, capturedHwnd).ConfigureAwait(false);
-                            if (uri != null && !capturedTex.IsDestroyed)
-                            {
-                                capturedTex.World.RunInUpdates(0, () =>
-                                {
-                                    if (!capturedTex.IsDestroyed)
-                                        capturedTex.URL.Value = uri;
-                                });
-                            }
-                        }
-                        catch (Exception ex) { Msg($"[BackPanel] Icon load/save error: {ex.Message}"); }
-                    });
-                    backUi.Style.FlexibleHeight = 1f;
-                    Msg("[BackPanel] Icon placeholder added");
-                }
-                catch (Exception ex) { Msg($"[BackPanel] Icon error: {ex.Message}"); }
-            }
-
-            backUi.Style.MinHeight = 64f;
-            backUi.Style.PreferredHeight = 64f;
-            backUi.Style.FlexibleHeight = -1f;
-            var text = backUi.Text(title, bestFit: true, alignment: Alignment.MiddleCenter);
-            titleTextRef = text.Slot.GetComponent<TextRenderer>();
-            text.Size.Value = 48f;
-            text.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
-
-            root.World.RunInUpdates(2, () =>
-            {
-                try
-                {
-                    var autoMat = text.Slot.GetComponentInParents<UI_TextUnlitMaterial>();
-                    if (autoMat != null)
-                    {
-                        autoMat.OffsetFactor.Value = -1f;
-                        Msg("[BackPanel] Set OffsetFactor=-1 on auto text material");
-                    }
-                    else
-                    {
-                        Msg("[BackPanel] Could not find auto UI_TextUnlitMaterial");
-                    }
-                }
-                catch (Exception ex) { Msg($"[BackPanel] Text material fix error: {ex.Message}"); }
-            });
-
-            backUi.Style.FlexibleHeight = 1f;
-            backUi.Spacer(1f);
-
-            Msg($"[BackPanel] Created with title '{title}'");
+            backPlaneRef = AddCurvedBackPlane(root, w, h, canvasScale);
+            ApplyPanelCurvature(currentPanelCurvature);
+            Msg("[BackPanel] Created curved backing");
         }
 
         if (!_updateShown && Config!.GetValue(CheckForUpdates))
@@ -1196,15 +1746,21 @@ public partial class DesktopBuddyMod
                 streamVisRef = streamVis;
                 Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
 
+                streamPlaneRef = AddCurvedTexturePlane(streamSlot, "VideoTextureCurvedPlane", w, h, 1f, videoTex, 0f, flipY: false, offsetUnits: -100f);
+                ApplyPanelCurvature(currentPanelCurvature);
+
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
+                streamCanvas.Collider.RawTarget.Enabled = false;
                 streamCanvasRef = streamCanvas;
                 streamCanvas.Size.Value = new float2(w, h);
                 var streamUi = new UIBuilder(streamCanvas);
 
                 var streamBg = streamUi.Image(new colorX(0f, 0f, 0f, 1f));
+                streamBg.Tint.Value = colorX.Clear;
                 streamUi.NestInto(streamBg.RectTransform);
 
                 var streamImg = streamUi.RawImage(videoTex);
+                streamImg.Tint.Value = new colorX(1f, 1f, 1f, 0f);
                 var streamMat = streamSlot.AttachComponent<UI_UnlitMaterial>();
                 streamMat.BlendMode.Value = BlendMode.Alpha;
                 streamMat.ZWrite.Value = ZWrite.On;
@@ -1390,6 +1946,8 @@ public partial class DesktopBuddyMod
 
         void UpdateLayout(int newW, int newH)
         {
+            w = newW;
+            h = newH;
             worldHalfW = newW / 2f * canvasScale;
             worldHalfH = newH / 2f * canvasScale;
             barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
@@ -1398,21 +1956,31 @@ public partial class DesktopBuddyMod
             if (session.Collider != null && !session.Collider.IsDestroyed)
                 session.Collider.Size.Value = new float3(newW * canvasScale, newH * canvasScale, 0.001f);
 
-            if (backCanvasRef != null && !backCanvasRef.IsDestroyed)
-                backCanvasRef.Size.Value = new float2(newW, newH);
+            if (ui.Canvas != null && !ui.Canvas.IsDestroyed)
+                ui.Canvas.Size.Value = new float2(newW, newH);
+
+            if (frontPlaneRef != null && !frontPlaneRef.IsDestroyed)
+                frontPlaneRef.Size.Value = new float2(newW, newH);
+
+            if (displayRayExitRef != null && !displayRayExitRef.IsDestroyed)
+                displayRayExitRef.Size = new float2(newW, newH);
+
+            if (backPlaneRef != null && !backPlaneRef.IsDestroyed)
+                backPlaneRef.Size.Value = new float2(newW, newH);
+
+            if (streamPlaneRef != null && !streamPlaneRef.IsDestroyed)
+                streamPlaneRef.Size.Value = new float2(newW, newH);
 
             if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
                 streamCanvasRef.Size.Value = new float2(newW, newH);
 
+            if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
+                topBarStripRef.Size.Value = new float2(newW, barH);
+
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
                 keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
 
-            float deviceY = worldHalfH + deviceIndicatorTopOffset;
-            if (session.VCamSlot != null && !session.VCamSlot.IsDestroyed)
-                session.VCamSlot.LocalPosition = new float3(0f, deviceY, -0.001f);
-
-            if (session.VMicSlot != null && !session.VMicSlot.IsDestroyed)
-                session.VMicSlot.LocalPosition = new float3(0.03f, deviceY, -0.001f);
+            UpdateDeviceIndicators();
 
             Msg($"[Resize] UI updated to {newW}x{newH}");
         }
@@ -1443,47 +2011,4 @@ public partial class DesktopBuddyMod
             ? $"[StartStreaming] Window focused, streaming started for: {title}"
             : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
     }
-
-    private static Task<Uri> GetLargeIconUriAsync(Engine engine, IntPtr hwnd)
-    {
-        string exePath = WindowIconExtractor.GetExecutablePath(hwnd);
-        string cacheKey = !string.IsNullOrEmpty(exePath)
-            ? exePath
-            : $"hwnd:{hwnd.ToInt64():X}";
-
-        if (_largeIconCache.TryGetValue(cacheKey, out var cached))
-        {
-            Msg($"[BackPanel] Using cached high-res icon for {cacheKey}");
-            return Task.FromResult(cached);
-        }
-
-        return _largeIconTasks.GetOrAdd(cacheKey, key => Task.Run(async () =>
-        {
-            try
-            {
-                var iconData = WindowIconExtractor.GetLargeIconRGBA(hwnd, out int iw, out int ih, 128);
-                if (iconData == null || iw <= 0 || ih <= 0) return null;
-
-                var bitmap = new Bitmap2D(iconData, iw, ih,
-                    TextureFormat.RGBA32, false, ColorProfile.sRGB, false);
-                var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
-                if (uri != null)
-                {
-                    _largeIconCache[cacheKey] = uri;
-                    Msg($"[BackPanel] Cached high-res icon for {cacheKey}: {uri}");
-                }
-                return uri;
-            }
-            catch (Exception ex)
-            {
-                Msg($"[BackPanel] High-res icon cache error for {cacheKey}: {ex.Message}");
-                return null;
-            }
-            finally
-            {
-                _largeIconTasks.TryRemove(cacheKey, out var ignoredTask);
-            }
-        }));
-    }
-
 }

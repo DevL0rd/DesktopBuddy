@@ -128,7 +128,7 @@ public static class ContextMenuPatch
         return pixels;
     }
 
-    private static StaticTexture2D GetDesktopIconTexture(Engine engine, Slot slot)
+    internal static StaticTexture2D GetDesktopIconTexture(Engine engine, Slot slot)
     {
         try
         {
@@ -178,7 +178,7 @@ public static class ContextMenuPatch
         }
     }
 
-    private static StaticTexture2D GetIconTexture(IntPtr hwnd, Engine engine, Slot slot)
+    internal static StaticTexture2D GetIconTexture(IntPtr hwnd, Engine engine, Slot slot)
     {
         try
         {
