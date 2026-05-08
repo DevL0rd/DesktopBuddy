@@ -21,7 +21,8 @@ static class LocomotionSuppressionPatch
             var touchable = __instance.Laser?.CurrentTouchable;
             if (touchable == null) return;
 
-            if (touchable is Canvas canvas && DesktopBuddyMod.DesktopCanvasIds.Contains(canvas.ReferenceID))
+            if (touchable is DesktopCurvedScreenInput ||
+                (touchable is Canvas canvas && DesktopBuddyMod.DesktopCanvasIds.Contains(canvas.ReferenceID)))
             {
                 if (_inputsField?.GetValue(__instance) is InteractionHandlerInputs inputs)
                     inputs.Axis.RegisterBlocks = true;

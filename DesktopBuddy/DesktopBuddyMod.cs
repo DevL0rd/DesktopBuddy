@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading;
 using HarmonyLib;
@@ -75,6 +76,10 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal static readonly ModConfigurationKey<string> MediaMtxStreamName =
         new("mediaMtxStreamName", "MediaMTX stream name (path component of the RTSP URL). Leave blank to auto-generate a random name per session.", () => "");
 
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PanelCurvePreferences =
+        new("panelCurvePreferences", "Saved DesktopBuddy panel curve values, keyed by application executable path or shared desktop capture.", () => "");
+
     internal static bool IsMediaMtxEnabled =>
         Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
 
@@ -92,6 +97,81 @@ public partial class DesktopBuddyMod : ResoniteMod
             name = _mediaMtxStreamBase;
         }
         return $"rtsp://{host}:{port}/{name}_{streamId}";
+    }
+
+    internal static string GetPanelCurvePreferenceKey(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+            return "desktop";
+
+        string exePath = WindowIconExtractor.GetExecutablePath(hwnd);
+        if (!string.IsNullOrWhiteSpace(exePath))
+            return "app:" + exePath.ToLowerInvariant();
+
+        WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
+        return processId != 0 ? $"pid:{processId}" : $"hwnd:{hwnd.ToInt64():X}";
+    }
+
+    internal static float GetPanelCurvePreference(string key, float fallback)
+    {
+        try
+        {
+            var prefs = ParsePanelCurvePreferences(Config?.GetValue(PanelCurvePreferences));
+            return prefs.TryGetValue(key, out float value) ? Math.Clamp(value, 0f, 1f) : fallback;
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Curve] Failed to load preference: {ex.Message}");
+            return fallback;
+        }
+    }
+
+    internal static void SetPanelCurvePreference(string key, float value)
+    {
+        try
+        {
+            if (Config == null || string.IsNullOrWhiteSpace(key)) return;
+
+            var prefs = ParsePanelCurvePreferences(Config.GetValue(PanelCurvePreferences));
+            prefs[key] = Math.Clamp(value, 0f, 1f);
+            Config.Set(PanelCurvePreferences, SerializePanelCurvePreferences(prefs));
+            Config.Save();
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Curve] Failed to save preference: {ex.Message}");
+        }
+    }
+
+    private static Dictionary<string, float> ParsePanelCurvePreferences(string serialized)
+    {
+        var result = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(serialized))
+            return result;
+
+        foreach (string line in serialized.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            int split = line.IndexOf('=');
+            if (split <= 0) continue;
+
+            string key = Uri.UnescapeDataString(line[..split]);
+            string rawValue = line[(split + 1)..];
+            if (float.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+                result[key] = Math.Clamp(value, 0f, 1f);
+        }
+        return result;
+    }
+
+    private static string SerializePanelCurvePreferences(Dictionary<string, float> prefs)
+    {
+        var lines = new List<string>();
+        foreach (var pair in prefs)
+        {
+            string key = Uri.EscapeDataString(pair.Key);
+            string value = Math.Clamp(pair.Value, 0f, 1f).ToString("R", CultureInfo.InvariantCulture);
+            lines.Add($"{key}={value}");
+        }
+        return string.Join("\n", lines);
     }
 
     internal static bool IsDesktopMode(World world)
@@ -293,6 +373,7 @@ public partial class DesktopBuddyMod : ResoniteMod
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
             Config.Set(MediaMtxStreamName, Config.GetValue(MediaMtxStreamName));
+            Config.Set(PanelCurvePreferences, Config.GetValue(PanelCurvePreferences) ?? "");
             Config.Save();
             _configResetForNewDefaults = false;
         }
@@ -316,6 +397,7 @@ public partial class DesktopBuddyMod : ResoniteMod
         Config.Set(MediaMtxHost, "");
         Config.Set(MediaMtxPort, 8554);
         Config.Set(MediaMtxStreamName, "");
+        Config.Set(PanelCurvePreferences, "");
     }
 
     private static void DetectStoredConfigVersionMismatch()

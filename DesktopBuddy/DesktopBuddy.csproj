@@ -70,6 +70,10 @@
       <HintPath>$(LibPath)\Awwdio.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="BepuPhysics">
+      <HintPath>$(LibPath)\BepuPhysics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="FrooxEngine.Store">
       <HintPath>$(LibPath)\FrooxEngine.Store.dll</HintPath>
       <Private>false</Private>
@@ -87,6 +91,7 @@
       <ResoniteReferenceLibs Include="$(ResonitePath)\SkyFrost.Base.Models.dll" />
       <ResoniteReferenceLibs Include="$(ResonitePath)\Renderite.Shared.dll" />
       <ResoniteReferenceLibs Include="$(ResonitePath)\Awwdio.dll" />
+      <ResoniteReferenceLibs Include="$(ResonitePath)\BepuPhysics.dll" />
       <ResoniteReferenceLibs Include="$(ResonitePath)\FrooxEngine.Store.dll" />
     </ItemGroup>
     <MakeDir Directories="$(LibPath)" />
