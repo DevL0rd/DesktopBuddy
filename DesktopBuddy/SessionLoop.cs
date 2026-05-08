@@ -517,7 +517,20 @@ public partial class DesktopBuddyMod
 
         Msg($"[Cleanup] Disconnecting encoder");
         var streamer = session.Streamer;
-        if (streamer != null) streamer.OnGpuFrame = null;
+        if (streamer != null)
+        {
+            streamer.OnGpuFrame = null;
+            try
+            {
+                streamer.FlushD3dContext();
+                streamer.StopCapture();
+                Msg("[Cleanup] Capture stopped immediately");
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Cleanup] Immediate capture stop error: {ex.Message}");
+            }
+        }
         DesktopSession replacementDriver = null;
         FfmpegEncoder replacementEncoder = null;
         if (session.StreamId > 0)
@@ -563,8 +576,6 @@ public partial class DesktopBuddyMod
             try
             {
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
-
-                streamer?.FlushD3dContext();
 
                 AudioCapture audioToDispose = null;
                 FfmpegEncoder encoderToDispose = null;
