@@ -106,7 +106,6 @@ public partial class DesktopBuddyMod
                     $" --proxy-keepalive-connections 100" +
                     $" --proxy-tcp-keepalive 15s" +
                     $" --proxy-connect-timeout 30s" +
-                    $" --no-chunked-encoding" +
                     $" --compression-quality 0" +
                     $" --grace-period 30s" +
                     $" --no-autoupdate" +
