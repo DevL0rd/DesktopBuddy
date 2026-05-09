@@ -80,6 +80,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _readerCatchupMaxBacklogBytes;
     private long _readerLastCatchupLogTicks;
     private long _lastResourceLogTicks;
+    private long _lastResourceLogRingPos;
 
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
@@ -342,10 +343,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Initializing: source={_sourceWidth}x{_sourceHeight}, encode={_width}x{_height}, gpuScale={_needsGpuScale}, nominal encoder rate {NOMINAL_ENCODER_FPS}fps (capture remains event-driven)");
 
-            bool useHevc = _width > 4096 || _height > 4096;
-            string[] encoders = useHevc
-                ? new[] { "hevc_nvenc", "hevc_amf" }
-                : new[] { "h264_nvenc", "h264_amf" };
+            string[] encoders = { "hevc_nvenc", "hevc_amf", "h264_nvenc", "h264_amf" };
 
             AVCodec* codec = null;
             string codecName = null;
@@ -369,7 +367,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->time_base = new AVRational { num = 1, den = 90000 };
                 _codecCtx->framerate = new AVRational { num = (int)NOMINAL_ENCODER_FPS, den = 1 };
                 long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
+                bool isAmf = name.Contains("amf");
+                long peakBitrate = (long)(bitrate * 1.2);
                 int vbvBuffer = (int)Math.Clamp(bitrate / 4, 500_000L, int.MaxValue);
+                long maxAuSizeBits = Math.Clamp((bitrate / NOMINAL_ENCODER_FPS) * 4, 500_000L, int.MaxValue);
                 long streamBytesPerSecond = (bitrate + 256_000L) / 8;
                 _readerCatchupThresholdBytes = Math.Clamp(
                     streamBytesPerSecond * READER_CATCHUP_THRESHOLD_MS / 1000,
@@ -379,13 +380,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->pix_fmt = AVPixelFormat.AV_PIX_FMT_D3D11;
                 _codecCtx->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY | ffmpeg.AV_CODEC_FLAG_GLOBAL_HEADER;
 
-                bool isAmf = name.Contains("amf");
                 int keyframeIntervalMs = GetKeyframeIntervalMs();
                 int keyframeIntervalFrames = Math.Max(1, (int)Math.Ceiling(NOMINAL_ENCODER_FPS * keyframeIntervalMs / 1000.0));
                 _codecCtx->gop_size = keyframeIntervalFrames;
                 _codecCtx->keyint_min = 1;
                 _codecCtx->bit_rate = bitrate;
-                _codecCtx->rc_max_rate = isAmf ? bitrate : (long)(bitrate * 1.2);
+                _codecCtx->rc_max_rate = peakBitrate;
                 _codecCtx->rc_buffer_size = vbvBuffer;
 
                 var swFormat = isAmf
@@ -417,10 +417,31 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 }
                 else if (isAmf)
                 {
-                    ffmpeg.av_dict_set(&opts, "usage", "lowlatency_high_quality", 0);
-                    ffmpeg.av_dict_set(&opts, "rc", "cbr", 0);
+                    ffmpeg.av_dict_set(&opts, "usage", "lowlatency", 0);
+                    ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
+                    ffmpeg.av_dict_set(&opts, "rc", "vbr_peak", 0);
+                    ffmpeg.av_dict_set(&opts, "async_depth", "1", 0);
+                    ffmpeg.av_dict_set(&opts, "latency", "1", 0);
+                    ffmpeg.av_dict_set(&opts, "enforce_hrd", "1", 0);
+                    ffmpeg.av_dict_set(&opts, "filler_data", "0", 0);
+                    ffmpeg.av_dict_set(&opts, "vbaq", "1", 0);
+                    ffmpeg.av_dict_set(&opts, "max_au_size", maxAuSizeBits.ToString(System.Globalization.CultureInfo.InvariantCulture), 0);
+                    if (name.Contains("h264"))
+                    {
+                        ffmpeg.av_dict_set(&opts, "profile", "constrained_high", 0);
+                        ffmpeg.av_dict_set(&opts, "coder", "cabac", 0);
+                        ffmpeg.av_dict_set(&opts, "frame_skipping", "0", 0);
+                        ffmpeg.av_dict_set(&opts, "forced_idr", "1", 0);
+                    }
+                    else
+                    {
+                        ffmpeg.av_dict_set(&opts, "profile", "main", 0);
+                        ffmpeg.av_dict_set(&opts, "skip_frame", "0", 0);
+                        ffmpeg.av_dict_set(&opts, "gops_per_idr", "1", 0);
+                    }
                     ffmpeg.av_dict_set(&opts, "header_insertion_mode", "idr", 0);
                     ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
+                    Log.Msg($"[FfmpegEnc:{_streamId}] AMF low-latency options: usage=lowlatency quality=speed rc=vbr_peak target={bitrate} peak={peakBitrate} vbv={vbvBuffer} max_au_size={maxAuSizeBits} async_depth=1 latency=1 enforce_hrd=1 filler_data=0 skip_frames=0 vbaq=1 header_insertion_mode=idr");
                 }
 
                 Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: calling...");
@@ -977,9 +998,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     {
         long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         long previousTicks = Interlocked.Read(ref _lastResourceLogTicks);
+        double elapsedMs = previousTicks != 0
+            ? (double)(nowTicks - previousTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency
+            : 0.0;
         if (previousTicks != 0)
         {
-            double elapsedMs = (double)(nowTicks - previousTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
             if (elapsedMs < 2000.0) return;
         }
 
@@ -993,7 +1016,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             double privateMb = process.PrivateMemorySize64 / 1048576.0;
             double workingMb = process.WorkingSet64 / 1048576.0;
             double managedMb = GC.GetTotalMemory(false) / 1048576.0;
-            Log.Msg($"[FfmpegEnc:{_streamId}] Resources: private={privateMb:F1}MB working={workingMb:F1}MB managed={managedMb:F1}MB frames={_totalFrames} keepAlive={_keepAliveFramesEncoded} ringPos={Interlocked.Read(ref _ringWritePos)}");
+            long ringPos = Interlocked.Read(ref _ringWritePos);
+            long previousRingPos = Interlocked.Exchange(ref _lastResourceLogRingPos, ringPos);
+            double muxMbps = previousRingPos > 0 && ringPos >= previousRingPos && previousTicks != 0
+                ? (ringPos - previousRingPos) * 8.0 / elapsedMs / 1000.0
+                : 0.0;
+            Log.Msg($"[FfmpegEnc:{_streamId}] Resources: private={privateMb:F1}MB working={workingMb:F1}MB managed={managedMb:F1}MB frames={_totalFrames} keepAlive={_keepAliveFramesEncoded} ringPos={ringPos} muxMbps={muxMbps:F2}");
         }
         catch (Exception ex)
         {

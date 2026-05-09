@@ -1018,19 +1018,23 @@ public partial class DesktopBuddyMod
         barUi.NestOut();
 
         string userName = localUser?.UserName ?? "Unknown";
-        float nameW = MathX.Max(60f, userName.Length * 12f);
+        float desiredNameW = MathX.Max(60f, userName.Length * 12f);
+        float collapsedFixedW = barPad * 2f + avatarW + barGap * 2f + toggleW;
+        float availableNameW = MathF.Max(0f, w - collapsedFixedW);
+        float nameW = MathF.Min(desiredNameW, availableNameW);
+        bool compactName = nameW < desiredNameW - 0.5f;
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.MinWidth = nameW;
         barUi.Style.PreferredWidth = nameW;
         barUi.Style.FlexibleHeight = 1f;
         barUi.Style.MinHeight = -1f;
-        var nameText = barUi.Text(userName, bestFit: false, alignment: Alignment.MiddleLeft);
+        var nameText = barUi.Text(userName, bestFit: compactName, alignment: Alignment.MiddleLeft);
         nameText.Size.Value = 18f;
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
         nameText.Material.Target = barTextMat;
 
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = 430f;
+        float expandContentW = MathF.Max(0f, MathF.Min(430f, w - barCollapsedW - barGap));
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         void StyleButton(Button btn)

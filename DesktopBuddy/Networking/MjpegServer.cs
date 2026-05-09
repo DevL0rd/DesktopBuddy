@@ -148,6 +148,7 @@ public sealed class MjpegServer : IDisposable
 
         long totalBytes = 0;
         long lastSummaryTicks = Stopwatch.GetTimestamp();
+        long summaryStartTicks = lastSummaryTicks;
         long writeOps = 0;
         long slowWrites = 0;
         long maxWriteTicks = 0;
@@ -209,8 +210,11 @@ public sealed class MjpegServer : IDisposable
                 long nowTicks = Stopwatch.GetTimestamp();
                 if (TicksToMs(nowTicks - lastSummaryTicks) >= 5000.0)
                 {
-                    Log.Msg($"[MjpegServer] Stream client summary stream={streamId} conn={connectionId} sent={totalBytes} readBytes={readBytes} chunks={chunks} keyframeChunks={keyframeChunks} zeroReads={zeroReads} waits={waits} readerOverruns={readerOverruns} writeOps={writeOps} slowWrites={slowWrites} maxWrite={TicksToMs(maxWriteTicks):F2}ms/{maxWriteBytes}B avgWrite={(writeOps > 0 ? TicksToMs(totalWriteTicks) / writeOps : 0):F2}ms state=({encoder.GetReaderDiagnostics(readPos, aligned)})");
+                    double summaryMs = TicksToMs(nowTicks - summaryStartTicks);
+                    double streamMbps = summaryMs > 0 ? readBytes * 8.0 / summaryMs / 1000.0 : 0.0;
+                    Log.Msg($"[MjpegServer] Stream client summary stream={streamId} conn={connectionId} sent={totalBytes} readBytes={readBytes} streamMbps={streamMbps:F2} chunks={chunks} keyframeChunks={keyframeChunks} zeroReads={zeroReads} waits={waits} readerOverruns={readerOverruns} writeOps={writeOps} slowWrites={slowWrites} maxWrite={TicksToMs(maxWriteTicks):F2}ms/{maxWriteBytes}B avgWrite={(writeOps > 0 ? TicksToMs(totalWriteTicks) / writeOps : 0):F2}ms state=({encoder.GetReaderDiagnostics(readPos, aligned)})");
                     lastSummaryTicks = nowTicks;
+                    summaryStartTicks = nowTicks;
                     readBytes = 0;
                     chunks = 0;
                     keyframeChunks = 0;
