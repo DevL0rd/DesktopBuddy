@@ -69,17 +69,28 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
 
     internal void StopTexture(int slot)
     {
+        Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture ENTER slot={slot} disposed={_disposed} messenger={_messenger != null}");
         if (_messenger == null || _disposed || slot < 0 || slot >= SharedTextureBridgeProtocol.MaxTextureSlots) return;
 
         if (_usedSlots.Remove(slot))
         {
-            _messenger.SendObject(SharedTextureBridgeProtocol.StopMessageId, new SharedTextureStopMessage { SlotId = slot });
+            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject START slot={slot}");
+            try
+            {
+                _messenger.SendObject(SharedTextureBridgeProtocol.StopMessageId, new SharedTextureStopMessage { SlotId = slot });
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject DONE slot={slot}");
+            }
+            catch (Exception ex)
+            {
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject ERROR slot={slot}: {ex}");
+            }
             _slotRunning[slot] = false;
             _slotWidths[slot] = 0;
             _slotHeights[slot] = 0;
         }
 
         Log.Msg($"[SharedTextureBridgeChannel] Stopped texture slot={slot}");
+        Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture EXIT slot={slot}");
     }
 
     internal void UpdateTexture(int slot, IntPtr sharedTextureHandle, int sharedTextureWidth, int sharedTextureHeight)
@@ -102,24 +113,42 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
 
     private void SendStart(int slot, IntPtr sharedTextureHandle, int sharedTextureWidth, int sharedTextureHeight)
     {
-        _messenger.SendObject(SharedTextureBridgeProtocol.StartMessageId, new SharedTextureStartMessage
+        try
         {
-            SlotId = slot,
-            SharedTextureHandle = sharedTextureHandle.ToInt64(),
-            SharedTextureWidth = sharedTextureWidth,
-            SharedTextureHeight = sharedTextureHeight
-        });
+            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart START slot={slot} shared=0x{sharedTextureHandle:X}");
+            _messenger.SendObject(SharedTextureBridgeProtocol.StartMessageId, new SharedTextureStartMessage
+            {
+                SlotId = slot,
+                SharedTextureHandle = sharedTextureHandle.ToInt64(),
+                SharedTextureWidth = sharedTextureWidth,
+                SharedTextureHeight = sharedTextureHeight
+            });
+            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart DONE slot={slot}");
+        }
+        catch (Exception ex)
+        {
+            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart ERROR slot={slot}: {ex}");
+            throw;
+        }
     }
 
     private void OnRunning(SharedTextureRunningMessage message)
     {
-        int slot = message.SlotId;
-        if (slot < 0 || slot >= SharedTextureBridgeProtocol.MaxTextureSlots) return;
+        try
+        {
+            if (message == null) return;
+            int slot = message.SlotId;
+            if (slot < 0 || slot >= SharedTextureBridgeProtocol.MaxTextureSlots) return;
 
-        _slotRunning[slot] = true;
-        _slotWidths[slot] = message.Width;
-        _slotHeights[slot] = message.Height;
-        Log.Msg($"[SharedTextureBridgeChannel] Texture {slot} running: {message.Width}x{message.Height}");
+            _slotRunning[slot] = true;
+            _slotWidths[slot] = message.Width;
+            _slotHeights[slot] = message.Height;
+            Log.Msg($"[SharedTextureBridgeChannel] Texture {slot} running: {message.Width}x{message.Height}");
+        }
+        catch (Exception ex)
+        {
+            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.OnRunning ERROR: {ex}");
+        }
     }
 
     private static void OnWarning(string message)
@@ -134,6 +163,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
 
     public void Dispose()
     {
+        Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.Dispose ENTER disposed={_disposed} messenger={_messenger != null} slots={_usedSlots.Count}");
         if (_disposed) return;
         _disposed = true;
 
@@ -141,16 +171,21 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
         {
             foreach (var slot in _usedSlots)
             {
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.Dispose SendObject START slot={slot}");
                 try { _messenger.SendObject(SharedTextureBridgeProtocol.StopMessageId, new SharedTextureStopMessage { SlotId = slot }); }
                 catch { }
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.Dispose SendObject DONE slot={slot}");
             }
         }
 
         _usedSlots.Clear();
+        Log.MsgImmediate("[CleanupTrace] SharedTextureBridgeChannel.Dispose Messenger.Dispose START");
         _messenger?.Dispose();
+        Log.MsgImmediate("[CleanupTrace] SharedTextureBridgeChannel.Dispose Messenger.Dispose DONE");
         _messenger = null;
 
         Messenger.OnWarning -= OnWarning;
         Messenger.OnFailure -= OnFailure;
+        Log.MsgImmediate("[CleanupTrace] SharedTextureBridgeChannel.Dispose EXIT");
     }
 }

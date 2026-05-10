@@ -64,14 +64,21 @@ static class SimulatePressPatch
 {
     static bool Prefix(Key key, World origin)
     {
-        for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
+        try
         {
-            var s = DesktopBuddyMod.ActiveSessions[i];
-            if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
+            for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
             {
-                s.KeyboardSource.SendKey(key);
-                return false;
+                var s = DesktopBuddyMod.ActiveSessions[i];
+                if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
+                {
+                    s.KeyboardSource.SendKey(key);
+                    return false;
+                }
             }
+        }
+        catch (System.Exception ex)
+        {
+            Log.Msg($"[InputPatch] SimulatePress error: {ex}");
         }
         return true;
     }
@@ -82,14 +89,21 @@ static class TypeAppendPatch
 {
     static bool Prefix(string typeDelta, World origin)
     {
-        for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
+        try
         {
-            var s = DesktopBuddyMod.ActiveSessions[i];
-            if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
+            for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
             {
-                s.KeyboardSource.TypeString(typeDelta);
-                return false;
+                var s = DesktopBuddyMod.ActiveSessions[i];
+                if (s.Root?.World == origin && s.KeyboardSource != null && !s.KeyboardSource.IsDestroyed)
+                {
+                    s.KeyboardSource.TypeString(typeDelta);
+                    return false;
+                }
             }
+        }
+        catch (System.Exception ex)
+        {
+            Log.Msg($"[InputPatch] TypeAppend error: {ex}");
         }
         return true;
     }

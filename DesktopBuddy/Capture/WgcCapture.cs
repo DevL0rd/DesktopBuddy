@@ -15,6 +15,7 @@ public sealed class WgcCapture : IDisposable
     private static bool _sharedD3dReady;
     private static IntPtr _sharedD3dDevice;
     private static IntPtr _sharedD3dContext;
+    private static uint _sharedD3dAdapterVendorId;
     private static IDirect3DDevice _sharedWinrtDevice;
     private static readonly object _captureInteropLock = new();
     private static IGraphicsCaptureItemInterop _captureInterop;
@@ -105,6 +106,7 @@ public sealed class WgcCapture : IDisposable
     private const uint D3D11_RESOURCE_MISC_SHARED = 0x2;
 
     private static IntPtr _cachedPreferredAdapter = IntPtr.Zero;
+    private static uint _cachedPreferredAdapterVendorId;
     private static bool _adapterCacheReady;
     private static readonly object _adapterCacheLock = new();
 
@@ -128,6 +130,7 @@ public sealed class WgcCapture : IDisposable
 
             IntPtr bestAdapter = IntPtr.Zero;
             bool bestIsDiscrete = false;
+            uint bestVendorId = 0;
 
             for (uint i = 0; ; i++)
             {
@@ -148,11 +151,16 @@ public sealed class WgcCapture : IDisposable
                 {
                     if (bestAdapter != IntPtr.Zero) Marshal.Release(bestAdapter);
                     bestAdapter = adapter;
+                    bestVendorId = desc.VendorId;
                     bestIsDiscrete = true;
                 }
                 else
                 {
-                    if (bestAdapter == IntPtr.Zero) bestAdapter = adapter;
+                    if (bestAdapter == IntPtr.Zero)
+                    {
+                        bestAdapter = adapter;
+                        bestVendorId = desc.VendorId;
+                    }
                     else Marshal.Release(adapter);
                 }
             }
@@ -160,6 +168,7 @@ public sealed class WgcCapture : IDisposable
             Marshal.Release(factory);
 
             _cachedPreferredAdapter = bestAdapter;
+            _cachedPreferredAdapterVendorId = bestVendorId;
             if (_cachedPreferredAdapter != IntPtr.Zero)
                 Marshal.AddRef(_cachedPreferredAdapter);
             _adapterCacheReady = true;
@@ -197,6 +206,15 @@ public sealed class WgcCapture : IDisposable
 
     internal static object SharedD3dContextLock => _sharedD3dLock;
 
+    internal static uint SharedD3dAdapterVendorId
+    {
+        get
+        {
+            EnsureSharedD3dDevice();
+            return _sharedD3dAdapterVendorId;
+        }
+    }
+
     internal static bool PrewarmSharedDevice() => EnsureSharedD3dDevice();
 
     internal static bool PrewarmCaptureFactory() => EnsureCaptureInterop();
@@ -209,6 +227,7 @@ public sealed class WgcCapture : IDisposable
 
             uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
             IntPtr preferredAdapter = FindPreferredAdapter();
+            uint preferredVendorId = _cachedPreferredAdapterVendorId;
             int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
             int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
                 deviceFlags, IntPtr.Zero, 0, 7,
@@ -251,8 +270,9 @@ public sealed class WgcCapture : IDisposable
 
             _sharedWinrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
             Marshal.Release(inspectable);
+            _sharedD3dAdapterVendorId = preferredVendorId;
             _sharedD3dReady = true;
-            Log.Msg($"[WgcCapture] Shared D3D11 device ready 0x{_sharedD3dDevice:X}");
+            Log.Msg($"[WgcCapture] Shared D3D11 device ready 0x{_sharedD3dDevice:X} vendor=0x{_sharedD3dAdapterVendorId:X4}");
             return true;
         }
     }
@@ -644,44 +664,57 @@ public sealed class WgcCapture : IDisposable
 
     public unsafe void FlushD3dContext()
     {
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext ENTER hwnd={_hwnd} disposed={_disposed} ctx=0x{_d3dContext:X}");
         lock (_sharedD3dLock)
         {
+            Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext D3D lock ACQUIRED hwnd={_hwnd}");
             if (_disposed || _d3dContext == IntPtr.Zero) return;
             try
             {
+                Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext ClearState START hwnd={_hwnd}");
                 var vtable = *(IntPtr**)_d3dContext;
                 var clearFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[ID3D11DeviceContext_ClearState];
                 clearFn(_d3dContext);
+                Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext Flush START hwnd={_hwnd}");
                 var flushFn = (delegate* unmanaged[Stdcall]<IntPtr, void>)vtable[ID3D11DeviceContext_Flush];
                 flushFn(_d3dContext);
                 Log.Msg("[WgcCapture] D3D11 ClearState+Flush OK");
+                Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext DONE hwnd={_hwnd}");
             }
             catch (Exception ex) { Log.Msg($"[WgcCapture] D3D11 flush error: {ex.Message}"); }
         }
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.FlushD3dContext EXIT hwnd={_hwnd}");
     }
 
     public void StopCapture()
     {
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture ENTER hwnd={_hwnd} disposed={_disposed}");
         lock (_disposeLock)
         {
+            Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture dispose lock ACQUIRED hwnd={_hwnd}");
             if (_disposed) return;
             _disposed = true;
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture unhook FrameArrived START hwnd={_hwnd}");
         try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture unhook ItemClosed START hwnd={_hwnd}");
         try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Item closed unhook error: {ex.Message}"); }
 
         _session = null;
         _framePool = null;
         _itemClosedHandler = null;
         Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture EXIT hwnd={_hwnd}");
     }
 
     public void Dispose()
     {
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose ENTER hwnd={_hwnd} disposed={_disposed}");
         bool alreadyStopped;
         lock (_disposeLock)
         {
+            Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose dispose lock ACQUIRED hwnd={_hwnd}");
             alreadyStopped = _disposed;
             _disposed = true;
         }
@@ -704,7 +737,9 @@ public sealed class WgcCapture : IDisposable
         _winrtDevice = null;
         _d3dDevice = IntPtr.Zero;
         _d3dContext = IntPtr.Zero;
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose ReleaseSharedTexture START hwnd={_hwnd}");
         ReleaseSharedTexture();
         Log.Msg($"[WgcCapture:Dispose] Detached from shared D3D device hwnd={_hwnd}");
+        Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose EXIT hwnd={_hwnd}");
     }
 }

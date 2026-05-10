@@ -118,17 +118,21 @@ namespace DesktopBuddySharedTextureBridge
 
         internal static void Dispose()
         {
+            SharedTextureBridgePlugin.LogInfo($"[UnityD3D11] Dispose ENTER initialized={_initialized} device=0x{_d3dDevice.ToInt64():X} context=0x{_d3dContext.ToInt64():X} probe={_probeTexture != null}");
             lock (Lock)
             {
+                SharedTextureBridgePlugin.LogInfo("[UnityD3D11] Dispose lock entered");
                 if (_d3dContext != IntPtr.Zero)
                 {
-                    Marshal.Release(_d3dContext);
+                    try { Marshal.Release(_d3dContext); }
+                    catch (Exception ex) { SharedTextureBridgePlugin.LogError("[UnityD3D11] Context release failed", ex); }
                     _d3dContext = IntPtr.Zero;
                 }
 
                 if (_d3dDevice != IntPtr.Zero)
                 {
-                    Marshal.Release(_d3dDevice);
+                    try { Marshal.Release(_d3dDevice); }
+                    catch (Exception ex) { SharedTextureBridgePlugin.LogError("[UnityD3D11] Device release failed", ex); }
                     _d3dDevice = IntPtr.Zero;
                 }
 
@@ -140,6 +144,7 @@ namespace DesktopBuddySharedTextureBridge
 
                 _initialized = false;
             }
+            SharedTextureBridgePlugin.LogInfo("[UnityD3D11] Dispose EXIT");
         }
 
         private static void Info(ManualLogSource log, string message)

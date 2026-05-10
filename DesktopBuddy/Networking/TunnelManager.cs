@@ -55,10 +55,17 @@ public partial class DesktopBuddyMod
                 var vtp = session.VideoTexture;
                 vtp.World.RunInUpdates(0, () =>
                 {
-                    if (vtp != null && !vtp.IsDestroyed)
+                    try
                     {
-                        Msg($"[Tunnel] Updating session VTP: {vtp.URL.Value} -> {newUrl}");
-                        vtp.URL.Value = newUrl;
+                        if (vtp != null && !vtp.IsDestroyed)
+                        {
+                            Msg($"[Tunnel] Updating session VTP: {vtp.URL.Value} -> {newUrl}");
+                            vtp.URL.Value = newUrl;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Msg($"[Tunnel] VTP update callback error: {ex}");
                     }
                 });
             }
@@ -78,6 +85,10 @@ public partial class DesktopBuddyMod
                 TunnelUrl = null;
                 Thread.Sleep(2000);
                 StartTunnel();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Tunnel] Restart task error: {ex}");
             }
             finally { _tunnelRestarting = false; }
         });

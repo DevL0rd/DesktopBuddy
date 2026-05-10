@@ -64,8 +64,27 @@ namespace DesktopBuddySharedTextureBridge
 
         private void OnDestroy()
         {
-            _bridge?.Dispose();
-            UnityD3D11Device.Dispose();
+            LogInfo("DesktopBuddySharedTextureBridge OnDestroy START");
+            try
+            {
+                _bridge?.Dispose();
+                LogInfo("SharedTextureBridge disposed");
+            }
+            catch (Exception ex)
+            {
+                LogError("SharedTextureBridge dispose failed", ex);
+            }
+
+            try
+            {
+                UnityD3D11Device.Dispose();
+                LogInfo("UnityD3D11Device disposed");
+            }
+            catch (Exception ex)
+            {
+                LogError("UnityD3D11Device dispose failed", ex);
+            }
+            LogInfo("DesktopBuddySharedTextureBridge OnDestroy DONE");
         }
 
         internal static void LogInfo(string message)

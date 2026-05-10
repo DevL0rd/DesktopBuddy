@@ -17,6 +17,7 @@ public partial class DesktopBuddyMod
 {
     private const float DesktopPanelCurvature = 0.18f;
     private const int DesktopPanelCurveSegments = 48;
+    private static int _nextTopBarRenderHostId;
 
     private static CurvedPlaneMesh AddCurvedTexturePlane(
         Slot parent,
@@ -179,16 +180,6 @@ public partial class DesktopBuddyMod
         return mesh;
     }
 
-    private static bool IsSlotOrChild(Slot slot, Slot parent)
-    {
-        for (var current = slot; current != null; current = current.Parent)
-        {
-            if (current == parent)
-                return true;
-        }
-        return false;
-    }
-
     private static float GetCurvedPanelDepth(CurvedPlaneMesh mesh, float scale)
     {
         if (mesh == null || mesh.IsDestroyed)
@@ -302,18 +293,48 @@ public partial class DesktopBuddyMod
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            if (!streamer.TryInitialCapture())
+            try
             {
-                Msg($"[StartStreaming] Failed initial capture for: {title}");
-                streamer.Dispose();
+                if (!streamer.TryInitialCapture())
+                {
+                    Msg($"[StartStreaming] Failed initial capture for: {title}");
+                    streamer.Dispose();
+                    world.RunInUpdates(0, () =>
+                    {
+                        try
+                        {
+                            if (root != null && !root.IsDestroyed)
+                                root.Destroy();
+                        }
+                        catch (Exception ex) { Msg($"[StartStreaming] Failed-capture destroy error: {ex}"); }
+                    });
+                    return;
+                }
                 world.RunInUpdates(0, () =>
                 {
-                    if (root != null && !root.IsDestroyed)
-                        root.Destroy();
+                    try { FinishStartStreaming(root, hwnd, title, streamer, monitorIndex); }
+                    catch (Exception ex)
+                    {
+                        Msg($"[StartStreaming] FinishStartStreaming callback error: {ex}");
+                        try { streamer.Dispose(); } catch (Exception disposeEx) { Msg($"[StartStreaming] Streamer dispose after finish error: {disposeEx}"); }
+                        try { if (root != null && !root.IsDestroyed) root.Destroy(); } catch (Exception destroyEx) { Msg($"[StartStreaming] Root destroy after finish error: {destroyEx}"); }
+                    }
                 });
-                return;
             }
-            world.RunInUpdates(0, () => FinishStartStreaming(root, hwnd, title, streamer, monitorIndex));
+            catch (Exception ex)
+            {
+                Msg($"[StartStreaming] Background capture task error: {ex}");
+                try { streamer.Dispose(); } catch (Exception disposeEx) { Msg($"[StartStreaming] Streamer dispose after task error: {disposeEx}"); }
+                try
+                {
+                    world.RunInUpdates(0, () =>
+                    {
+                        try { if (root != null && !root.IsDestroyed) root.Destroy(); }
+                        catch (Exception destroyEx) { Msg($"[StartStreaming] Root destroy after task error: {destroyEx}"); }
+                    });
+                }
+                catch (Exception scheduleEx) { Msg($"[StartStreaming] Failed to schedule cleanup after task error: {scheduleEx}"); }
+            }
         });
     }
 
@@ -770,7 +791,11 @@ public partial class DesktopBuddyMod
                 deviceIndicatorsSlot.LocalPosition = new float3(0f, DeviceIndicatorY(), DeviceIndicatorZ());
         }
 
-                var barRenderHost = root.World.RootSlot.AddSlot("DesktopBuddyTopBarRenderHost", false);
+        int barRenderHostId = Interlocked.Increment(ref _nextTopBarRenderHostId);
+        var barRenderHost = root.World.RootSlot.AddSlot($"DesktopBuddyTopBarRenderHost {barRenderHostId}", false);
+        var barRenderHostPosition = new float3(barRenderHostId * 20000f, -20000f, 0f);
+        barRenderHost.LocalPosition = barRenderHostPosition;
+        Msg($"[TopBar] Render host isolated id={barRenderHostId} pos={barRenderHostPosition}");
         root.Destroyed += _ =>
         {
             if (barRenderHost != null && !barRenderHost.IsDestroyed)

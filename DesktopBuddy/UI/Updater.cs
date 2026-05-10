@@ -81,10 +81,17 @@ public partial class DesktopBuddyMod
         }
         dlBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
-            Msg("[Update] Opening releases page");
-            try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy/releases") { UseShellExecute = true }); }
-            catch (Exception ex) { Msg($"[Update] Failed: {ex.Message}"); }
-            if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            try
+            {
+                Msg("[Update] Opening releases page");
+                try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy/releases") { UseShellExecute = true }); }
+                catch (Exception ex) { Msg($"[Update] Failed: {ex.Message}"); }
+                if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Update] Download button error: {ex}");
+            }
         };
 
         updateUi.Style.MinHeight = 30f;
@@ -100,12 +107,26 @@ public partial class DesktopBuddyMod
         }
         dismissBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
-            if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            try
+            {
+                if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Update] Dismiss button error: {ex}");
+            }
         };
 
         root.World.RunInUpdates(15 * 60, () =>
         {
-            if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            try
+            {
+                if (!updateSlot.IsDestroyed) updateSlot.Destroy();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Update] Auto-dismiss error: {ex}");
+            }
         });
     }
 }
