@@ -33,7 +33,7 @@ if !RESTART! equ 1 (
 REM Build the mod (game-side)
 dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj" -c %CONFIGURATION%
 if !ERRORLEVEL! neq 0 (
-    echo MOD BUILD FAILED — not launching Resonite
+    echo MOD BUILD FAILED - not launching Resonite
     exit /b !ERRORLEVEL!
 )
 

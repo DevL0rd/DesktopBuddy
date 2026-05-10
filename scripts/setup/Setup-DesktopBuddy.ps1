@@ -161,6 +161,42 @@ function Configure-VBCableLoopback {
     Restart-ServiceQuiet "AudioSrv"
 }
 
+function Configure-UrlAcl {
+    $url = "http://+:48080/"
+    $sddl = "D:(A;;GX;;;S-1-1-0)"
+    Write-Log "Configuring HTTP URL ACL for stream server..."
+
+    $existing = ""
+    try {
+        $existing = (& netsh http show urlacl url=$url 2>$null) -join "`n"
+    } catch {
+        $existing = ""
+    }
+
+    if ($existing -match "48080") {
+        Write-Log "  HTTP URL ACL already configured"
+        return
+    }
+
+    $exit = Invoke-SetupProcess -FileName "netsh" -Arguments "http add urlacl url=$url sddl=$sddl" -TimeoutMs 10000
+    if ($exit -eq 0) {
+        Write-Log "  HTTP URL ACL added"
+    } else {
+        Write-Log "  netsh urlacl exit: $exit"
+    }
+}
+
+function Test-CloudflareTunnelClient {
+    param([string]$Path)
+    $cloudflared = Join-Path $Path "DesktopBuddyNative\cloudflared.exe"
+    if (Test-Path -LiteralPath $cloudflared) {
+        Write-Log "Cloudflare Tunnel client: present at $cloudflared"
+        return
+    }
+
+    Write-Log "WARNING: cloudflared.exe is missing from DesktopBuddyNative. Remote Cloudflare stream URLs will not start."
+}
+
 function Get-LatestReleaseZipUrl {
     param([string]$ApiUrl)
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -342,11 +378,14 @@ Write-Log "rml_mods exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "
 Write-Log "DesktopBuddyNative exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "DesktopBuddyNative"))"
 Write-Log "Renderer exists : $(Test-Path -LiteralPath (Join-Path $ResonitePath "Renderer"))"
 Write-Log "VB-Cable setup  : $(Test-Path -LiteralPath (Join-Path $ResonitePath "DesktopBuddyNative\VBCABLE_Setup_x64.exe"))"
+Write-Log "cloudflared.exe : $(Test-Path -LiteralPath (Join-Path $ResonitePath "DesktopBuddyNative\cloudflared.exe"))"
 Write-Log "DesktopBuddy.dll: $(Test-Path -LiteralPath (Join-Path $ResonitePath "rml_mods\DesktopBuddy.dll"))"
 
 Register-SoftCam $ResonitePath
 Install-VBCable $ResonitePath
 Configure-VBCableLoopback
+Configure-UrlAcl
+Test-CloudflareTunnelClient $ResonitePath
 Install-RendererDependencies $ResonitePath
 Save-ResonitePath $ResonitePath
 

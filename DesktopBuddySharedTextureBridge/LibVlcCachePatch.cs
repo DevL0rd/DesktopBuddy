@@ -14,6 +14,10 @@ namespace DesktopBuddySharedTextureBridge
         private static DateTime _lastLoadUtc;
         private static CacheSettings _settings = CacheSettings.Default;
         private static bool _loggedConfigPath;
+        private static readonly object _vlcLogLock = new object();
+        private static DateTime _lastVlcLogUtc;
+        private static string _lastVlcLogMessage;
+        private static int _suppressedVlcLogCount;
 
         private static void Prefix(PlayerOptionsStandalone options)
         {
@@ -43,7 +47,29 @@ namespace DesktopBuddySharedTextureBridge
             try
             {
                 if (log == null || string.IsNullOrWhiteSpace(log.Message)) return;
-                SharedTextureBridgePlugin.LogWarning($"[LibVLC:{log.Level}] {log.Message}");
+
+                string message = log.Message.Trim();
+                string suffix = "";
+                lock (_vlcLogLock)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    if (message == _lastVlcLogMessage && (now - _lastVlcLogUtc).TotalSeconds < 2.0)
+                    {
+                        _suppressedVlcLogCount++;
+                        return;
+                    }
+
+                    if (_suppressedVlcLogCount > 0)
+                    {
+                        suffix = $" (suppressed {_suppressedVlcLogCount} repeats)";
+                        _suppressedVlcLogCount = 0;
+                    }
+
+                    _lastVlcLogMessage = message;
+                    _lastVlcLogUtc = now;
+                }
+
+                SharedTextureBridgePlugin.LogWarning($"[LibVLC:{log.Level}] {message}{suffix}");
             }
             catch
             {

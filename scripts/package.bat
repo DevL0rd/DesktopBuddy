@@ -51,6 +51,22 @@ if not exist "%SETUP_PS1%" (
     echo ERROR: Setup-DesktopBuddy.ps1 not found.
     exit /b 1
 )
+if not exist "%ROOT_DIR%\DesktopBuddyNative\cloudflared.exe" (
+    echo ERROR: DesktopBuddyNative\cloudflared.exe not found. Cloudflare HTTP streaming packages require the bundled tunnel client.
+    exit /b 1
+)
+if not exist "%ROOT_DIR%\DesktopBuddyNative\avcodec-62.dll" (
+    echo ERROR: DesktopBuddyNative\avcodec-62.dll not found. FFmpeg native dependencies are missing.
+    exit /b 1
+)
+if not exist "%ROOT_DIR%\DesktopBuddyNative\avformat-62.dll" (
+    echo ERROR: DesktopBuddyNative\avformat-62.dll not found. FFmpeg native dependencies are missing.
+    exit /b 1
+)
+if not exist "%ROOT_DIR%\DesktopBuddyNative\avutil-60.dll" (
+    echo ERROR: DesktopBuddyNative\avutil-60.dll not found. FFmpeg native dependencies are missing.
+    exit /b 1
+)
 
 echo Building zip layout in: %STAGE%
 echo Using DesktopBuddy build output: %MOD_OUT_DIR%
@@ -62,11 +78,12 @@ mkdir "%STAGE%\rml_mods"
 copy "%MOD_DLL%" "%STAGE%\rml_mods\DesktopBuddy.dll" >nul
 if exist "%MOD_SHA%" copy "%MOD_SHA%" "%STAGE%\rml_mods\DesktopBuddy.sha" >nul
 
-REM Native dependencies: FFmpeg, SoftCam, and VB-Cable setup files.
+REM Native dependencies: FFmpeg, Cloudflare Tunnel, SoftCam, and VB-Cable setup files.
 REM Keep these outside rml_libs so Resonite Mod Loader does not try to load
 REM native DLLs as managed assemblies.
 mkdir "%STAGE%\DesktopBuddyNative"
-copy "%ROOT_DIR%\DesktopBuddyNative\*" "%STAGE%\DesktopBuddyNative\" >nul
+robocopy "%ROOT_DIR%\DesktopBuddyNative" "%STAGE%\DesktopBuddyNative" /E /NFL /NDL /NJH /NJS /NP >nul
+if errorlevel 8 ( echo ERROR: Native dependency copy failed. & exit /b 1 )
 
 REM Renderer-side shared texture bridge
 mkdir "%STAGE%\Renderer\BepInEx\plugins"

@@ -68,11 +68,12 @@ The setup script is safe to run repeatedly. It checks existing dependencies firs
 
 **Streaming not working for other users**
 
-DesktopBuddy now serves remote viewer video with an embedded RTSP-over-TCP server. By default it listens on TCP port `8554` and advertises either your auto-detected public IP or the configured tunnel endpoint.
+DesktopBuddy serves remote viewer video as MPEG-TS over the built-in HTTP stream server, then exposes that server through the bundled Cloudflare Tunnel client. The local HTTP server listens on port `48080`, and public stream URLs look like `https://*.trycloudflare.com/stream/{streamId}`.
 
-- For direct hosting, forward TCP port `8554` on your router or enable `auto_port_forward` in the config.
-- For tunnel hosting, set `use_tunnel` to `true`; the bundled Pinggy support will advertise the tunnel host/port when connected.
-- If the stream only works locally, check Windows Firewall, router port forwarding, CGNAT, and whether the configured/tunnel endpoint matches the URL in the DesktopBuddy log.
+- Run `setup\Setup-DesktopBuddy.bat` as administrator so Windows allows the HTTP listener on `http://+:48080/`.
+- Make sure `DesktopBuddyNative\cloudflared.exe` is present; setup reports this explicitly.
+- If the stream only works locally, check Windows Firewall and look for `[Tunnel] PUBLIC URL:` in the DesktopBuddy log.
+- Optional MediaMTX mode still publishes RTSP to your own external MediaMTX server when explicitly configured.
 
 ## Configuration
 
@@ -82,41 +83,18 @@ DesktopBuddy writes its Resonite Mod Loader config to:
 <Resonite root>\rml_config\DesktopBuddy.json
 ```
 
-The config schema is currently `1.0.10`. Older config files are reset when the schema changes so new defaults are applied cleanly.
+The config schema is currently `1.0.11`. Older config files are reset when the schema changes so new defaults are applied cleanly.
 
 ### Streaming
 
 | Key | Default | Notes |
 | --- | --- | --- |
 | `bitrate` | `10` | Target video bitrate in Mbps. Encoders use variable bitrate with a peak around 120% of this value. |
-| `streamFps` | `60` | Nominal FPS passed to the encoder for timing and GOP/keyframe math. Capture remains event-driven; this is not a sleep-based frame cap. |
-| `keyframeIntervalMs` | `1000` | Maximum forced keyframe interval. Lower values can improve join/catch-up time but spend more bitrate on keyframes. |
+| `streamFps` | `60` | Nominal FPS passed to the encoder for timing. Capture remains event-driven; this is not a sleep-based frame cap. |
 | `maxStreamResolution` | `2560` | Maximum encoded long edge. Windows larger than this are GPU-scaled down before encoding. |
-| `libVlcNetworkCachingMs` | `200` | Renderer-side libVLC network cache for RTSP streams. |
-| `libVlcLiveCachingMs` | `200` | Renderer-side libVLC live cache for RTSP streams. |
+| `libVlcNetworkCachingMs` | `200` | Renderer-side libVLC network cache for DesktopBuddy streams. |
+| `libVlcLiveCachingMs` | `200` | Renderer-side libVLC live cache for DesktopBuddy streams. |
 | `libVlcFileCachingMs` | `100` | Renderer-side libVLC file cache fallback. |
-
-### RTSP Endpoint
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `ip_address` | `auto` | Public hostname/IP written into RTSP URLs. Use `auto` for public-IP detection, or set a hostname/IP manually. |
-| `rtsp_port` | `8554` | TCP port for the embedded RTSP server. |
-| `auto_port_forward` | `true` | Attempts automatic router port forwarding for the RTSP port when direct hosting is used. |
-| `rtsp_transport` | `tcp` | DesktopBuddy currently serves interleaved RTSP/RTP over TCP. |
-
-### Tunnel
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `use_tunnel` | `true` | Use a TCP tunnel instead of the direct public IP/port-forward endpoint. |
-| `tunnel_provider` | `pinggy` | Supported tunnel provider. |
-| `pinggy_ssh_path` | `ssh` | OpenSSH executable used to start the Pinggy tunnel. |
-| `pinggy_server` | `a.pinggy.io` | Pinggy server host. Pro accounts may use a different server. |
-| `pinggy_token` | empty | Optional Pinggy account token for reserved ports, custom domains, or pro features. |
-| `pinggy_remote_port` | `0` | Requested Pinggy remote TCP port. `0` lets Pinggy assign one. |
-| `pinggy_listen_address` | empty | Advanced Pinggy listen-address override. Leave blank for normal TCP forwarding. |
-| `pinggy_force_existing` | `true` | With a token, asks Pinggy to disconnect an existing tunnel using the same token before connecting. |
 
 ### Other
 
@@ -133,7 +111,7 @@ The config schema is currently `1.0.10`. Older config files are reset when the s
 
 - GPU-accelerated capture via Windows.Graphics.Capture with a shared DX11 texture bridge into the renderer
 - Hardware H.264/HEVC encoding via NVENC or AMF through FFmpeg
-- Remote streaming via embedded RTSP-over-TCP, with optional Pinggy TCP tunnel support
+- Remote streaming via MPEG-TS over HTTP through bundled Cloudflare Tunnel
 - Per-window audio capture via WASAPI process loopback
 - Virtual camera output as **DesktopBuddy - Camera**
 - Virtual microphone output through VB-Cable as **CABLE Output**
@@ -148,7 +126,7 @@ The config schema is currently `1.0.10`. Older config files are reset when the s
 2. Select **Desktop** to open the window/monitor picker.
 3. Pick a window or monitor to spawn a viewer panel.
 4. Interact with the panel using VR controllers.
-5. Other users in the session see the stream through the configured RTSP endpoint.
+5. Other users in the session see the stream through the Cloudflare Tunnel URL.
 
 ## Prerequisites
 
@@ -197,6 +175,7 @@ DesktopBuddy-Alpha-*.zip
     avcodec-62.dll
     avformat-62.dll
     avutil-60.dll
+    cloudflared.exe
     swresample-6.dll
     softcam64.dll
     VBCABLE_Setup_x64.exe
@@ -216,6 +195,7 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 | [ResoniteInterprocessLib](https://github.com/Nytra/ResoniteInterprocessLib) | Shared-source control messages between the Resonite mod and renderer-side shared texture bridge |
 | [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `DesktopBuddyNative` |
 | [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg |
+| [cloudflared](https://github.com/cloudflare/cloudflared) | Bundled Cloudflare Tunnel client for public HTTPS stream URLs |
 | [SoftCam](https://github.com/tshino/softcam) | DirectShow virtual camera filter |
 
 ### Installed by Setup
