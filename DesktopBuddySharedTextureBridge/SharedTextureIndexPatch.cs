@@ -12,27 +12,34 @@ namespace DesktopBuddySharedTextureBridge
 
         static void Postfix(int index, ref IDisplayTextureSource __result)
         {
-            if (index < SharedTextureBridgeProtocol.MagicIndexBase) return;
-
-            RequestCounts.TryGetValue(index, out int count);
-            count++;
-            RequestCounts[index] = count;
-            bool logThis = count <= 5 || count % 120 == 0;
-
-            var textureSlot = SharedTextureBridge.GetSlotForBridgeIndex(index);
-            if (textureSlot != null)
+            try
             {
-                __result = textureSlot;
-                if (logThis)
-                    SharedTextureBridgePlugin.LogInfo(
-                        $"[SharedTextureIndexPatch] index={index} request={count} -> shared texture " +
-                        $"(IsValid={textureSlot.IsValid}, texture={(textureSlot.UnityTexture != null ? "ready" : "null")}, {textureSlot.Width}x{textureSlot.Height})");
+                if (index < SharedTextureBridgeProtocol.MagicIndexBase) return;
+
+                RequestCounts.TryGetValue(index, out int count);
+                count++;
+                RequestCounts[index] = count;
+                bool logThis = count <= 5 || count % 120 == 0;
+
+                var textureSlot = SharedTextureBridge.GetSlotForBridgeIndex(index);
+                if (textureSlot != null)
+                {
+                    __result = textureSlot;
+                    if (logThis)
+                        SharedTextureBridgePlugin.LogInfo(
+                            $"[SharedTextureIndexPatch] index={index} request={count} -> shared texture " +
+                            $"(IsValid={textureSlot.IsValid}, texture={(textureSlot.UnityTexture != null ? "ready" : "null")}, {textureSlot.Width}x{textureSlot.Height})");
+                }
+                else
+                {
+                    if (logThis)
+                        SharedTextureBridgePlugin.LogInfo(
+                            $"[SharedTextureIndexPatch] index={index} request={count} -> no slot registered");
+                }
             }
-            else
+            catch (System.Exception ex)
             {
-                if (logThis)
-                    SharedTextureBridgePlugin.LogInfo(
-                        $"[SharedTextureIndexPatch] index={index} request={count} -> no slot registered");
+                SharedTextureBridgePlugin.LogError($"[SharedTextureIndexPatch] Postfix failed index={index}", ex);
             }
         }
     }

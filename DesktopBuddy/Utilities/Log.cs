@@ -11,6 +11,7 @@ internal static class Log
 
     private static readonly BlockingCollection<LogEntry> _queue = new(4096);
     private static readonly Thread _writerThread;
+    private static readonly object _fileWriteLock = new();
 
     private struct LogEntry
     {
@@ -45,9 +46,21 @@ internal static class Log
         _queue.TryAdd(new LogEntry { Timestamp = ts, Message = msg, IsError = true });
     }
 
+    internal static void MsgImmediate(string msg)
+    {
+        var ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+        try { ResoniteModLoader.ResoniteMod.Msg(msg); } catch { }
+        WriteLine(ts, msg, false);
+    }
+
     internal static void StartSession()
     {
-        try { File.WriteAllText(FilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] DesktopBuddy session started\n"); } catch { }
+        try
+        {
+            lock (_fileWriteLock)
+                File.WriteAllText(FilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] DesktopBuddy session started\n");
+        }
+        catch { }
     }
 
     private static void WriterLoop()
@@ -64,7 +77,18 @@ internal static class Log
             catch { }
 
             var prefix = entry.IsError ? "ERROR: " : "";
-            try { File.AppendAllText(FilePath, $"[{entry.Timestamp}] {prefix}{entry.Message}\n"); } catch { }
+            WriteLine(entry.Timestamp, entry.Message, entry.IsError);
         }
+    }
+
+    private static void WriteLine(string timestamp, string message, bool isError)
+    {
+        var prefix = isError ? "ERROR: " : "";
+        try
+        {
+            lock (_fileWriteLock)
+                File.AppendAllText(FilePath, $"[{timestamp}] {prefix}{message}\n");
+        }
+        catch { }
     }
 }

@@ -19,7 +19,7 @@ namespace DesktopBuddySharedTextureBridge
         private const float ConnectLogInterval = 5f;
 
         private readonly Dictionary<int, SharedTextureSlot> _activeSlots = new Dictionary<int, SharedTextureSlot>();
-        private static readonly Dictionary<int, SharedTextureSlot> _bridgeIndexToSlot = new Dictionary<int, SharedTextureSlot>();
+        private static readonly ConcurrentDictionary<int, SharedTextureSlot> _bridgeIndexToSlot = new ConcurrentDictionary<int, SharedTextureSlot>();
         private readonly List<(int slot, SharedTextureSlot textureSlot)> _pendingBinds = new List<(int, SharedTextureSlot)>();
 
         internal SharedTextureBridge(ManualLogSource log)
@@ -49,6 +49,7 @@ namespace DesktopBuddySharedTextureBridge
 
         internal void Update()
         {
+            SharedTextureSlot.ProcessDeferredNativeReleases();
             TryEnsureMessenger();
 
             while (_mainThreadActions.TryDequeue(out var action))
@@ -107,21 +108,37 @@ namespace DesktopBuddySharedTextureBridge
                     SharedTextureBridgeProtocol.StartMessageId,
                     msg =>
                     {
-                        SharedTextureBridgePlugin.LogInfo(
-                            $"[SharedTextureBridge] Received Start slot={msg.SlotId} shared=0x{msg.SharedTextureHandle:X} {msg.SharedTextureWidth}x{msg.SharedTextureHeight}");
-                        _mainThreadActions.Enqueue(() => StartSharedTexture(
-                            msg.SlotId,
-                            msg.SharedTextureHandle,
-                            msg.SharedTextureWidth,
-                            msg.SharedTextureHeight));
+                        try
+                        {
+                            if (msg == null) return;
+                            SharedTextureBridgePlugin.LogInfo(
+                                $"[SharedTextureBridge] Received Start slot={msg.SlotId} shared=0x{msg.SharedTextureHandle:X} {msg.SharedTextureWidth}x{msg.SharedTextureHeight}");
+                            _mainThreadActions.Enqueue(() => StartSharedTexture(
+                                msg.SlotId,
+                                msg.SharedTextureHandle,
+                                msg.SharedTextureWidth,
+                                msg.SharedTextureHeight));
+                        }
+                        catch (Exception ex)
+                        {
+                            SharedTextureBridgePlugin.LogError("[SharedTextureBridge] Start callback failed", ex);
+                        }
                     });
 
                 _messenger.ReceiveObject<SharedTextureStopMessage>(
                     SharedTextureBridgeProtocol.StopMessageId,
                     msg =>
                     {
-                        SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Received Stop slot={msg.SlotId}");
-                        _mainThreadActions.Enqueue(() => StopSharedTexture(msg.SlotId));
+                        try
+                        {
+                            if (msg == null) return;
+                            SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Received Stop slot={msg.SlotId}");
+                            _mainThreadActions.Enqueue(() => StopSharedTexture(msg.SlotId));
+                        }
+                        catch (Exception ex)
+                        {
+                            SharedTextureBridgePlugin.LogError("[SharedTextureBridge] Stop callback failed", ex);
+                        }
                     });
 
                 SharedTextureBridgePlugin.LogInfo($"Opened InterprocessLib queue: {SharedTextureBridgeProtocol.QueueName}");
@@ -191,10 +208,20 @@ namespace DesktopBuddySharedTextureBridge
             if (!_activeSlots.ContainsKey(slot)) return;
 
             SharedTextureBridgePlugin.LogInfo($"Stopping shared texture slot={slot}");
-            _bridgeIndexToSlot.Remove(SharedTextureBridgeProtocol.MagicIndexBase + slot);
-            _activeSlots[slot].Dispose();
+            _bridgeIndexToSlot.TryRemove(SharedTextureBridgeProtocol.MagicIndexBase + slot, out _);
+            SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Removed bridge index for slot={slot}");
+            try
+            {
+                _activeSlots[slot].Dispose();
+                SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Slot dispose completed slot={slot}");
+            }
+            catch (Exception ex)
+            {
+                SharedTextureBridgePlugin.LogError($"[SharedTextureBridge] Slot dispose failed slot={slot}", ex);
+            }
             _activeSlots.Remove(slot);
             _pendingBinds.RemoveAll(p => p.slot == slot);
+            SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Stop complete slot={slot}");
         }
 
         private void WriteRunning(int slot, SharedTextureSlot textureSlot)
@@ -230,14 +257,34 @@ namespace DesktopBuddySharedTextureBridge
         {
             SharedTextureBridgePlugin.LogInfo("[SharedTextureBridge] Disposing");
             foreach (var kv in _activeSlots)
-                kv.Value.Dispose();
+            {
+                try
+                {
+                    SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Disposing slot={kv.Key}");
+                    kv.Value.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    SharedTextureBridgePlugin.LogError($"[SharedTextureBridge] Slot dispose failed during bridge dispose slot={kv.Key}", ex);
+                }
+            }
             _activeSlots.Clear();
             _bridgeIndexToSlot.Clear();
             _pendingBinds.Clear();
-            _messenger?.Dispose();
+            try
+            {
+                SharedTextureBridgePlugin.LogInfo("[SharedTextureBridge] Messenger.Dispose START");
+                _messenger?.Dispose();
+                SharedTextureBridgePlugin.LogInfo("[SharedTextureBridge] Messenger.Dispose DONE");
+            }
+            catch (Exception ex)
+            {
+                SharedTextureBridgePlugin.LogError("[SharedTextureBridge] Messenger.Dispose failed", ex);
+            }
             _messenger = null;
             Messenger.OnWarning -= OnWarning;
             Messenger.OnFailure -= OnFailure;
+            SharedTextureBridgePlugin.LogInfo("[SharedTextureBridge] Disposed");
         }
     }
 }

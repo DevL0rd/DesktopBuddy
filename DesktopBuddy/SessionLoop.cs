@@ -11,6 +11,20 @@ public partial class DesktopBuddyMod
 {
     private static readonly HashSet<World> _scheduledWorlds = new();
 
+    private static void CleanupTrace(string message) => Log.MsgImmediate($"[CleanupTrace] {message}");
+
+    private static long TraceStart(string label)
+    {
+        CleanupTrace($"{label} START");
+        return System.Diagnostics.Stopwatch.GetTimestamp();
+    }
+
+    private static void TraceDone(string label, long startTicks)
+    {
+        double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - startTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        CleanupTrace($"{label} DONE {ms:F2}ms");
+    }
+
     internal static void ScheduleUpdate(World world)
     {
         if (_scheduledWorlds.Contains(world)) return;
@@ -156,11 +170,21 @@ public partial class DesktopBuddyMod
                     session.Texture == null || session.Texture.IsDestroyed)
                 {
                     Msg($"[UpdateLoop] Session {i} root/texture destroyed, cleaning up (root={session.Root != null} rootDestroyed={session.Root?.IsDestroyed} tex={session.Texture != null} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId})");
+                    CleanupTrace($"UpdateLoop destroyed branch sessionIndex={i} root={(session.Root != null)} rootDestroyed={session.Root?.IsDestroyed} tex={(session.Texture != null)} texDestroyed={session.Texture?.IsDestroyed} hwnd={session.Hwnd} streamId={session.StreamId}");
                     var vtp = session.VideoTexture;
-                    if (vtp != null && !vtp.IsDestroyed) { vtp.URL.Value = null; vtp.Stop(); }
+                    if (vtp != null && !vtp.IsDestroyed)
+                    {
+                        var stopTicks = TraceStart($"VideoTexture stop stream={session.StreamId}");
+                        vtp.URL.Value = null;
+                        vtp.Stop();
+                        TraceDone($"VideoTexture stop stream={session.StreamId}", stopTicks);
+                    }
                     session.VideoTexture = null;
+                    var cleanupTicks = TraceStart($"CleanupSession call stream={session.StreamId}");
                     CleanupSession(session);
+                    TraceDone($"CleanupSession call stream={session.StreamId}", cleanupTicks);
                     ActiveSessions.RemoveAt(i);
+                    CleanupTrace($"ActiveSessions removed destroyed sessionIndex={i}");
                     continue;
                 }
 
@@ -180,10 +204,14 @@ public partial class DesktopBuddyMod
                     if (vtp != null && !vtp.IsDestroyed)
                     {
                         Msg("[UpdateLoop] Disconnecting VideoTextureProvider before cleanup");
+                        var stopTicks = TraceStart($"VideoTexture stop invalid hwnd={session.Hwnd} stream={session.StreamId}");
                         vtp.URL.Value = null;
                         vtp.Stop();
+                        TraceDone($"VideoTexture stop invalid hwnd={session.Hwnd} stream={session.StreamId}", stopTicks);
                     }
+                    var cleanupTicks = TraceStart($"CleanupSession invalid hwnd={session.Hwnd} stream={session.StreamId}");
                     CleanupSession(session);
+                    TraceDone($"CleanupSession invalid hwnd={session.Hwnd} stream={session.StreamId}", cleanupTicks);
                     ActiveSessions.RemoveAt(i);
                     var rootToDestroy = session.Root;
                     world.RunInUpdates(10, () =>
@@ -469,18 +497,23 @@ public partial class DesktopBuddyMod
         if (session.Cleaned) { Msg($"[Cleanup] Already cleaned hwnd={session.Hwnd} streamId={session.StreamId}, skipping"); return; }
         session.Cleaned = true;
         Msg($"[Cleanup] === START === hwnd={session.Hwnd} streamId={session.StreamId}");
+        CleanupTrace($"CleanupSession ENTER hwnd={session.Hwnd} streamId={session.StreamId} rootDestroyed={session.Root?.IsDestroyed} texDestroyed={session.Texture?.IsDestroyed}");
 
         session.ActiveTouchIds.Clear();
+        CleanupTrace($"ActiveTouchIds cleared hwnd={session.Hwnd} streamId={session.StreamId}");
 
         if (VMic != null && session.VMicListener != null)
         {
             Msg("[Cleanup] Disposing VMic (listener destroyed)");
+            var ticks = TraceStart("VMic.Dispose");
             VMic.Dispose();
             VMic = null;
+            TraceDone("VMic.Dispose", ticks);
         }
 
         if (session.OwnsAudioRedirect && session.ProcessId != 0)
         {
+            CleanupTrace($"Audio redirect reset check START pid={session.ProcessId}");
             bool otherSessionUsesSamePid = false;
             foreach (var s in ActiveSessions)
             {
@@ -492,7 +525,9 @@ public partial class DesktopBuddyMod
             }
             if (!otherSessionUsesSamePid)
             {
+                var ticks = TraceStart($"AudioRouter.ResetProcessToDefault pid={session.ProcessId}");
                 AudioRouter.ResetProcessToDefault(session.ProcessId);
+                TraceDone($"AudioRouter.ResetProcessToDefault pid={session.ProcessId}", ticks);
                 Msg($"[Cleanup] Reset audio routing for PID {session.ProcessId}");
             }
             else
@@ -504,39 +539,41 @@ public partial class DesktopBuddyMod
         session.SeenRelatedHwnds.Clear();
 
         Msg($"[Cleanup] Removing canvas ID");
+        CleanupTrace($"Removing canvas/provider ids hwnd={session.Hwnd} streamId={session.StreamId}");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);
 
         if (session.SharedTextureSlot >= 0 && TextureBridgeChannel != null)
         {
+            var ticks = TraceStart($"TextureBridge.StopTexture slot={session.SharedTextureSlot}");
             TextureBridgeChannel.StopTexture(session.SharedTextureSlot);
+            TraceDone($"TextureBridge.StopTexture slot={session.SharedTextureSlot}", ticks);
             Msg($"[Cleanup] Stopped shared texture slot {session.SharedTextureSlot}");
         }
 
         if (session.Texture != null)
+        {
             OurProviders.Remove(session.Texture);
+            CleanupTrace("DesktopTextureProvider removed from provider set");
+        }
 
         Msg($"[Cleanup] Disconnecting encoder");
+        CleanupTrace($"Disconnecting encoder START hwnd={session.Hwnd} streamId={session.StreamId}");
         var streamer = session.Streamer;
         if (streamer != null)
         {
+            Msg("[Cleanup] Detaching capture frame callback");
+            CleanupTrace("Detach OnGpuFrame START");
             streamer.OnGpuFrame = null;
-            try
-            {
-                streamer.FlushD3dContext();
-                streamer.StopCapture();
-                Msg("[Cleanup] Capture stopped immediately");
-            }
-            catch (Exception ex)
-            {
-                Msg($"[Cleanup] Immediate capture stop error: {ex.Message}");
-            }
+            CleanupTrace("Detach OnGpuFrame DONE");
         }
         DesktopSession replacementDriver = null;
         FfmpegEncoder replacementEncoder = null;
         if (session.StreamId > 0)
         {
+            CleanupTrace($"Shared stream driver-transfer lock ENTER stream={session.StreamId}");
             lock (_sharedStreams)
             {
+                CleanupTrace($"Shared stream driver-transfer lock ACQUIRED stream={session.StreamId}");
                 if (_sharedStreams.TryGetValue(session.Hwnd, out var shared) &&
                     shared.StreamId == session.StreamId &&
                     shared.DriverSession == session)
@@ -556,34 +593,43 @@ public partial class DesktopBuddyMod
                         replacementDriver = candidate;
                         replacementEncoder = shared.Encoder;
                         shared.DriverSession = candidate;
+                        CleanupTrace($"Replacement driver selected hwnd={replacementDriver.Hwnd} stream={session.StreamId}");
                         break;
                     }
                 }
             }
+            CleanupTrace($"Shared stream driver-transfer lock EXIT stream={session.StreamId}");
         }
         if (replacementDriver != null && replacementEncoder != null)
         {
+            var ticks = TraceStart($"ConnectEncoder replacement stream={session.StreamId}");
             ConnectEncoder(replacementDriver, replacementEncoder);
+            TraceDone($"ConnectEncoder replacement stream={session.StreamId}", ticks);
             Msg($"[Cleanup] Transferred stream {session.StreamId} encoder driver to hwnd={replacementDriver.Hwnd}");
         }
         int streamId = session.StreamId;
         IntPtr hwnd = session.Hwnd;
         session.Streamer = null;
+        CleanupTrace($"Session streamer nulled hwnd={hwnd} stream={streamId}");
 
         Msg($"[Cleanup] Queuing background dispose for stream {streamId}");
+        CleanupTrace($"QueueUserWorkItem cleanup START stream={streamId}");
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
         {
             try
             {
                 Msg($"[Cleanup:BG] === START === stream {streamId}");
+                CleanupTrace($"BG cleanup ENTER stream={streamId} hwnd={hwnd}");
 
                 AudioCapture audioToDispose = null;
                 FfmpegEncoder encoderToDispose = null;
                 bool shouldStopEncoder = false;
                 if (streamId > 0)
                 {
+                    CleanupTrace($"BG shared stream lock ENTER stream={streamId}");
                     lock (_sharedStreams)
                     {
+                        CleanupTrace($"BG shared stream lock ACQUIRED stream={streamId}");
                         if (_sharedStreams.TryGetValue(hwnd, out var shared) && shared.StreamId == streamId)
                         {
                             shared.RefCount--;
@@ -606,44 +652,77 @@ public partial class DesktopBuddyMod
                             shouldStopEncoder = true;
                         }
                     }
+                    CleanupTrace($"BG shared stream lock EXIT stream={streamId} shouldStopEncoder={shouldStopEncoder}");
 
                     if (shouldStopEncoder)
                     {
                         Msg($"[Cleanup:BG] Stopping encoder {streamId}...");
                         if (encoderToDispose != null)
                         {
+                            var stopTicks = TraceStart($"FfmpegEncoder.Stop stream={streamId}");
                             encoderToDispose.Stop();
+                            TraceDone($"FfmpegEncoder.Stop stream={streamId}", stopTicks);
+                            var disposeTicks = TraceStart($"FfmpegEncoder.Dispose stream={streamId}");
                             encoderToDispose.Dispose();
+                            TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
                         }
+                        var serverTicks = TraceStart($"StreamServer.StopEncoder stream={streamId}");
                         StreamServer?.StopEncoder(streamId);
+                        TraceDone($"StreamServer.StopEncoder stream={streamId}", serverTicks);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 
                 }
 
-                Msg($"[Cleanup:BG] Stopping capture...");
-                streamer?.StopCapture();
-                Msg($"[Cleanup:BG] Capture stopped");
+                if (streamer != null)
+                {
+                    Msg($"[Cleanup:BG] Stopping capture...");
+                    var stopCaptureTicks = TraceStart($"DesktopStreamer.StopCapture stream={streamId}");
+                    streamer.StopCapture();
+                    TraceDone($"DesktopStreamer.StopCapture stream={streamId}", stopCaptureTicks);
+                    Msg($"[Cleanup:BG] Capture stopped");
+
+                    try
+                    {
+                        Msg($"[Cleanup:BG] Flushing D3D context...");
+                        var flushTicks = TraceStart($"DesktopStreamer.FlushD3dContext stream={streamId}");
+                        streamer.FlushD3dContext();
+                        TraceDone($"DesktopStreamer.FlushD3dContext stream={streamId}", flushTicks);
+                        Msg($"[Cleanup:BG] D3D context flushed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Msg($"[Cleanup:BG] D3D flush error: {ex.Message}");
+                    }
+                }
 
                 Msg($"[Cleanup:BG] Disposing streamer...");
+                var streamerDisposeTicks = TraceStart($"DesktopStreamer.Dispose stream={streamId}");
                 streamer?.Dispose();
+                TraceDone($"DesktopStreamer.Dispose stream={streamId}", streamerDisposeTicks);
                 Msg($"[Cleanup:BG] Streamer disposed");
 
                 if (audioToDispose != null)
                 {
                     Msg($"[Cleanup:BG] Disposing audio...");
+                    var audioTicks = TraceStart($"AudioCapture.Dispose stream={streamId}");
                     audioToDispose.Dispose();
+                    TraceDone($"AudioCapture.Dispose stream={streamId}", audioTicks);
                     Msg($"[Cleanup:BG] Audio disposed");
                 }
 
                 Msg($"[Cleanup:BG] === DONE === stream {streamId}");
+                CleanupTrace($"BG cleanup DONE stream={streamId}");
             }
             catch (Exception ex)
             {
                 Msg($"[Cleanup:BG] ERROR: {ex}");
+                CleanupTrace($"BG cleanup ERROR stream={streamId}: {ex}");
             }
         });
+        CleanupTrace($"QueueUserWorkItem cleanup DONE stream={streamId}");
         Msg($"[Cleanup] === END (bg queued) === stream {streamId}");
+        CleanupTrace($"CleanupSession EXIT stream={streamId}");
     }
 
     private static void RetriggerDesktopTexture(DesktopTextureProvider provider)

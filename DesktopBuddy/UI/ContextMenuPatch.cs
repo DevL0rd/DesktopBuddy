@@ -312,9 +312,15 @@ public static class ContextMenuPatch
     {
         public static void Postfix(InteractionHandler __instance, MenuOptions options)
         {
-            if (__instance.IsOwnedByLocalUser)
+            try
             {
+                if (__instance == null || !__instance.IsOwnedByLocalUser)
+                    return;
+
                 ContextMenu ctx = __instance.ContextMenu;
+                if (ctx == null)
+                    return;
+
                 if (options == MenuOptions.Default)
                 {
                     DesktopBuddyMod.Msg("[ContextMenu] Postfix fired, adding Desktop item");
@@ -332,10 +338,21 @@ public static class ContextMenuPatch
 
                     item.Button.LocalPressed += (IButton btn, ButtonEventData data) =>
                     {
-                        DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
-                        ShowPickerPage(ctx, 0);
+                        try
+                        {
+                            DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
+                            ShowPickerPage(ctx, 0);
+                        }
+                        catch (Exception ex)
+                        {
+                            DesktopBuddyMod.Msg($"[ContextMenu] Desktop item pressed error: {ex}");
+                        }
                     };
                 }
+            }
+            catch (Exception ex)
+            {
+                DesktopBuddyMod.Msg($"[ContextMenu] Postfix error: {ex}");
             }
         }
     }

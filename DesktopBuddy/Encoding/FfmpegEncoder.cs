@@ -343,7 +343,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Initializing: source={_sourceWidth}x{_sourceHeight}, encode={_width}x{_height}, gpuScale={_needsGpuScale}, nominal encoder rate {NOMINAL_ENCODER_FPS}fps (capture remains event-driven)");
 
-            string[] encoders = { "hevc_nvenc", "hevc_amf", "h264_nvenc", "h264_amf" };
+            uint adapterVendorId = WgcCapture.SharedD3dAdapterVendorId;
+            string[] encoders = GetEncoderPreference(adapterVendorId);
+            Log.Msg($"[FfmpegEnc:{_streamId}] Encoder preference for adapter vendor=0x{adapterVendorId:X4}: {string.Join(", ", encoders)}");
 
             AVCodec* codec = null;
             string codecName = null;
@@ -370,7 +372,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 bool isAmf = name.Contains("amf");
                 long peakBitrate = (long)(bitrate * 1.2);
                 int vbvBuffer = (int)Math.Clamp(bitrate / 4, 500_000L, int.MaxValue);
-                long maxAuSizeBits = Math.Clamp((bitrate / NOMINAL_ENCODER_FPS) * 4, 500_000L, int.MaxValue);
                 long streamBytesPerSecond = (bitrate + 256_000L) / 8;
                 _readerCatchupThresholdBytes = Math.Clamp(
                     streamBytesPerSecond * READER_CATCHUP_THRESHOLD_MS / 1000,
@@ -417,31 +418,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 }
                 else if (isAmf)
                 {
-                    ffmpeg.av_dict_set(&opts, "usage", "lowlatency", 0);
-                    ffmpeg.av_dict_set(&opts, "quality", "speed", 0);
+                    ffmpeg.av_dict_set(&opts, "usage", "lowlatency_high_quality", 0);
                     ffmpeg.av_dict_set(&opts, "rc", "vbr_peak", 0);
-                    ffmpeg.av_dict_set(&opts, "async_depth", "1", 0);
-                    ffmpeg.av_dict_set(&opts, "latency", "1", 0);
-                    ffmpeg.av_dict_set(&opts, "enforce_hrd", "1", 0);
-                    ffmpeg.av_dict_set(&opts, "filler_data", "0", 0);
-                    ffmpeg.av_dict_set(&opts, "vbaq", "1", 0);
-                    ffmpeg.av_dict_set(&opts, "max_au_size", maxAuSizeBits.ToString(System.Globalization.CultureInfo.InvariantCulture), 0);
-                    if (name.Contains("h264"))
-                    {
-                        ffmpeg.av_dict_set(&opts, "profile", "constrained_high", 0);
-                        ffmpeg.av_dict_set(&opts, "coder", "cabac", 0);
-                        ffmpeg.av_dict_set(&opts, "frame_skipping", "0", 0);
-                        ffmpeg.av_dict_set(&opts, "forced_idr", "1", 0);
-                    }
-                    else
-                    {
-                        ffmpeg.av_dict_set(&opts, "profile", "main", 0);
-                        ffmpeg.av_dict_set(&opts, "skip_frame", "0", 0);
-                        ffmpeg.av_dict_set(&opts, "gops_per_idr", "1", 0);
-                    }
                     ffmpeg.av_dict_set(&opts, "header_insertion_mode", "idr", 0);
                     ffmpeg.av_dict_set(&opts, "log_to_dbg", "1", 0);
-                    Log.Msg($"[FfmpegEnc:{_streamId}] AMF low-latency options: usage=lowlatency quality=speed rc=vbr_peak target={bitrate} peak={peakBitrate} vbv={vbvBuffer} max_au_size={maxAuSizeBits} async_depth=1 latency=1 enforce_hrd=1 filler_data=0 skip_frames=0 vbaq=1 header_insertion_mode=idr");
                 }
 
                 Log.Msg($"[FfmpegEnc:{_streamId}] avcodec_open2: calling...");
@@ -529,6 +509,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         encoderWidth = Math.Max(2u, ((uint)Math.Floor(encoderWidth * scale)) & ~1u);
         encoderHeight = Math.Max(2u, ((uint)Math.Floor(encoderHeight * scale)) & ~1u);
+    }
+
+    private static string[] GetEncoderPreference(uint adapterVendorId)
+    {
+        return adapterVendorId switch
+        {
+            0x10DE => new[] { "hevc_nvenc", "h264_nvenc" },
+            0x1002 => new[] { "hevc_amf", "h264_amf" },
+            _ => new[] { "hevc_nvenc", "hevc_amf", "h264_nvenc", "h264_amf" }
+        };
     }
 
     private void SetupHardwareContext(IntPtr d3dDevice, AVPixelFormat swFormat)
@@ -948,6 +938,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     ffmpeg.av_packet_rescale_ts(_pkt, _codecCtx->time_base, _stream->time_base);
 
                     bool isKey = (_pkt->flags & ffmpeg.AV_PKT_FLAG_KEY) != 0;
+                    long httpKeyframeRingPos = -1;
 
                     lock (_muxerLock)
                     {
@@ -955,13 +946,18 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                         if (isKey && _rtspUrl == null)
                         {
                             ffmpeg.avio_flush(_fmtCtx->pb);
-                            Interlocked.Exchange(ref _lastKeyframeRingPos, _ringWritePos);
+                            httpKeyframeRingPos = _ringWritePos;
                         }
                         ret = ffmpeg.av_interleaved_write_frame(_fmtCtx, _pkt);
                         if (ret < 0)
                         {
                             Log.Msg($"[FfmpegEnc:{_streamId}] av_interleaved_write_frame (video) failed: {FfmpegError(ret)}");
                             if (_rtspUrl != null) _rtspBroken = true;
+                        }
+                        else if (httpKeyframeRingPos >= 0)
+                        {
+                            ffmpeg.avio_flush(_fmtCtx->pb);
+                            Interlocked.Exchange(ref _lastKeyframeRingPos, httpKeyframeRingPos);
                         }
                     }
 
@@ -1360,41 +1356,56 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     {
         if (Interlocked.Exchange(ref _disposeGuard, 1) != 0) return;
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === START ===");
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose ENTER stream={_streamId} initialized={_initialized} disposed={_disposed}");
         _initialized = false;
         _disposed = true;
         try { _encodeEvent.Set(); } catch { }
 
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose initThread.Join START stream={_streamId}");
         _initThread?.Join(5000);
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose initThread.Join DONE stream={_streamId}");
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose audioThread.Join START stream={_streamId}");
         _audioEncodeThread?.Join(2000);
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose audioThread.Join DONE stream={_streamId}");
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose encodeThread.Join START stream={_streamId}");
         _encodeThread?.Join(2000);
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose encodeThread.Join DONE stream={_streamId}");
 
         var ctxLock = _d3dContextLock;
         bool gotLock = false;
         if (ctxLock != null)
         {
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose D3D TryEnter START stream={_streamId}");
             gotLock = Monitor.TryEnter(ctxLock, 5000);
             if (!gotLock)
             {
                 Log.Msg($"[FfmpegEnc:{_streamId}] WARNING: could not acquire D3D lock, skipping FFmpeg cleanup to avoid crash");
+                Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose D3D TryEnter TIMEOUT stream={_streamId}");
                 _fmtCtx = null; _codecCtx = null; _pkt = null; _hwFrame = null;
                 return;
             }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose D3D TryEnter DONE stream={_streamId}");
         }
         try
         {
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: writing trailer");
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose trailer START stream={_streamId}");
             if (_fmtCtx != null)
             {
                 try { ffmpeg.av_write_trailer(_fmtCtx); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: trailer error: {ex.Message}"); }
             }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose trailer DONE stream={_streamId}");
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing packets/frames");
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose packets/frames START stream={_streamId}");
             try { if (_pkt != null) { var p = _pkt; ffmpeg.av_packet_free(&p); _pkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: pkt free error: {ex.Message}"); _pkt = null; }
             try { if (_audioPkt != null) { var p = _audioPkt; ffmpeg.av_packet_free(&p); _audioPkt = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioPkt free error: {ex.Message}"); _audioPkt = null; }
             try { if (_hwFrame != null) { var f = _hwFrame; ffmpeg.av_frame_free(&f); _hwFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrame free error: {ex.Message}"); _hwFrame = null; }
             try { if (_audioFrame != null) { var f = _audioFrame; ffmpeg.av_frame_free(&f); _audioFrame = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioFrame free error: {ex.Message}"); _audioFrame = null; }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose packets/frames DONE stream={_streamId}");
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing VP resources");
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose VP START stream={_streamId}");
             try
             {
                 if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; _vpInputViewTex = IntPtr.Zero; }
@@ -1406,20 +1417,33 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 if (_vpDevice != IntPtr.Zero) { Marshal.Release(_vpDevice); _vpDevice = IntPtr.Zero; }
             }
             catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: VP cleanup error: {ex.Message}"); }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose VP DONE stream={_streamId}");
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing codec contexts");
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose codec contexts START stream={_streamId}");
             try { if (_audioCodecCtx != null) { var c = _audioCodecCtx; ffmpeg.avcodec_free_context(&c); _audioCodecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: audioCodec free error: {ex.Message}"); _audioCodecCtx = null; }
             try { if (_codecCtx != null) { var c = _codecCtx; ffmpeg.avcodec_free_context(&c); _codecCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: codec free error: {ex.Message}"); _codecCtx = null; }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose codec contexts DONE stream={_streamId}");
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing hw contexts");
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose hw contexts START stream={_streamId}");
             try { if (_hwFramesCtx != null) { var h = _hwFramesCtx; ffmpeg.av_buffer_unref(&h); _hwFramesCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwFrames free error: {ex.Message}"); _hwFramesCtx = null; }
             try { if (_hwDeviceCtx != null) { var h = _hwDeviceCtx; ffmpeg.av_buffer_unref(&h); _hwDeviceCtx = null; } } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: hwDevice free error: {ex.Message}"); _hwDeviceCtx = null; }
+            Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose hw contexts DONE stream={_streamId}");
         }
-        finally { if (gotLock) Monitor.Exit(ctxLock); }
+        finally
+        {
+            if (gotLock)
+            {
+                Monitor.Exit(ctxLock);
+                Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose D3D lock EXIT stream={_streamId}");
+            }
+        }
         _audioCapture = null;
         if (_keepAliveTexture != IntPtr.Zero) { try { Marshal.Release(_keepAliveTexture); } catch { } _keepAliveTexture = IntPtr.Zero; }
 
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: freeing format context");
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose format context START stream={_streamId}");
         try
         {
             if (_fmtCtx != null)
@@ -1444,12 +1468,16 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             }
         }
         catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: fmtCtx free error: {ex.Message}"); _fmtCtx = null; }
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose format context DONE stream={_streamId}");
 
         if (_selfHandle.IsAllocated) _selfHandle.Free();
 
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose events START stream={_streamId}");
         try { _dataAvailable.Dispose(); } catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Dispose: dataAvailable dispose error: {ex.Message}"); }
         try { _encodeEvent.Dispose(); } catch { }
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose events DONE stream={_streamId}");
 
         Log.Msg($"[FfmpegEnc:{_streamId}] Dispose === DONE === {_totalFrames} total frames");
+        Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose EXIT stream={_streamId} totalFrames={_totalFrames}");
     }
 }

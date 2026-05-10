@@ -46,8 +46,11 @@ public sealed class MjpegServer : IDisposable
 
     public void StopEncoder(int streamId)
     {
+        Log.MsgImmediate($"[CleanupTrace] MjpegServer.StopEncoder ENTER stream={streamId}");
         if (!_streams.TryRemove(streamId, out var entry)) return;
+        Log.MsgImmediate($"[CleanupTrace] MjpegServer.StopEncoder removed entry stream={streamId}; encoder.Dispose START");
         entry.Encoder.Dispose();
+        Log.MsgImmediate($"[CleanupTrace] MjpegServer.StopEncoder EXIT stream={streamId}");
     }
 
     private async Task ListenLoopAsync()
@@ -262,14 +265,20 @@ public sealed class MjpegServer : IDisposable
 
     public void Dispose()
     {
+        Log.MsgImmediate($"[CleanupTrace] MjpegServer.Dispose ENTER streams={_streams.Count}");
         _running = false;
         foreach (var kvp in _streams)
         {
+            Log.MsgImmediate($"[CleanupTrace] MjpegServer.Dispose encoder.Dispose START stream={kvp.Key}");
             kvp.Value.Encoder.Dispose();
+            Log.MsgImmediate($"[CleanupTrace] MjpegServer.Dispose encoder.Dispose DONE stream={kvp.Key}");
         }
         _streams.Clear();
+        Log.MsgImmediate("[CleanupTrace] MjpegServer.Dispose listener.Stop START");
         try { _listener.Stop(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Listener stop error: {ex.Message}"); }
+        Log.MsgImmediate("[CleanupTrace] MjpegServer.Dispose listener.Close START");
         try { _listener.Close(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Listener close error: {ex.Message}"); }
+        Log.MsgImmediate("[CleanupTrace] MjpegServer.Dispose EXIT");
     }
 
     private sealed class StreamEntry

@@ -17,16 +17,23 @@ namespace DesktopBuddySharedTextureBridge
 
         private static void Prefix(PlayerOptionsStandalone options)
         {
-            if (options == null) return;
+            try
+            {
+                if (options == null) return;
 
-            var settings = LoadSettings();
-            options.NetworkCaching = settings.NetworkCachingMs;
-            options.LiveCaching = settings.LiveCachingMs;
-            options.ClockJitter = settings.ClockJitterMs;
+                var settings = LoadSettings();
+                options.NetworkCaching = settings.NetworkCachingMs;
+                options.LiveCaching = settings.LiveCachingMs;
+                options.ClockJitter = settings.ClockJitterMs;
 
-            SharedTextureBridgePlugin.LogInfo(
-                $"[LibVLC] Cache options: network={options.NetworkCaching}ms live={options.LiveCaching}ms " +
-                $"file={options.FileCaching}ms disk={options.DiskCaching}ms clockJitter={options.ClockJitter}ms");
+                SharedTextureBridgePlugin.LogInfo(
+                    $"[LibVLC] Cache options: network={options.NetworkCaching}ms live={options.LiveCaching}ms " +
+                    $"file={options.FileCaching}ms disk={options.DiskCaching}ms clockJitter={options.ClockJitter}ms");
+            }
+            catch (Exception ex)
+            {
+                SharedTextureBridgePlugin.LogError("[LibVLC] Prefix failed", ex);
+            }
         }
 
         private static CacheSettings LoadSettings()
