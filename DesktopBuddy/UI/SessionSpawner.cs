@@ -1368,46 +1368,24 @@ public partial class DesktopBuddyMod
         Msg($"[TopBar] Created, user '{userName}'");
 
         Slot keyboardSlot = null;
+        DesktopKeyboardSource keyboardSource = null;
         kbBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             Msg("[Keyboard] Button pressed!");
-            if (keyboardSlot != null && !keyboardSlot.IsDestroyed)
+            if (keyboardSlot == null || keyboardSlot.IsDestroyed ||
+                keyboardSource == null || keyboardSource.IsDestroyed)
             {
-                bool show = !keyboardSlot.ActiveSelf;
-                Msg($"[Keyboard] Toggling visibility: {keyboardSlot.ActiveSelf} -> {show}");
-                keyboardSlot.ActiveSelf = show;
-                if (show)
-                {
-                    keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
-                    keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
-                    keyboardSlot.LocalScale = float3.One;
-                }
-                return;
+                keyboardSlot = root.AddLocalSlot("Desktop Keyboard Focus", false);
+                keyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
+                session.KeyboardSource = keyboardSource;
             }
-            Msg("[Keyboard] Spawning virtual keyboard (favorite or fallback)");
-            keyboardSlot = root.AddLocalSlot("Virtual Keyboard", false);
-            session.KeyboardSource = keyboardSlot.AttachComponent<DesktopKeyboardSource>();
+
             keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);
             keyboardSlot.LocalRotation = floatQ.Euler(30f, 0f, 0f);
-            keyboardSlot.StartTask(async () =>
-            {
-                try
-                {
-                    var vk = await keyboardSlot.SpawnEntity<VirtualKeyboard>(
-                        FavoriteEntity.Keyboard,
-                        (Slot s) =>
-                        {
-                            Msg("[Keyboard] Using fallback SimpleVirtualKeyboard");
-                            s.AttachComponent<SimpleVirtualKeyboard>();
-                            return s.GetComponent<VirtualKeyboard>();
-                        });
-                    Msg($"[Keyboard] Spawned: {vk != null}, slot children: {keyboardSlot.ChildrenCount}, globalScale={keyboardSlot.GlobalScale}");
-                }
-                catch (Exception ex)
-                {
-                    Msg($"[Keyboard] ERROR spawning: {ex}");
-                }
-            });
+            keyboardSlot.LocalScale = float3.One;
+
+            Msg("[Keyboard] Opening userspace virtual keyboard for DesktopBuddy");
+            keyboardSource.OpenKeyboard();
         };
 
         ValueUserOverride<bool> streamVisRef = null;
@@ -1671,7 +1649,7 @@ public partial class DesktopBuddyMod
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        bool allowRemoteStream = useMediaMtx || (StreamServer != null && TunnelUrl != null);
+        bool allowRemoteStream = useMediaMtx || RemoteRtspServer != null;
         if (allowRemoteStream)
         {
             try
@@ -1694,8 +1672,9 @@ public partial class DesktopBuddyMod
                         }
                         else
                         {
-                            encoder = StreamServer.CreateEncoder(streamId);
-                            url = new Uri($"{TunnelUrl}/stream/{streamId}");
+                            encoder = RemoteRtspServer.CreateEncoder(streamId);
+                            url = GetEmbeddedRtspUri(streamId);
+                            Msg($"[RemoteStream] Using embedded RTSP: {url}");
                         }
 
                         var audio = new AudioCapture();
@@ -1751,7 +1730,6 @@ public partial class DesktopBuddyMod
                 videoTexRef = videoTex;
                 session.VideoTexture = videoTex;
                 var streamUrl = shared.StreamUrl;
-                bool waitForHttpKeyframe = !useMediaMtx;
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
@@ -1816,9 +1794,7 @@ public partial class DesktopBuddyMod
                 {
                     if (videoTex == null || videoTex.IsDestroyed || root.IsDestroyed) return;
 
-                    bool ready = waitForHttpKeyframe
-                        ? nvEncoder.HasReadableVideoKeyframe
-                        : nvEncoder.IsRunning;
+                    bool ready = nvEncoder.IsRunning;
 
                     if (ready && !isPrivate)
                     {
@@ -1836,7 +1812,7 @@ public partial class DesktopBuddyMod
                     }
 
                     if (attempt == 0 || attempt % 30 == 0)
-                        Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={isPrivate}, waitForHttpKeyframe={waitForHttpKeyframe}, {nvEncoder.ReadableStreamState}");
+                        Msg($"[RemoteStream] Waiting before RTSP URL bind: attempt={attempt}, private={isPrivate}, {nvEncoder.ReadableStreamState}");
 
                     root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
                 }
@@ -1872,7 +1848,7 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} EmbeddedRtsp={RemoteRtspServer != null}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();

@@ -35,4 +35,3 @@ Delete these old native dependency files from `rml_libs` if they exist:
 - `<Resonite root>\rml_libs\swresample-6.dll`
 - `<Resonite root>\rml_libs\softcam.dll`
 - `<Resonite root>\rml_libs\softcam64.dll`
-- `<Resonite root>\rml_libs\cloudflared.exe`

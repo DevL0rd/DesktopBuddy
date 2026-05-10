@@ -111,6 +111,15 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
         return slot >= 0 && slot < SharedTextureBridgeProtocol.MaxTextureSlots && _slotRunning[slot];
     }
 
+    internal bool IsTextureRunning(int slot, int width, int height)
+    {
+        return slot >= 0 &&
+               slot < SharedTextureBridgeProtocol.MaxTextureSlots &&
+               _slotRunning[slot] &&
+               _slotWidths[slot] == width &&
+               _slotHeights[slot] == height;
+    }
+
     private void SendStart(int slot, IntPtr sharedTextureHandle, int sharedTextureWidth, int sharedTextureHeight)
     {
         try

@@ -14,6 +14,7 @@ using FrooxEngine;
 using Renderite.Shared;
 using Elements.Core;
 using SkyFrost.Base;
+using DesktopBuddy.Networking.Rtsp;
 
 namespace DesktopBuddy;
 
@@ -21,10 +22,10 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.6";
+    public override string Version => "1.0.10";
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
-    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 6);
+    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 10);
     internal static ModConfiguration? Config;
     private static bool _configResetForNewDefaults;
 
@@ -45,6 +46,10 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("keyframeIntervalMs", "Maximum time between forced video keyframes in milliseconds. Lower reduces stream startup/catch-up latency but costs bitrate/quality.", () => 1000);
 
     [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> StreamFps =
+        new("streamFps", "Nominal stream FPS for encoder timing. Capture remains event-driven and is not frame-capped.", () => 60);
+
+    [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> MaxStreamResolution =
         new("maxStreamResolution", "Maximum encoded stream long-edge resolution. 2560 is 2K/QHD.", () => 2560);
 
@@ -61,8 +66,56 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 100);
 
     [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> IpAddress =
+        new("ip_address", "Public IP address or hostname used in RTSP stream URLs. Use auto to detect it.", () => "auto");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> RtspPort =
+        new("rtsp_port", "Embedded DesktopBuddy RTSP server TCP port.", () => 8554);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> AutoPortForward =
+        new("auto_port_forward", "Try to automatically forward the RTSP TCP port on supported routers.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> UseTunnel =
+        new("use_tunnel", "Use a TCP tunnel instead of advertising the direct public IP/port-forward endpoint.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> TunnelProvider =
+        new("tunnel_provider", "TCP tunnel provider. Currently supported: pinggy.", () => "pinggy");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PinggySshPath =
+        new("pinggy_ssh_path", "OpenSSH executable used for Pinggy tunnels.", () => "ssh");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PinggyServer =
+        new("pinggy_server", "Pinggy SSH server host. Free/default is a.pinggy.io; pro accounts may use pro.pinggy.io.", () => "a.pinggy.io");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PinggyToken =
+        new("pinggy_token", "Optional Pinggy account token for reserved ports, custom domains, and pro features.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> PinggyRemotePort =
+        new("pinggy_remote_port", "Pinggy remote TCP port. Use 0 for Pinggy to assign a free/random port.", () => 0);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PinggyListenAddress =
+        new("pinggy_listen_address", "Advanced Pinggy listen address override, e.g. tcp//example.com/34567. Leave blank for normal TCP forwarding.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> PinggyForceExisting =
+        new("pinggy_force_existing", "When using a token, ask Pinggy to disconnect an existing tunnel with the same token before connecting.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> RtspTransport =
+        new("rtsp_transport", "RTSP transport mode. DesktopBuddy currently serves TCP interleaved RTP.", () => "tcp");
+
+    [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> UseMediaMtx =
-        new("useMediaMtx", "Use an external MediaMTX server for streaming instead of the built-in cloudflared tunnel.", () => false);
+        new("useMediaMtx", "Use an external MediaMTX server for streaming instead of DesktopBuddy's embedded RTSP server.", () => false);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<string> MediaMtxHost =
@@ -97,6 +150,146 @@ public partial class DesktopBuddyMod : ResoniteMod
             name = _mediaMtxStreamBase;
         }
         return $"rtsp://{host}:{port}/{name}_{streamId}";
+    }
+
+    internal static Uri GetEmbeddedRtspUri(int streamId)
+    {
+        if (RemoteRtspServer == null)
+            throw new InvalidOperationException("Embedded RTSP server is not running");
+
+        return RemoteRtspServer.GetStreamUri(streamId);
+    }
+
+    private static void StartConfiguredTunnel(int rtspPort)
+    {
+        string provider = Config.GetValue(TunnelProvider)?.Trim();
+        if (!string.Equals(provider, "pinggy", StringComparison.OrdinalIgnoreCase))
+        {
+            Msg($"[Tunnel] Unsupported tunnel_provider '{provider}'. Embedded RTSP will keep using the direct endpoint.");
+            return;
+        }
+
+        try
+        {
+            var options = new PinggyTunnelOptions
+            {
+                SshPath = Config.GetValue(PinggySshPath),
+                Server = Config.GetValue(PinggyServer),
+                Token = Config.GetValue(PinggyToken),
+                RemotePort = Math.Clamp(Config.GetValue(PinggyRemotePort), 0, 65535),
+                ListenAddress = Config.GetValue(PinggyListenAddress),
+                ForceExisting = Config.GetValue(PinggyForceExisting),
+                Mode = "tcp",
+                SshPort = 443
+            };
+
+            _pinggyTunnel?.Dispose();
+            _pinggyTunnel = new PinggyTunnelManager(rtspPort, options, (host, port) =>
+            {
+                try
+                {
+                    HandleRtspPublicEndpointUpdated(host, port, "Pinggy");
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[Pinggy] Failed to apply tunnel endpoint {host}:{port}: {ex.Message}");
+                }
+            });
+            _pinggyTunnel.Start();
+            Msg("[Tunnel] Pinggy mode enabled. Waiting for Pinggy to report the public TCP endpoint.");
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Tunnel] Failed to start Pinggy tunnel: {ex.Message}");
+        }
+    }
+
+    private static void HandleRtspPublicEndpointUpdated(string host, int port, string source)
+    {
+        RemoteRtspServer?.UpdatePublicEndpoint(host, port, source);
+        RefreshEmbeddedRtspUrls($"{source} endpoint update");
+    }
+
+    private static void RefreshEmbeddedRtspUrls(string reason)
+    {
+        DesktopSession[] sessions;
+        try { sessions = ActiveSessions.ToArray(); }
+        catch (Exception ex)
+        {
+            Msg($"[RTSP] Could not snapshot sessions for URL refresh: {ex.Message}");
+            return;
+        }
+
+        lock (_sharedStreams)
+        {
+            foreach (var shared in _sharedStreams.Values)
+            {
+                if (shared.StreamId <= 0) continue;
+                try { shared.StreamUrl = GetEmbeddedRtspUri(shared.StreamId); }
+                catch { }
+            }
+        }
+
+        int refreshed = 0;
+        foreach (var session in sessions)
+        {
+            if (session == null || session.Cleaned || session.StreamId <= 0)
+                continue;
+
+            VideoTextureProvider videoTexture = session.VideoTexture;
+            Slot root = session.Root;
+            if (videoTexture == null || videoTexture.IsDestroyed || root == null || root.IsDestroyed)
+                continue;
+
+            Uri newUrl;
+            try { newUrl = GetEmbeddedRtspUri(session.StreamId); }
+            catch (Exception ex)
+            {
+                Msg($"[RTSP] Could not build refreshed URL for stream {session.StreamId}: {ex.Message}");
+                continue;
+            }
+
+            var oldUrl = videoTexture.URL.Value;
+            if (oldUrl == null)
+            {
+                Msg($"[RTSP] Stream {session.StreamId} URL refresh skipped because provider is disconnected/private ({reason})");
+                continue;
+            }
+
+            if (string.Equals(oldUrl.ToString(), newUrl.ToString(), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            refreshed++;
+            root.World.RunInUpdates(0, () =>
+            {
+                if (videoTexture == null || videoTexture.IsDestroyed || root == null || root.IsDestroyed)
+                    return;
+
+                Uri currentUrl = videoTexture.URL.Value;
+                if (currentUrl == null)
+                    return;
+
+                if (string.Equals(currentUrl.ToString(), newUrl.ToString(), StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                Msg($"[RTSP] Refreshing stream {session.StreamId} URL after {reason}: {currentUrl} -> {newUrl}");
+                videoTexture.URL.Value = null;
+                try { videoTexture.Stop(); } catch { }
+
+                root.World.RunInUpdates(10, () =>
+                {
+                    if (videoTexture == null || videoTexture.IsDestroyed || root == null || root.IsDestroyed)
+                        return;
+
+                    videoTexture.URL.Value = newUrl;
+                    videoTexture.Play();
+                    Msg($"[RTSP] Stream {session.StreamId} URL refreshed: {newUrl}");
+                });
+            });
+        }
+
+        if (refreshed > 0)
+            Msg($"[RTSP] Scheduled URL refresh for {refreshed} active stream(s) after {reason}");
     }
 
     internal static string GetPanelCurvePreferenceKey(IntPtr hwnd)
@@ -197,14 +390,10 @@ public partial class DesktopBuddyMod : ResoniteMod
         public DesktopSession DriverSession;
     }
 
-    internal static MjpegServer? StreamServer;
+    internal static RtspServer? RemoteRtspServer;
+    private static PinggyTunnelManager? _pinggyTunnel;
     internal static VirtualCamera VCam;
     internal static VirtualMic VMic;
-    private const int STREAM_PORT = 48080;
-    internal static string? TunnelUrl;
-    private static Process _tunnelProcess;
-    private static string _cfPath;
-    private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
     internal static SharedTextureBridgeChannel? TextureBridgeChannel;
@@ -279,25 +468,32 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         if (IsMediaMtxEnabled)
         {
-            Msg($"[MediaMTX] RTSP mode enabled, skipping local stream server and cloudflared tunnel");
+            Msg($"[MediaMTX] Explicit RTSP mode enabled; embedded RTSP server will not start");
         }
         else
         {
             try
             {
-                StreamServer = new MjpegServer(STREAM_PORT);
-                StreamServer.Start();
-                Msg($"Stream server started on port {STREAM_PORT}");
+                int rtspPort = Math.Clamp(Config.GetValue(RtspPort), 1, 65535);
+                string publicHost = RtspEndpointResolver.ResolvePublicHost(Config.GetValue(IpAddress));
+                RemoteRtspServer = new RtspServer(rtspPort, publicHost);
+                RemoteRtspServer.Start();
+                if (Config.GetValue(UseTunnel))
+                {
+                    StartConfiguredTunnel(rtspPort);
+                }
+                else if (Config.GetValue(AutoPortForward))
+                {
+                    RtspEndpointResolver.TryAutoPortForward(rtspPort);
+                }
+                Msg($"[RTSP] Embedded server ready: {RemoteRtspServer.GetStreamUri(0).ToString().Replace("/stream/0", "/stream/{streamId}")} transport={Config.GetValue(RtspTransport)} tunnel={Config.GetValue(UseTunnel)}");
             }
             catch (Exception ex)
             {
-                Msg($"Stream server failed to start: {ex.Message}");
-                StreamServer = null;
-            }
-
-            if (StreamServer != null)
-            {
-                System.Threading.Tasks.Task.Run(() => StartTunnel());
+                Msg($"[RTSP] Embedded server failed to start: {ex.Message}");
+                try { _pinggyTunnel?.Dispose(); } catch { }
+                _pinggyTunnel = null;
+                RemoteRtspServer = null;
             }
         }
 
@@ -309,7 +505,9 @@ public partial class DesktopBuddyMod : ResoniteMod
                 if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
                     AudioRouter.ResetProcessToDefault(session.ProcessId);
             }
-            KillTunnel();
+            try { _pinggyTunnel?.Dispose(); } catch { }
+            try { RemoteRtspServer?.Dispose(); } catch { }
+            RtspEndpointResolver.ReleaseAutoPortForward();
         };
 
         System.Threading.Tasks.Task.Run(() =>
@@ -355,20 +553,34 @@ public partial class DesktopBuddyMod : ResoniteMod
             if (_configResetForNewDefaults)
             {
                 ApplyFreshConfigDefaults();
-                Msg("[Config] Applied 1.0.6 fresh defaults: spatialAudio=false bitrate=10 keyframeIntervalMs=1000 maxStreamResolution=2560");
+                Msg("[Config] Applied 1.0.10 fresh defaults: spatialAudio=false bitrate=10 streamFps=60 keyframeIntervalMs=1000 maxStreamResolution=2560 rtsp_port=8554 use_tunnel=true");
             }
             else
             {
                 Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
                 Config.Set(Bitrate, Config.GetValue(Bitrate));
                 Config.Set(KeyframeIntervalMs, Config.GetValue(KeyframeIntervalMs));
+                Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
                 Config.Set(MaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
             }
 
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
+            Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
             Config.Set(LibVlcNetworkCachingMs, Math.Max(200, Config.GetValue(LibVlcNetworkCachingMs)));
             Config.Set(LibVlcLiveCachingMs, Math.Max(200, Config.GetValue(LibVlcLiveCachingMs)));
             Config.Set(LibVlcFileCachingMs, Config.GetValue(LibVlcFileCachingMs));
+            Config.Set(IpAddress, string.IsNullOrWhiteSpace(Config.GetValue(IpAddress)) ? "auto" : Config.GetValue(IpAddress));
+            Config.Set(RtspPort, Math.Clamp(Config.GetValue(RtspPort), 1, 65535));
+            Config.Set(AutoPortForward, Config.GetValue(AutoPortForward));
+            Config.Set(UseTunnel, Config.GetValue(UseTunnel));
+            Config.Set(TunnelProvider, string.IsNullOrWhiteSpace(Config.GetValue(TunnelProvider)) ? "pinggy" : Config.GetValue(TunnelProvider));
+            Config.Set(PinggySshPath, string.IsNullOrWhiteSpace(Config.GetValue(PinggySshPath)) ? "ssh" : Config.GetValue(PinggySshPath));
+            Config.Set(PinggyServer, string.IsNullOrWhiteSpace(Config.GetValue(PinggyServer)) ? "a.pinggy.io" : Config.GetValue(PinggyServer));
+            Config.Set(PinggyToken, Config.GetValue(PinggyToken) ?? "");
+            Config.Set(PinggyRemotePort, Math.Clamp(Config.GetValue(PinggyRemotePort), 0, 65535));
+            Config.Set(PinggyListenAddress, Config.GetValue(PinggyListenAddress) ?? "");
+            Config.Set(PinggyForceExisting, Config.GetValue(PinggyForceExisting));
+            Config.Set(RtspTransport, string.IsNullOrWhiteSpace(Config.GetValue(RtspTransport)) ? "tcp" : Config.GetValue(RtspTransport));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -389,10 +601,23 @@ public partial class DesktopBuddyMod : ResoniteMod
         Config.Set(CheckForUpdates, true);
         Config.Set(Bitrate, 10);
         Config.Set(KeyframeIntervalMs, 1000);
+        Config.Set(StreamFps, 60);
         Config.Set(MaxStreamResolution, 2560);
         Config.Set(LibVlcNetworkCachingMs, 200);
         Config.Set(LibVlcLiveCachingMs, 200);
         Config.Set(LibVlcFileCachingMs, 100);
+        Config.Set(IpAddress, "auto");
+        Config.Set(RtspPort, 8554);
+        Config.Set(AutoPortForward, true);
+        Config.Set(UseTunnel, true);
+        Config.Set(TunnelProvider, "pinggy");
+        Config.Set(PinggySshPath, "ssh");
+        Config.Set(PinggyServer, "a.pinggy.io");
+        Config.Set(PinggyToken, "");
+        Config.Set(PinggyRemotePort, 0);
+        Config.Set(PinggyListenAddress, "");
+        Config.Set(PinggyForceExisting, true);
+        Config.Set(RtspTransport, "tcp");
         Config.Set(UseMediaMtx, false);
         Config.Set(MediaMtxHost, "");
         Config.Set(MediaMtxPort, 8554);

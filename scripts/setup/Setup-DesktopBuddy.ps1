@@ -161,31 +161,6 @@ function Configure-VBCableLoopback {
     Restart-ServiceQuiet "AudioSrv"
 }
 
-function Configure-UrlAcl {
-    $url = "http://+:48080/"
-    $sddl = "D:(A;;GX;;;S-1-1-0)"
-    Write-Log "Configuring HTTP URL ACL for stream server..."
-
-    $existing = ""
-    try {
-        $existing = & netsh http show urlacl url=$url 2>$null | Out-String
-    } catch {
-        $existing = ""
-    }
-
-    if ($existing -match "48080") {
-        Write-Log "  HTTP URL ACL already configured"
-        return
-    }
-
-    $exit = Invoke-SetupProcess -FileName "netsh" -Arguments "http add urlacl url=$url sddl=$sddl" -TimeoutMs 10000
-    if ($exit -eq 0) {
-        Write-Log "  HTTP URL ACL added"
-    } else {
-        Write-Log "  netsh urlacl exit: $exit"
-    }
-}
-
 function Get-LatestReleaseZipUrl {
     param([string]$ApiUrl)
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -372,7 +347,6 @@ Write-Log "DesktopBuddy.dll: $(Test-Path -LiteralPath (Join-Path $ResonitePath "
 Register-SoftCam $ResonitePath
 Install-VBCable $ResonitePath
 Configure-VBCableLoopback
-Configure-UrlAcl
 Install-RendererDependencies $ResonitePath
 Save-ResonitePath $ResonitePath
 
