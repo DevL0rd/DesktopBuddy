@@ -38,6 +38,7 @@ public class DesktopSession
     public int PendingResizeW, PendingResizeH;
     public int PendingVisualResizeW, PendingVisualResizeH;
     public BoxCollider Collider;
+    public Slot TopBarRenderHost;
 
     public DesktopKeyboardSource KeyboardSource;
 

@@ -109,11 +109,11 @@
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
   <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\*" />
+      <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\**\*" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFolder="$(ResonitePath)\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

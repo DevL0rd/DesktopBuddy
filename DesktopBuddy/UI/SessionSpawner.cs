@@ -793,6 +793,7 @@ public partial class DesktopBuddyMod
 
         int barRenderHostId = Interlocked.Increment(ref _nextTopBarRenderHostId);
         var barRenderHost = root.World.RootSlot.AddSlot($"DesktopBuddyTopBarRenderHost {barRenderHostId}", false);
+        session.TopBarRenderHost = barRenderHost;
         var barRenderHostPosition = new float3(barRenderHostId * 20000f, -20000f, 0f);
         barRenderHost.LocalPosition = barRenderHostPosition;
         Msg($"[TopBar] Render host isolated id={barRenderHostId} pos={barRenderHostPosition}");
@@ -1649,7 +1650,7 @@ public partial class DesktopBuddyMod
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        bool allowRemoteStream = useMediaMtx || RemoteRtspServer != null;
+        bool allowRemoteStream = useMediaMtx || (StreamServer != null && TunnelUrl != null);
         if (allowRemoteStream)
         {
             try
@@ -1672,9 +1673,9 @@ public partial class DesktopBuddyMod
                         }
                         else
                         {
-                            encoder = RemoteRtspServer.CreateEncoder(streamId);
-                            url = GetEmbeddedRtspUri(streamId);
-                            Msg($"[RemoteStream] Using embedded RTSP: {url}");
+                            encoder = StreamServer.CreateEncoder(streamId);
+                            url = new Uri($"{TunnelUrl}/stream/{streamId}");
+                            Msg($"[RemoteStream] Using Cloudflare HTTP stream: {url}");
                         }
 
                         var audio = new AudioCapture();
@@ -1730,6 +1731,7 @@ public partial class DesktopBuddyMod
                 videoTexRef = videoTex;
                 session.VideoTexture = videoTex;
                 var streamUrl = shared.StreamUrl;
+                bool waitForHttpKeyframe = !useMediaMtx;
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
@@ -1794,7 +1796,9 @@ public partial class DesktopBuddyMod
                 {
                     if (videoTex == null || videoTex.IsDestroyed || root.IsDestroyed) return;
 
-                    bool ready = nvEncoder.IsRunning;
+                    bool ready = waitForHttpKeyframe
+                        ? nvEncoder.HasReadableVideoKeyframe
+                        : nvEncoder.IsRunning;
 
                     if (ready && !isPrivate)
                     {
@@ -1812,7 +1816,7 @@ public partial class DesktopBuddyMod
                     }
 
                     if (attempt == 0 || attempt % 30 == 0)
-                        Msg($"[RemoteStream] Waiting before RTSP URL bind: attempt={attempt}, private={isPrivate}, {nvEncoder.ReadableStreamState}");
+                        Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={isPrivate}, waitForHttpKeyframe={waitForHttpKeyframe}, {nvEncoder.ReadableStreamState}");
 
                     root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
                 }
@@ -1848,7 +1852,7 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} EmbeddedRtsp={RemoteRtspServer != null}");
+            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();

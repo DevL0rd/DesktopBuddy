@@ -355,8 +355,8 @@ public partial class DesktopBuddyMod
                     }
                     else
                     {
-                        newEncoder = RemoteRtspServer?.CreateEncoder(newStreamId);
-                        newUrl = RemoteRtspServer != null ? GetEmbeddedRtspUri(newStreamId) : null;
+                        newEncoder = StreamServer?.CreateEncoder(newStreamId);
+                        newUrl = StreamServer != null && TunnelUrl != null ? new Uri($"{TunnelUrl}/stream/{newStreamId}") : null;
                     }
                     session.StreamId = newStreamId;
 
@@ -378,7 +378,7 @@ public partial class DesktopBuddyMod
                             oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
                             if (!useMediaMtx)
-                                RemoteRtspServer?.StopStream(oldStreamId);
+                                StreamServer?.StopEncoder(oldStreamId);
                             oldEncoder?.Dispose();
                         }
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
@@ -563,6 +563,23 @@ public partial class DesktopBuddyMod
 
         session.SeenRelatedHwnds.Clear();
 
+        if (session.TopBarRenderHost != null && !session.TopBarRenderHost.IsDestroyed)
+        {
+            Msg($"[Cleanup] Destroying top bar render host: {session.TopBarRenderHost.Name}");
+            CleanupTrace($"TopBarRenderHost.Destroy START stream={session.StreamId}");
+            try
+            {
+                session.TopBarRenderHost.Destroy();
+            }
+            catch (Exception ex)
+            {
+                Msg($"[Cleanup] Top bar render host destroy error: {ex.Message}");
+                CleanupTrace($"TopBarRenderHost.Destroy ERROR stream={session.StreamId}: {ex}");
+            }
+            CleanupTrace($"TopBarRenderHost.Destroy DONE stream={session.StreamId}");
+        }
+        session.TopBarRenderHost = null;
+
         Msg($"[Cleanup] Removing canvas ID");
         CleanupTrace($"Removing canvas/provider ids hwnd={session.Hwnd} streamId={session.StreamId}");
         if (session.Canvas != null) DesktopCanvasIds.Remove(session.Canvas.ReferenceID);
@@ -691,9 +708,9 @@ public partial class DesktopBuddyMod
                             encoderToDispose.Dispose();
                             TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
                         }
-                        var serverTicks = TraceStart($"RtspServer.StopStream stream={streamId}");
-                        RemoteRtspServer?.StopStream(streamId);
-                        TraceDone($"RtspServer.StopStream stream={streamId}", serverTicks);
+                        var serverTicks = TraceStart($"MjpegServer.StopEncoder stream={streamId}");
+                        StreamServer?.StopEncoder(streamId);
+                        TraceDone($"MjpegServer.StopEncoder stream={streamId}", serverTicks);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 
