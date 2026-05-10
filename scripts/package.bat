@@ -62,7 +62,7 @@ mkdir "%STAGE%\rml_mods"
 copy "%MOD_DLL%" "%STAGE%\rml_mods\DesktopBuddy.dll" >nul
 if exist "%MOD_SHA%" copy "%MOD_SHA%" "%STAGE%\rml_mods\DesktopBuddy.sha" >nul
 
-REM Native dependencies: FFmpeg, SoftCam, cloudflared, and VB-Cable setup files.
+REM Native dependencies: FFmpeg, SoftCam, and VB-Cable setup files.
 REM Keep these outside rml_libs so Resonite Mod Loader does not try to load
 REM native DLLs as managed assemblies.
 mkdir "%STAGE%\DesktopBuddyNative"

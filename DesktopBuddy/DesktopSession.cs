@@ -36,6 +36,7 @@ public class DesktopSession
 
     public double ResizeDebounceUntil;
     public int PendingResizeW, PendingResizeH;
+    public int PendingVisualResizeW, PendingVisualResizeH;
     public BoxCollider Collider;
 
     public DesktopKeyboardSource KeyboardSource;

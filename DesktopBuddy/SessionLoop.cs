@@ -260,16 +260,6 @@ public partial class DesktopBuddyMod
                     }
                 }
 
-                if (!session.Texture.IsAssetAvailable)
-                {
-                    if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
-                    if (session.SharedTextureSlot >= 0 && _updateCount % 5 == 0)
-                    {
-                        RetriggerDesktopTexture(session.Texture);
-                    }
-                    continue;
-                }
-
                 var streamerForResize = session.Streamer;
                 if (streamerForResize != null)
                 {
@@ -283,10 +273,6 @@ public partial class DesktopBuddyMod
                         session.LastKnownW = sw;
                         session.LastKnownH = sh;
 
-                        if (session.Canvas != null && !session.Canvas.IsDestroyed)
-                            session.Canvas.Size.Value = new float2(sw, sh);
-
-                        session.OnResize?.Invoke(sw, sh);
                         if (session.SharedTextureSlot >= 0 && TextureBridgeChannel != null)
                         {
                             TextureBridgeChannel.UpdateTexture(
@@ -301,11 +287,41 @@ public partial class DesktopBuddyMod
                                     RetriggerDesktopTexture(session.Texture);
                             });
                         }
+                        else
+                        {
+                            ApplySessionVisualResize(session, sw, sh);
+                        }
+
                         session.PendingResizeW = sw;
                         session.PendingResizeH = sh;
-                        session.ResizeDebounceUntil = world.Time.WorldTime + 0.5;
-                        Msg($"[UpdateLoop] UI resized to {sw}x{sh}");
+                        session.PendingVisualResizeW = sw;
+                        session.PendingVisualResizeH = sh;
+                        session.ResizeDebounceUntil = world.Time.WorldTime + 0.15;
+                        Msg($"[UpdateLoop] Resize pending: visual={sw}x{sh} encoder debounce=150ms");
                         continue;
+                    }
+                }
+
+                if (session.PendingVisualResizeW > 0 && session.PendingVisualResizeH > 0)
+                {
+                    int visualW = session.PendingVisualResizeW;
+                    int visualH = session.PendingVisualResizeH;
+                    bool bridgeReady = session.SharedTextureSlot < 0 ||
+                        TextureBridgeChannel == null ||
+                        TextureBridgeChannel.IsTextureRunning(session.SharedTextureSlot, visualW, visualH);
+
+                    if (bridgeReady)
+                    {
+                        ApplySessionVisualResize(session, visualW, visualH);
+                        session.PendingVisualResizeW = 0;
+                        session.PendingVisualResizeH = 0;
+                    }
+                    else
+                    {
+                        if (_updateCount % 5 == 0)
+                            RetriggerDesktopTexture(session.Texture);
+                        if (_updateCount % 30 == 0)
+                            Msg($"[UpdateLoop] Waiting for shared texture bind before visual resize {visualW}x{visualH}");
                     }
                 }
 
@@ -339,8 +355,8 @@ public partial class DesktopBuddyMod
                     }
                     else
                     {
-                        newEncoder = StreamServer?.CreateEncoder(newStreamId);
-                        newUrl = TunnelUrl != null ? new Uri($"{TunnelUrl}/stream/{newStreamId}") : null;
+                        newEncoder = RemoteRtspServer?.CreateEncoder(newStreamId);
+                        newUrl = RemoteRtspServer != null ? GetEmbeddedRtspUri(newStreamId) : null;
                     }
                     session.StreamId = newStreamId;
 
@@ -362,9 +378,8 @@ public partial class DesktopBuddyMod
                             oldEncoder?.Stop();
                             oldStreamer?.FlushD3dContext();
                             if (!useMediaMtx)
-                                StreamServer?.StopEncoder(oldStreamId);
-                            else
-                                oldEncoder?.Dispose();
+                                RemoteRtspServer?.StopStream(oldStreamId);
+                            oldEncoder?.Dispose();
                         }
                         catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
                     });
@@ -390,6 +405,16 @@ public partial class DesktopBuddyMod
                     }
 
                     Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
+                }
+
+                if (!session.Texture.IsAssetAvailable)
+                {
+                    if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
+                    if (session.SharedTextureSlot >= 0 && _updateCount % 5 == 0)
+                    {
+                        RetriggerDesktopTexture(session.Texture);
+                    }
+                    continue;
                 }
 
                 if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
@@ -666,9 +691,9 @@ public partial class DesktopBuddyMod
                             encoderToDispose.Dispose();
                             TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
                         }
-                        var serverTicks = TraceStart($"StreamServer.StopEncoder stream={streamId}");
-                        StreamServer?.StopEncoder(streamId);
-                        TraceDone($"StreamServer.StopEncoder stream={streamId}", serverTicks);
+                        var serverTicks = TraceStart($"RtspServer.StopStream stream={streamId}");
+                        RemoteRtspServer?.StopStream(streamId);
+                        TraceDone($"RtspServer.StopStream stream={streamId}", serverTicks);
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 
@@ -748,6 +773,17 @@ public partial class DesktopBuddyMod
         {
             Msg($"[RetriggerDesktopTexture] Error: {ex.Message}");
         }
+    }
+
+    private static void ApplySessionVisualResize(DesktopSession session, int width, int height)
+    {
+        if (session == null || session.Cleaned || width <= 0 || height <= 0) return;
+
+        if (session.Canvas != null && !session.Canvas.IsDestroyed)
+            session.Canvas.Size.Value = new float2(width, height);
+
+        session.OnResize?.Invoke(width, height);
+        Msg($"[UpdateLoop] Visual resize applied to {width}x{height}");
     }
 
     private static void ConnectEncoder(DesktopSession session, FfmpegEncoder encoder)
