@@ -131,7 +131,28 @@ static class KeyMapper
 
 static class KeyboardInputRouter
 {
+    private static readonly Dictionary<IText, DesktopKeyboardSource> _targetSources = new();
     private static DesktopKeyboardSource _focusedSource;
+
+    public static void RegisterTarget(DesktopKeyboardSource source, IText target)
+    {
+        if (source == null || target == null)
+            return;
+
+        _targetSources[target] = source;
+    }
+
+    public static void UnregisterTarget(DesktopKeyboardSource source, IText target)
+    {
+        if (target != null &&
+            _targetSources.TryGetValue(target, out DesktopKeyboardSource registered) &&
+            registered == source)
+        {
+            _targetSources.Remove(target);
+        }
+
+        ClearFocused(source);
+    }
 
     public static void SetFocused(DesktopKeyboardSource source)
     {
@@ -145,29 +166,22 @@ static class KeyboardInputRouter
             _focusedSource = null;
     }
 
+    public static void KeyboardShown(IText target)
+    {
+        if (TryGetRegisteredSource(target) == null)
+            _focusedSource = null;
+    }
+
+    public static void KeyboardHidden()
+    {
+        _focusedSource = null;
+    }
+
     public static DesktopKeyboardSource Resolve(World origin, Slot pressedSlot = null)
     {
         try
         {
-            DesktopKeyboardSource fallback = null;
-            for (int i = 0; i < DesktopBuddyMod.ActiveSessions.Count; i++)
-            {
-                var s = DesktopBuddyMod.ActiveSessions[i];
-                var source = s.KeyboardSource;
-                if (source == null || source.IsDestroyed || s.Root?.World != origin)
-                    continue;
-
-                if (fallback == null)
-                    fallback = source;
-
-                if (pressedSlot != null && IsSameOrChildOf(pressedSlot, source.Slot))
-                    return source;
-            }
-
-            if (_focusedSource != null && !_focusedSource.IsDestroyed)
-                return _focusedSource;
-
-            return fallback;
+            return IsUsable(_focusedSource) ? _focusedSource : null;
         }
         catch (System.Exception ex)
         {
@@ -176,14 +190,41 @@ static class KeyboardInputRouter
         }
     }
 
-    private static bool IsSameOrChildOf(Slot slot, Slot ancestor)
+    private static DesktopKeyboardSource TryGetRegisteredSource(IText target)
     {
-        for (Slot current = slot; current != null; current = current.Parent)
-        {
-            if (current == ancestor)
-                return true;
-        }
-        return false;
+        if (target == null || target.IsDestroyed)
+            return null;
+
+        if (!_targetSources.TryGetValue(target, out DesktopKeyboardSource source))
+            return null;
+
+        if (IsUsable(source))
+            return source;
+
+        _targetSources.Remove(target);
+        return null;
+    }
+
+    private static bool IsUsable(DesktopKeyboardSource source) =>
+        source != null && !source.IsDestroyed;
+}
+
+[HarmonyPatch(typeof(InputInterface), nameof(InputInterface.ShowKeyboard))]
+static class ShowKeyboardPatch
+{
+    static void Prefix(IText targetText)
+    {
+        KeyboardInputRouter.KeyboardShown(targetText);
+    }
+}
+
+[HarmonyPatch(typeof(InputInterface), nameof(InputInterface.HideKeyboard))]
+static class HideKeyboardPatch
+{
+    static void Postfix(InputInterface __instance)
+    {
+        if (!__instance.IsKeyboardActive)
+            KeyboardInputRouter.KeyboardHidden();
     }
 }
 
@@ -287,6 +328,9 @@ static class SimulatePressPatch
     {
         try
         {
+            if (origin != Userspace.UserspaceWorld && Userspace.HasFocus)
+                return true;
+
             var source = KeyboardInputRouter.Resolve(origin);
             if (source != null)
             {
@@ -309,6 +353,9 @@ static class TypeAppendPatch
     {
         try
         {
+            if (origin != Userspace.UserspaceWorld && Userspace.HasFocus)
+                return true;
+
             var source = KeyboardInputRouter.Resolve(origin);
             if (source != null)
             {

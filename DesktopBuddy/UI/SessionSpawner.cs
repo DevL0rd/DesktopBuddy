@@ -76,10 +76,6 @@ public partial class DesktopBuddyMod
         mesh.Segments.Value = DesktopPanelCurveSegments;
         renderer.Mesh.Target = mesh;
 
-        var collider = slot.AttachComponent<MeshCollider>();
-        collider.Mesh.Target = mesh;
-        collider.Sidedness.Value = MeshColliderSidedness.DualSided;
-
         var material = slot.AttachComponent<PBS_DualSidedMetallic>();
         material.AlbedoColor.Value = new colorX(0.08f, 0.08f, 0.1f, 1f);
         material.Culling.Value = Culling.Front;
@@ -437,7 +433,7 @@ public partial class DesktopBuddyMod
         var interactionCanvas = interactionSlot.AttachComponent<Canvas>();
         interactionCanvas.Size.Value = new float2(w, h);
         var ui = new UIBuilder(interactionCanvas);
-        ui.Canvas.Collider.Target.SetTrigger();
+        ui.Canvas.Collider.RawTarget.Enabled = false;
 
         var displayBg = ui.Image(new colorX(0f, 0f, 0f, 1f));
         displayBg.Tint.Value = colorX.Clear;
@@ -453,11 +449,6 @@ public partial class DesktopBuddyMod
         mat.ZWrite.Value = ZWrite.On;
         mat.OffsetUnits.Value = 100f;
         rawImage.Material.Target = mat;
-
-        var btn = rawImage.Slot.AttachComponent<Button>();
-        btn.PassThroughHorizontalMovement.Value = false;
-        btn.PassThroughVerticalMovement.Value = false;
-        Msg("[StartStreaming] Button attached");
 
         var displayCameraSlot = interactionSlot.AddSlot("InteractionCamera");
         displayCameraSlot.LocalPosition = float3.Zero;
@@ -543,13 +534,6 @@ public partial class DesktopBuddyMod
             if (handler != null && handler.Side.Value == Chirality.Right)
                 return 1;
             return 0;
-        }
-
-        float2 GetDesktopPoint(ButtonEventData data)
-        {
-            float aspect = h > 0 ? (float)w / h : 1f;
-            float u = 0.5f + (data.normalizedPressPoint.x - 0.5f) * aspect;
-            return new float2(MathX.Clamp01(u), 1f - data.normalizedPressPoint.y);
         }
 
         void SendDesktopPressed(Component source, float2 point)
@@ -681,93 +665,6 @@ public partial class DesktopBuddyMod
             catch { }
         }
 
-        btn.LocalPressed += (IButton b, ButtonEventData data) =>
-        {
-            SendDesktopPressed(data.source, GetDesktopPoint(data));
-        };
-
-        btn.LocalPressing += (IButton b, ButtonEventData data) =>
-        {
-            SendDesktopPressing(data.source, GetDesktopPoint(data));
-        };
-
-        btn.LocalReleased += (IButton b, ButtonEventData data) =>
-        {
-            SendDesktopReleased(data.source, GetDesktopPoint(data));
-        };
-
-        btn.LocalHoverStay += (IButton b, ButtonEventData data) =>
-        {
-            if (grabbable != null && grabbable.IsGrabbed) return;
-            if (IsDesktopMode(root.World)) return;
-            float2 point = GetDesktopPoint(data);
-            float hu = point.x;
-            float hv = point.y;
-
-            if (IsActiveSource(data.source))
-            {
-                WindowInput.SendHover(hwnd, hu, hv, streamer.Width, streamer.Height, streamer.MonitorHandle);
-            }
-
-            var mouse = root.World.InputInterface.Mouse;
-            if (mouse != null)
-            {
-                float scrollY = mouse.ScrollWheelDelta.Value.y;
-                if (scrollY != 0)
-                {
-                    ClaimSource(data.source);
-                    int wheelDelta = scrollY > 0 ? 120 : -120;
-                    WindowInput.SendAtPointWhenTargetAcceptable(
-                        hwnd,
-                        hu,
-                        hv,
-                        streamer.Width,
-                        streamer.Height,
-                        streamer.MonitorHandle,
-                        () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
-                        "mouse wheel");
-                }
-            }
-
-            try
-            {
-                var handler = FindHandler(data.source);
-                var controller = handler != null
-                    ? root.World.InputInterface.GetControllerNode(handler.Side.Value)
-                    : null;
-                if (controller != null)
-                {
-                    float axisY = controller.Axis.Value.y;
-                    if (Math.Abs(axisY) > 0.15f)
-                    {
-                        double tick = root.World.Time.WorldTime;
-                        bool sameDir = session.LastScrollSign == 0 || Math.Sign(axisY) == session.LastScrollSign;
-                        if (tick != session.LastScrollTick && sameDir)
-                        {
-                            session.LastScrollTick = tick;
-                            session.LastScrollSign = Math.Sign(axisY);
-                            ClaimSource(data.source);
-                            int wheelDelta = (int)(axisY * 120f);
-                            WindowInput.SendAtPointWhenTargetAcceptable(
-                                hwnd,
-                                hu,
-                                hv,
-                                streamer.Width,
-                                streamer.Height,
-                                streamer.MonitorHandle,
-                                () => WindowInput.SendScroll(hwnd, hu, hv, streamer.Width, streamer.Height, wheelDelta, streamer.MonitorHandle),
-                                "controller wheel");
-                        }
-                    }
-                    else
-                    {
-                        session.LastScrollSign = 0;
-                    }
-                }
-            }
-            catch { }
-        };
-
         var directInput = frontPlaneRef.Slot.AttachComponent<DesktopCurvedScreenInput>();
         directInput.ScreenMesh = frontPlaneRef;
         directInput.Pressed = SendDesktopPressed;
@@ -801,7 +698,6 @@ public partial class DesktopBuddyMod
             if (barRenderHost != null && !barRenderHost.IsDestroyed)
                 barRenderHost.Destroy();
         };
-
         var barRenderRoot = barRenderHost.AddSlot("TopBarRender");
         barRenderRoot.AttachComponent<HiddenLayer>();
         var barBackRenderRoot = barRenderHost.AddSlot("TopBarBackRender");
@@ -817,7 +713,7 @@ public partial class DesktopBuddyMod
         var barCamera = barCameraSlot.AttachComponent<Camera>();
         barCamera.Projection.Value = CameraProjection.Orthographic;
         barCamera.OrthographicSize.Value = barH * 0.5f;
-        barCamera.UseTransformScale.Value = false;
+        barCamera.UseTransformScale.Value = true;
         barCamera.Clear.Value = CameraClearMode.Color;
         barCamera.ClearColor.Value = colorX.Clear;
         barCamera.NearClipping.Value = 0.01f;
@@ -838,7 +734,7 @@ public partial class DesktopBuddyMod
         var barBackCamera = barBackCameraSlot.AttachComponent<Camera>();
         barBackCamera.Projection.Value = CameraProjection.Orthographic;
         barBackCamera.OrthographicSize.Value = barH * 0.5f;
-        barBackCamera.UseTransformScale.Value = false;
+        barBackCamera.UseTransformScale.Value = true;
         barBackCamera.Clear.Value = CameraClearMode.Color;
         barBackCamera.ClearColor.Value = colorX.Clear;
         barBackCamera.NearClipping.Value = 0.01f;
@@ -1026,16 +922,27 @@ public partial class DesktopBuddyMod
         var cloudUserInfo = barSlot.AttachComponent<CloudUserInfo>();
         var defaultImg = new Uri("resdb:///bb7d7f1414e0c0a44b4684ecd2a5dc2086c18b3f70c9ed53d467fe96af94e9a9.png");
         var avatarTex = TextureProviderSettings.ClampWrap(barSlot.AttachComponent<StaticTexture2D>());
-        var imgMux = barSlot.AttachComponent<ValueMultiplexer<Uri>>();
         cloudUserInfo.UserId.ForceSet(localUser.UserID);
-        imgMux.Target.Target = avatarTex.URL;
-        imgMux.Values.Add(defaultImg);
-        imgMux.Values.Add();
-        var urlCopy = barSlot.AttachComponent<ValueCopy<Uri>>();
-        try { urlCopy.Source.Target = cloudUserInfo.TryGetField<Uri>("IconURL"); }
-        catch (Exception e) { Msg($"[TopBar] IconURL error: {e}"); }
-        urlCopy.Target.Target = imgMux.Values.GetField(1);
-        if (localUser.UserID != null) imgMux.Index.ForceSet(1);
+        avatarTex.URL.Value = defaultImg;
+        int avatarRefreshAttempts = 0;
+        void RefreshAvatarIcon()
+        {
+            if (root == null || root.IsDestroyed ||
+                cloudUserInfo == null || cloudUserInfo.IsDestroyed ||
+                avatarTex == null || avatarTex.IsDestroyed)
+                return;
+
+            Uri iconUri = cloudUserInfo.IconURL.Value;
+            if (iconUri != null)
+            {
+                avatarTex.URL.Value = iconUri;
+                return;
+            }
+
+            if (++avatarRefreshAttempts < 120)
+                root.World.RunInUpdates(10, RefreshAvatarIcon);
+        }
+        root.World.RunInUpdates(1, RefreshAvatarIcon);
 
         var avatarImage = barUi.Image(avatarTex);
         avatarImage.Material.Target = barTopMat;
@@ -1058,8 +965,26 @@ public partial class DesktopBuddyMod
         nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
         nameText.Material.Target = barTextMat;
 
+        const float expandGap = 6f;
+        const float expandPadding = 6f;
+        const float expandSeparatorW = 1f;
+        const float expandButtonW = 30f;
+        const float curveLabelW = 38f;
+        const float curveSliderW = 80f;
+        const float volumeIconW = 24f;
+        const float volumeSliderW = 100f;
+        const float expandContentMaxW =
+            expandPadding * 2f +
+            expandGap * 10f +
+            expandSeparatorW * 3f +
+            expandButtonW * 4f +
+            curveLabelW +
+            curveSliderW +
+            volumeIconW +
+            volumeSliderW;
+
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = MathF.Max(0f, MathF.Min(430f, w - barCollapsedW - barGap));
+        float expandContentW = MathF.Max(0f, MathF.Min(expandContentMaxW, w - barCollapsedW - barGap));
         float barExpandedW = barCollapsedW + barGap + expandContentW;
 
         void StyleButton(Button btn)
@@ -1126,7 +1051,7 @@ public partial class DesktopBuddyMod
         var expandPanel = barUi.Empty("ExpandPanel");
         expandPanel.ActiveSelf = false;
         var ep = new UIBuilder(expandPanel);
-        var epLayout = ep.HorizontalLayout(6f, padding: 6f, childAlignment: Alignment.MiddleLeft);
+        var epLayout = ep.HorizontalLayout(expandGap, padding: expandPadding, childAlignment: Alignment.MiddleLeft);
         epLayout.ForceExpandWidth.Value = false;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
@@ -1140,8 +1065,8 @@ public partial class DesktopBuddyMod
         var separatorA = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
         separatorA.Material.Target = barElementMat;
 
-        ep.Style.MinWidth = 30f;
-        ep.Style.PreferredWidth = 30f;
+        ep.Style.MinWidth = expandButtonW;
+        ep.Style.PreferredWidth = expandButtonW;
         ep.Style.MinHeight = 40f;
         ep.Style.PreferredHeight = 40f;
         ep.Style.FlexibleWidth = -1f;
@@ -1158,8 +1083,8 @@ public partial class DesktopBuddyMod
         var separatorB = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
         separatorB.Material.Target = barElementMat;
 
-        ep.Style.MinWidth = 30f;
-        ep.Style.PreferredWidth = 30f;
+        ep.Style.MinWidth = expandButtonW;
+        ep.Style.PreferredWidth = expandButtonW;
         ep.Style.MinHeight = 40f;
         ep.Style.PreferredHeight = 40f;
         ep.Style.FlexibleWidth = -1f;
@@ -1173,8 +1098,8 @@ public partial class DesktopBuddyMod
         var separatorC = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
         separatorC.Material.Target = barElementMat;
 
-        ep.Style.MinWidth = 38f;
-        ep.Style.PreferredWidth = 38f;
+        ep.Style.MinWidth = curveLabelW;
+        ep.Style.PreferredWidth = curveLabelW;
         ep.Style.MinHeight = 48f;
         ep.Style.PreferredHeight = 48f;
         ep.Style.FlexibleWidth = -1f;
@@ -1184,8 +1109,8 @@ public partial class DesktopBuddyMod
         curveText.Material.Target = barTextMat;
 
         ep.Style.FlexibleWidth = -1f;
-        ep.Style.MinWidth = 80f;
-        ep.Style.PreferredWidth = 80f;
+        ep.Style.MinWidth = curveSliderW;
+        ep.Style.PreferredWidth = curveSliderW;
         ep.Style.MinHeight = 48f;
         ep.Style.PreferredHeight = 48f;
 
@@ -1215,8 +1140,8 @@ public partial class DesktopBuddyMod
             }
         };
 
-        ep.Style.MinWidth = 24f;
-        ep.Style.PreferredWidth = 24f;
+        ep.Style.MinWidth = volumeIconW;
+        ep.Style.PreferredWidth = volumeIconW;
         ep.Style.MinHeight = 48f;
         ep.Style.PreferredHeight = 48f;
         ep.Style.FlexibleWidth = -1f;
@@ -1227,7 +1152,7 @@ public partial class DesktopBuddyMod
 
         ep.Style.FlexibleWidth = -1f;
         ep.Style.MinWidth = 80f;
-        ep.Style.PreferredWidth = 100f;
+        ep.Style.PreferredWidth = volumeSliderW;
         ep.Style.MinHeight = 48f;
         ep.Style.PreferredHeight = 48f;
 

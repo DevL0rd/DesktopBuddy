@@ -19,8 +19,6 @@ static class DesktopTextureProviderPatch
     private static System.Reflection.MethodInfo _onCreatedMethod;
     private static bool _reflectionCached;
     private static bool _reflectionValid;
-    private static int _callCount;
-
     static bool Prefix(DesktopTextureProvider __instance)
     {
         // Only bypass the world check for our instances (both magic indices and real monitor indices).
@@ -38,11 +36,7 @@ static class DesktopTextureProviderPatch
             if (!_reflectionValid)
                 return true; // Reflection failed — fall back to original
 
-            bool verbose = _callCount++ < 3;
-
             var desktopTex = _assetField.GetValue(__instance) as DesktopTexture;
-            if (verbose)
-                Log.Msg($"[DesktopTextureProviderPatch] DisplayIndex={__instance.DisplayIndex.Value} desktopTex={(desktopTex != null ? "present" : "null")}");
 
             if (desktopTex == null)
             {
@@ -54,14 +48,11 @@ static class DesktopTextureProviderPatch
                     Log.Msg("[DesktopTextureProviderPatch] WARNING: AssetManager is null");
 
                 _assetField.SetValue(__instance, desktopTex);
-                if (verbose) Log.Msg("[DesktopTextureProviderPatch] Created new DesktopTexture");
             }
 
             var callback = (System.Action)System.Delegate.CreateDelegate(
                 typeof(System.Action), __instance, _onCreatedMethod);
             desktopTex.Update(__instance.DisplayIndex.Value, callback);
-            if (verbose)
-                Log.Msg($"[DesktopTextureProviderPatch] Sent Update(displayIndex={__instance.DisplayIndex.Value})");
         }
         catch (System.Exception ex)
         {

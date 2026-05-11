@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $SoftCamClsid = "{AEF3B972-5FA5-4647-9571-358EB472BC9E}"
+$VideoInputCategoryClsid = "{860BB310-5D01-11d0-BD3B-00A0C911CE86}"
 $SavedPathKey = "HKCU:\Software\DesktopBuddy"
 $SavedPathValue = "ManagerPath"
 $RenderiteHookReleasesApi = "https://api.github.com/repos/ResoniteModding/RenderiteHook/releases/latest"
@@ -85,16 +86,112 @@ function Test-SoftCamRegistered {
     return [string]::Equals($registered.Trim('"'), $expected, [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Register-SoftCam {
+function Remove-RegistryTree {
     param([string]$Path)
-    if (Test-SoftCamRegistered $Path) {
-        Write-Log "SoftCam: already registered at the expected path"
+
+    if (-not (Test-Path -LiteralPath $Path)) {
         return
     }
 
+    if ($DryRun) {
+        Write-Log "DRY RUN: remove registry key $Path"
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        Write-Log "  removed registry key: $Path"
+    }
+    catch {
+        Write-Log "  unable to remove registry key: $Path ($($_.Exception.Message))"
+    }
+}
+
+function Get-SoftCamRegistrationPaths {
+    $keys = @(
+        "Registry::HKEY_CLASSES_ROOT\CLSID\$SoftCamClsid\InprocServer32",
+        "HKCU:\Software\Classes\CLSID\$SoftCamClsid\InprocServer32",
+        "HKCU:\Software\Classes\WOW6432Node\CLSID\$SoftCamClsid\InprocServer32",
+        "HKLM:\Software\Classes\CLSID\$SoftCamClsid\InprocServer32",
+        "HKLM:\Software\Classes\WOW6432Node\CLSID\$SoftCamClsid\InprocServer32"
+    )
+
+    foreach ($keyPath in $keys) {
+        if (-not (Test-Path -LiteralPath $keyPath)) {
+            continue
+        }
+
+        $registered = (Get-Item -LiteralPath $keyPath).GetValue("")
+        if (-not [string]::IsNullOrWhiteSpace($registered)) {
+            [PSCustomObject]@{
+                KeyPath = $keyPath
+                DllPath = $registered.Trim('"')
+            }
+        }
+    }
+}
+
+function Get-SoftCamRegistryTrees {
+    @(
+        "HKCU:\Software\Classes\CLSID\$SoftCamClsid",
+        "HKCU:\Software\Classes\WOW6432Node\CLSID\$SoftCamClsid",
+        "HKLM:\Software\Classes\CLSID\$SoftCamClsid",
+        "HKLM:\Software\Classes\WOW6432Node\CLSID\$SoftCamClsid",
+        "HKCU:\Software\Classes\CLSID\$VideoInputCategoryClsid\Instance\DesktopBuddy - Camera",
+        "HKCU:\Software\Classes\CLSID\$VideoInputCategoryClsid\Instance\DirectShow Softcam",
+        "HKCU:\Software\Classes\WOW6432Node\CLSID\$VideoInputCategoryClsid\Instance\DesktopBuddy - Camera",
+        "HKCU:\Software\Classes\WOW6432Node\CLSID\$VideoInputCategoryClsid\Instance\DirectShow Softcam",
+        "HKLM:\Software\Classes\CLSID\$VideoInputCategoryClsid\Instance\DesktopBuddy - Camera",
+        "HKLM:\Software\Classes\CLSID\$VideoInputCategoryClsid\Instance\DirectShow Softcam",
+        "HKLM:\Software\Classes\WOW6432Node\CLSID\$VideoInputCategoryClsid\Instance\DesktopBuddy - Camera",
+        "HKLM:\Software\Classes\WOW6432Node\CLSID\$VideoInputCategoryClsid\Instance\DirectShow Softcam"
+    )
+}
+
+function Uninstall-SoftCam {
+    param([string]$Path)
+
+    Write-Log "Uninstalling existing SoftCam registrations..."
+
+    $candidateDlls = @(
+        (Join-Path $Path "DesktopBuddyNative\softcam64.dll"),
+        (Join-Path $Path "DesktopBuddyNative\softcam.dll"),
+        (Join-Path $Path "softcam\softcam64.dll"),
+        (Join-Path $Path "softcam\softcam.dll")
+    )
+
+    $registeredDlls = @(Get-SoftCamRegistrationPaths | ForEach-Object { $_.DllPath })
+    $candidateDlls = @($candidateDlls + $registeredDlls |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique)
+
+    foreach ($dllPath in $candidateDlls) {
+        if (-not (Test-Path -LiteralPath $dllPath)) {
+            continue
+        }
+
+        $exit = Invoke-SetupProcess -FileName "regsvr32.exe" -Arguments "/s /u `"$dllPath`"" -TimeoutMs 10000
+        Write-Log "  regsvr32 /u $([IO.Path]::GetFileName($dllPath)) exit: $exit"
+    }
+
+    foreach ($keyPath in Get-SoftCamRegistryTrees) {
+        Remove-RegistryTree $keyPath
+    }
+}
+
+function Register-SoftCam {
+    param([string]$Path)
+    $expected = Join-Path $Path "DesktopBuddyNative\softcam64.dll"
+    Uninstall-SoftCam $Path
+
     Write-Log "Registering SoftCam DirectShow filter..."
     $found = $false
-    foreach ($dll in @("softcam64.dll", "softcam.dll")) {
+    $dllsToRegister = @("softcam64.dll")
+    if (-not (Test-Path -LiteralPath (Join-Path $Path "DesktopBuddyNative\softcam64.dll"))) {
+        $dllsToRegister = @("softcam.dll")
+    }
+
+    foreach ($dll in $dllsToRegister) {
         $dllPath = Join-Path $Path "DesktopBuddyNative\$dll"
         Write-Log "  checking: $dllPath exists=$(Test-Path -LiteralPath $dllPath)"
         if (-not (Test-Path -LiteralPath $dllPath)) {
@@ -108,6 +205,13 @@ function Register-SoftCam {
 
     if (-not $found) {
         Write-Log "  SoftCam DLL not found in DesktopBuddyNative"
+    }
+
+    if (Test-SoftCamRegistered $Path) {
+        Write-Log "SoftCam: registered at the expected path"
+    }
+    else {
+        Write-Log "WARNING: SoftCam registration did not resolve to $expected"
     }
 }
 

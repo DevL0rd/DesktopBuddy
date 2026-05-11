@@ -48,6 +48,7 @@ public class DesktopSession
     public Slot VCamSlot;
     public Camera VCamCamera;
     public bool VCamRenderPending;
+    public long VCamLastSubmitTicks;
     public UI_UnlitMaterial VCamIndicator;
     public bool VCamLastLitState;
     public Slot VMicSlot;

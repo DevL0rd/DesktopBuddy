@@ -14,10 +14,6 @@ namespace DesktopBuddySharedTextureBridge
         private static DateTime _lastLoadUtc;
         private static CacheSettings _settings = CacheSettings.Default;
         private static bool _loggedConfigPath;
-        private static readonly object _vlcLogLock = new object();
-        private static DateTime _lastVlcLogUtc;
-        private static string _lastVlcLogMessage;
-        private static int _suppressedVlcLogCount;
 
         private static void Prefix(PlayerOptionsStandalone options)
         {
@@ -28,50 +24,14 @@ namespace DesktopBuddySharedTextureBridge
                 var settings = LoadSettings();
                 options.NetworkCaching = settings.NetworkCachingMs;
                 options.LiveCaching = settings.LiveCachingMs;
-                options.SetLogDetail(LogLevels.Error, OnVlcErrorLog);
+                options.FileCaching = settings.FileCachingMs;
 
                 SharedTextureBridgePlugin.LogInfo(
-                    $"[LibVLC] Cache options: network={options.NetworkCaching}ms live={options.LiveCaching}ms " +
-                    $"file={options.FileCaching}ms disk={options.DiskCaching}ms " +
-                    $"logDetail={LogLevels.Error}");
+                    $"[LibVLC] Cache options: network={options.NetworkCaching}ms live={options.LiveCaching}ms file={options.FileCaching}ms");
             }
             catch (Exception ex)
             {
                 SharedTextureBridgePlugin.LogError("[LibVLC] Prefix failed", ex);
-            }
-        }
-
-        private static void OnVlcErrorLog(PlayerManagerLogs.PlayerLog log)
-        {
-            try
-            {
-                if (log == null || string.IsNullOrWhiteSpace(log.Message)) return;
-
-                string message = log.Message.Trim();
-                string suffix = "";
-                lock (_vlcLogLock)
-                {
-                    DateTime now = DateTime.UtcNow;
-                    if (message == _lastVlcLogMessage && (now - _lastVlcLogUtc).TotalSeconds < 2.0)
-                    {
-                        _suppressedVlcLogCount++;
-                        return;
-                    }
-
-                    if (_suppressedVlcLogCount > 0)
-                    {
-                        suffix = $" (suppressed {_suppressedVlcLogCount} repeats)";
-                        _suppressedVlcLogCount = 0;
-                    }
-
-                    _lastVlcLogMessage = message;
-                    _lastVlcLogUtc = now;
-                }
-
-                SharedTextureBridgePlugin.LogWarning($"[LibVLC:{log.Level}] {message}{suffix}");
-            }
-            catch
-            {
             }
         }
 

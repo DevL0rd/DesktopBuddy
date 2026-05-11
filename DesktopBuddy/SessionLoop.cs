@@ -10,6 +10,7 @@ namespace DesktopBuddy;
 public partial class DesktopBuddyMod
 {
     private static readonly HashSet<World> _scheduledWorlds = new();
+    private const int VirtualCameraTargetFps = 60;
 
     private static void CleanupTrace(string message) => Log.MsgImmediate($"[CleanupTrace] {message}");
 
@@ -417,31 +418,49 @@ public partial class DesktopBuddyMod
                     continue;
                 }
 
-                if (VCam != null && VCam.ConsumerConnected && !VCam.ManuallyDisabled &&
+                if (VCam != null && !VCam.ManuallyDisabled &&
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
                     !session.VCamRenderPending)
                 {
                     if (i == lastVCamIdx)
                     {
+                        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+                        long minIntervalTicks = System.Diagnostics.Stopwatch.Frequency / VirtualCameraTargetFps;
+                        if (session.VCamLastSubmitTicks != 0 &&
+                            nowTicks - session.VCamLastSubmitTicks < minIntervalTicks)
+                            goto UpdateVirtualCameraIndicator;
+
+                        session.VCamLastSubmitTicks = nowTicks;
                         session.VCamRenderPending = true;
                         var vcam = session.VCamCamera;
                         var vcamRef = VCam;
-                        vcam.RenderToBitmap(new int2(1280, 720)).ContinueWith(task =>
+                        var renderSettings = vcam.GetRenderSettings(new int2(1280, 720));
+                        renderSettings.parameters.textureFormat = Renderite.Shared.TextureFormat.RGB24;
+                        vcam.World.Render.RenderToBitmap(renderSettings, willHandleBuffer: true).ContinueWith(task =>
                         {
-                            session.VCamRenderPending = false;
-                            if (task.IsFaulted || task.Result == null) return;
-                            var bmp = task.Result;
-                            if (bmp.RawData.Length == 0) return;
-                            if (vcamRef._logNextFrame)
+                            Bitmap2D bmp = null;
+                            try
                             {
-                                vcamRef._logNextFrame = false;
-                                Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
+                                if (task.IsFaulted || task.Result == null) return;
+                                bmp = task.Result;
+                                if (bmp.RawData.Length == 0) return;
+                                if (vcamRef._logNextFrame)
+                                {
+                                    vcamRef._logNextFrame = false;
+                                    Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
+                                }
+                                vcamRef.SendFrame(bmp.RawData, bmp.Size.x, bmp.Size.y, bmp.Format);
                             }
-                            vcamRef.SendFrame(bmp.RawData, bmp.Size.x, bmp.Size.y, bmp.Format);
+                            finally
+                            {
+                                try { bmp?.Buffer?.Dispose(); } catch { }
+                                session.VCamRenderPending = false;
+                            }
                         });
                     }
                 }
 
+UpdateVirtualCameraIndicator:
                 if (session.VCamIndicator != null && !session.VCamIndicator.IsDestroyed && VCam != null)
                 {
                     bool lit = VCam.ConsumerConnected && !VCam.ManuallyDisabled;

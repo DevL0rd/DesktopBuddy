@@ -69,8 +69,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private long _readerOverrunEvents;
     private long _readerOverrunMaxBacklogBytes;
     private long _readerLastOverrunLogTicks;
-    private long _lastResourceLogTicks;
-    private long _lastResourceLogRingPos;
 
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
@@ -871,8 +869,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height, bool keepAliveFrame)
     {
         int ret;
-        long ringBefore = _ringWritePos;
-
         try
         {
             if (_disposed) return;
@@ -985,48 +981,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         _totalFrames++;
         if (keepAliveFrame) _keepAliveFramesEncoded++;
-        long ringAfter = _ringWritePos;
-        bool logFrame = _totalFrames <= 5 ||
-            _totalFrames % 300 == 0 ||
-            (keepAliveFrame && _keepAliveFramesEncoded <= 8);
-        if (logFrame)
-            Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), keepAlive={_keepAliveFramesEncoded}, keepAliveFrame={keepAliveFrame}, bytesWritten={ringAfter - ringBefore}, ringPos={ringAfter}");
-        LogResourcesIfDue();
-    }
-
-    private void LogResourcesIfDue()
-    {
-        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-        long previousTicks = Interlocked.Read(ref _lastResourceLogTicks);
-        double elapsedMs = previousTicks != 0
-            ? (double)(nowTicks - previousTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency
-            : 0.0;
-        if (previousTicks != 0)
-        {
-            if (elapsedMs < 2000.0) return;
-        }
-
-        if (Interlocked.CompareExchange(ref _lastResourceLogTicks, nowTicks, previousTicks) != previousTicks)
-            return;
-
-        try
-        {
-            var process = System.Diagnostics.Process.GetCurrentProcess();
-            process.Refresh();
-            double privateMb = process.PrivateMemorySize64 / 1048576.0;
-            double workingMb = process.WorkingSet64 / 1048576.0;
-            double managedMb = GC.GetTotalMemory(false) / 1048576.0;
-            long ringPos = Interlocked.Read(ref _ringWritePos);
-            long previousRingPos = Interlocked.Exchange(ref _lastResourceLogRingPos, ringPos);
-            double muxMbps = previousRingPos > 0 && ringPos >= previousRingPos && previousTicks != 0
-                ? (ringPos - previousRingPos) * 8.0 / elapsedMs / 1000.0
-                : 0.0;
-            Log.Msg($"[FfmpegEnc:{_streamId}] Resources: private={privateMb:F1}MB working={workingMb:F1}MB managed={managedMb:F1}MB frames={_totalFrames} keepAlive={_keepAliveFramesEncoded} ringPos={ringPos} muxMbps={muxMbps:F2}");
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[FfmpegEnc:{_streamId}] Resource log failed: {ex.Message}");
-        }
     }
 
     private static int GetStreamFps()
