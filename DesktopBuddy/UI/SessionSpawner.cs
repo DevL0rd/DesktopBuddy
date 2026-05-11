@@ -125,7 +125,6 @@ public partial class DesktopBuddyMod
         float zOffset,
         IAssetProvider<ITexture2D> texture,
         Camera rayExit,
-        Slot raycastTargetRoot,
         bool addCollider = true,
         Sidedness sidedness = Sidedness.Front,
         ZWrite zWrite = ZWrite.On,
@@ -784,7 +783,7 @@ public partial class DesktopBuddyMod
         float toggleW = 36f;
         const float deviceIndicatorTopOffset = 0.02f;
         float DeviceIndicatorY() => worldHalfH + deviceIndicatorTopOffset;
-        float DeviceIndicatorZ() => -0.001f + GetCurvedPanelDepth(frontPlaneRef, canvasScale);
+        float DeviceIndicatorZ() => 0.001f + GetCurvedPanelDepth(frontPlaneRef, canvasScale);
         void UpdateDeviceIndicators()
         {
             if (deviceIndicatorsSlot != null && !deviceIndicatorsSlot.IsDestroyed)
@@ -792,11 +791,11 @@ public partial class DesktopBuddyMod
         }
 
         int barRenderHostId = Interlocked.Increment(ref _nextTopBarRenderHostId);
-        var barRenderHost = root.World.RootSlot.AddSlot($"DesktopBuddyTopBarRenderHost {barRenderHostId}", false);
+        var barRenderHost = root.AddSlot($"DesktopBuddyTopBarRenderHost {barRenderHostId}", false);
         session.TopBarRenderHost = barRenderHost;
-        var barRenderHostPosition = new float3(barRenderHostId * 20000f, -20000f, 0f);
-        barRenderHost.LocalPosition = barRenderHostPosition;
-        Msg($"[TopBar] Render host isolated id={barRenderHostId} pos={barRenderHostPosition}");
+        barRenderHost.PersistentSelf = false;
+        barRenderHost.AttachComponent<HiddenLayer>();
+        Msg($"[TopBar] Render host created under buddy root id={barRenderHostId}");
         root.Destroyed += _ =>
         {
             if (barRenderHost != null && !barRenderHost.IsDestroyed)
@@ -1334,7 +1333,6 @@ public partial class DesktopBuddyMod
             0f,
             barRenderTex,
             barCamera,
-            barRenderRoot,
             addCollider: true,
             sidedness: Sidedness.Front,
             zWrite: ZWrite.Off,
@@ -1342,6 +1340,7 @@ public partial class DesktopBuddyMod
             blendMode: BlendMode.Alpha,
             renderQueue: 3001,
             alphaCutoff: 0.01f);
+        RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
         topBarBackStripRef = AddCurvedRenderPlane(
             root,
             "TopBarBackCurvedMesh",
@@ -1351,7 +1350,6 @@ public partial class DesktopBuddyMod
             barYPos,
             0.004f,
             barBackRenderTex,
-            null,
             null,
             addCollider: false,
             sidedness: Sidedness.Back,
@@ -1437,13 +1435,21 @@ public partial class DesktopBuddyMod
             }
 
             var savedUrl = videoTexRef.URL.Value;
+            if (savedUrl == null)
+            {
+                Msg("[Resync] No URL is currently bound");
+                return;
+            }
+
             Msg($"[Resync] Forcing full reload: {savedUrl}");
+            videoTexRef.Stop();
             videoTexRef.URL.Value = null;
             root.World.RunInUpdates(10, () =>
             {
                 if (videoTexRef != null && !videoTexRef.IsDestroyed)
                 {
                     videoTexRef.URL.Value = savedUrl;
+                    videoTexRef.Play();
                     Msg($"[Resync] URL restored: {savedUrl}");
                 }
             });
@@ -1731,7 +1737,6 @@ public partial class DesktopBuddyMod
                 videoTexRef = videoTex;
                 session.VideoTexture = videoTex;
                 var streamUrl = shared.StreamUrl;
-                bool waitForHttpKeyframe = !useMediaMtx;
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
@@ -1796,9 +1801,7 @@ public partial class DesktopBuddyMod
                 {
                     if (videoTex == null || videoTex.IsDestroyed || root.IsDestroyed) return;
 
-                    bool ready = waitForHttpKeyframe
-                        ? nvEncoder.HasReadableVideoKeyframe
-                        : nvEncoder.IsRunning;
+                    bool ready = nvEncoder.IsRunning;
 
                     if (ready && !isPrivate)
                     {
@@ -1816,7 +1819,7 @@ public partial class DesktopBuddyMod
                     }
 
                     if (attempt == 0 || attempt % 30 == 0)
-                        Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={isPrivate}, waitForHttpKeyframe={waitForHttpKeyframe}, {nvEncoder.ReadableStreamState}");
+                        Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={isPrivate}, {nvEncoder.ReadableStreamState}");
 
                     root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
                 }

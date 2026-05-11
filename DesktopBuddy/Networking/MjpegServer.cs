@@ -123,7 +123,6 @@ public sealed class MjpegServer : IDisposable
 
         long connectionId = Interlocked.Increment(ref _nextConnectionId);
         long minimumKeyframePos = encoder.CurrentWritePosition;
-        encoder.RequestHttpKeyframe($"client-connect conn={connectionId}");
 
         int keyframeWaitCount = 0;
         while (encoder.IsRunning && !encoder.HasReadableVideoKeyframeAtOrAfter(minimumKeyframePos) && keyframeWaitCount < 300)

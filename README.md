@@ -92,9 +92,9 @@ The config schema is currently `1.0.11`. Older config files are reset when the s
 | `bitrate` | `10` | Target video bitrate in Mbps. Encoders use variable bitrate with a peak around 120% of this value. |
 | `streamFps` | `60` | Nominal FPS passed to the encoder for timing. Capture remains event-driven; this is not a sleep-based frame cap. |
 | `maxStreamResolution` | `2560` | Maximum encoded long edge. Windows larger than this are GPU-scaled down before encoding. |
-| `libVlcNetworkCachingMs` | `200` | Renderer-side libVLC network cache for DesktopBuddy streams. |
-| `libVlcLiveCachingMs` | `200` | Renderer-side libVLC live cache for DesktopBuddy streams. |
-| `libVlcFileCachingMs` | `100` | Renderer-side libVLC file cache fallback. |
+| `libVlcNetworkCachingMs` | `300` | Renderer-side libVLC network cache for DesktopBuddy streams. |
+| `libVlcLiveCachingMs` | `300` | Renderer-side libVLC live cache for DesktopBuddy streams. |
+| `libVlcFileCachingMs` | `300` | Renderer-side libVLC file cache fallback. |
 
 ### Other
 

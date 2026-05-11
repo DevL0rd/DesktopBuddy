@@ -50,15 +50,15 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcNetworkCachingMs =
-        new("libVlcNetworkCachingMs", "libVLC network cache in milliseconds for DesktopBuddy streams.", () => 200);
+        new("libVlcNetworkCachingMs", "libVLC network cache in milliseconds for DesktopBuddy streams.", () => 300);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcLiveCachingMs =
-        new("libVlcLiveCachingMs", "libVLC live cache in milliseconds for DesktopBuddy streams.", () => 200);
+        new("libVlcLiveCachingMs", "libVLC live cache in milliseconds for DesktopBuddy streams.", () => 300);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<int> LibVlcFileCachingMs =
-        new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 100);
+        new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 300);
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> UseMediaMtx =
@@ -184,6 +184,8 @@ public partial class DesktopBuddyMod : ResoniteMod
     private static int _nextStreamId;
 
     internal static readonly HashSet<RefID> DesktopCanvasIds = new();
+    private static readonly object TopBarRaycastGate = new();
+    private static readonly Dictionary<RefID, Slot> TopBarRaycastTargets = new();
 
     private static readonly Dictionary<IntPtr, SharedStream> _sharedStreams = new();
 
@@ -273,6 +275,7 @@ public partial class DesktopBuddyMod : ResoniteMod
 
         Harmony harmony = new("com.desktopbuddy.mod");
         harmony.PatchAll();
+        TopBarRaycastPortalPatch.Install(harmony);
 
         AudioCapture.LogHandler = Msg;
         PrewarmSharedResources();
@@ -352,7 +355,7 @@ public partial class DesktopBuddyMod : ResoniteMod
             if (_configResetForNewDefaults)
             {
                 ApplyFreshConfigDefaults();
-                Msg("[Config] Applied 1.0.11 fresh defaults: spatialAudio=false bitrate=10 streamFps=60 maxStreamResolution=2560");
+                Msg("[Config] Applied fresh defaults: spatialAudio=false bitrate=10 streamFps=60 maxStreamResolution=2560 libVLC cache=300ms");
             }
             else
             {
@@ -364,9 +367,15 @@ public partial class DesktopBuddyMod : ResoniteMod
 
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
             Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
-            Config.Set(LibVlcNetworkCachingMs, Math.Max(200, Config.GetValue(LibVlcNetworkCachingMs)));
-            Config.Set(LibVlcLiveCachingMs, Math.Max(200, Config.GetValue(LibVlcLiveCachingMs)));
-            Config.Set(LibVlcFileCachingMs, Config.GetValue(LibVlcFileCachingMs));
+            int networkCacheMs = Config.GetValue(LibVlcNetworkCachingMs);
+            int liveCacheMs = Config.GetValue(LibVlcLiveCachingMs);
+            int fileCacheMs = Config.GetValue(LibVlcFileCachingMs);
+            if (networkCacheMs == 50 || networkCacheMs == 200) networkCacheMs = 300;
+            if (liveCacheMs == 50 || liveCacheMs == 200) liveCacheMs = 300;
+            if (fileCacheMs == 50 || fileCacheMs == 100) fileCacheMs = 300;
+            Config.Set(LibVlcNetworkCachingMs, Math.Clamp(networkCacheMs, 0, 5000));
+            Config.Set(LibVlcLiveCachingMs, Math.Clamp(liveCacheMs, 0, 5000));
+            Config.Set(LibVlcFileCachingMs, Math.Clamp(fileCacheMs, 0, 5000));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -388,9 +397,9 @@ public partial class DesktopBuddyMod : ResoniteMod
         Config.Set(Bitrate, 10);
         Config.Set(StreamFps, 60);
         Config.Set(MaxStreamResolution, 2560);
-        Config.Set(LibVlcNetworkCachingMs, 200);
-        Config.Set(LibVlcLiveCachingMs, 200);
-        Config.Set(LibVlcFileCachingMs, 100);
+        Config.Set(LibVlcNetworkCachingMs, 300);
+        Config.Set(LibVlcLiveCachingMs, 300);
+        Config.Set(LibVlcFileCachingMs, 300);
         Config.Set(UseMediaMtx, false);
         Config.Set(MediaMtxHost, "");
         Config.Set(MediaMtxPort, 8554);
@@ -497,6 +506,44 @@ public partial class DesktopBuddyMod : ResoniteMod
 
     internal new static void Msg(string msg) => Log.Msg(msg);
     internal new static void Error(string msg) => Log.Error(msg);
+
+    internal static void RegisterTopBarRaycastPortal(Slot portalSlot, Slot targetRoot)
+    {
+        if (portalSlot == null || targetRoot == null)
+            return;
+
+        RefID portalId = portalSlot.ReferenceID;
+        lock (TopBarRaycastGate)
+            TopBarRaycastTargets[portalId] = targetRoot;
+
+        portalSlot.Destroyed += _ => UnregisterTopBarRaycastPortal(portalId);
+        targetRoot.Destroyed += _ => UnregisterTopBarRaycastPortal(portalId);
+        Msg($"[TopBarRaycast] Registered portal={portalId} target={targetRoot.ReferenceID}");
+    }
+
+    internal static Slot GetTopBarRaycastTarget(Slot portalSlot)
+    {
+        if (portalSlot == null)
+            return null;
+
+        RefID portalId = portalSlot.ReferenceID;
+        lock (TopBarRaycastGate)
+        {
+            if (!TopBarRaycastTargets.TryGetValue(portalId, out Slot target) || target == null || target.IsDestroyed)
+            {
+                TopBarRaycastTargets.Remove(portalId);
+                return null;
+            }
+
+            return target;
+        }
+    }
+
+    private static void UnregisterTopBarRaycastPortal(RefID portalId)
+    {
+        lock (TopBarRaycastGate)
+            TopBarRaycastTargets.Remove(portalId);
+    }
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr SetUnhandledExceptionFilter(IntPtr lpTopLevelExceptionFilter);

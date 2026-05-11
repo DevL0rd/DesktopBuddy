@@ -28,6 +28,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private AudioCapture _audioCapture;
     private long _audioReadPos;
     private long _audioSamplesEncoded;
+    private long _lastAudioPts = -1;
     private float[] _audioScratch;
     private Thread _audioEncodeThread;
     private AVPacket* _audioPkt;
@@ -79,10 +80,10 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private uint _keepAliveW, _keepAliveH;
     private long _lastEncodeTicks;
     private long _nextKeepAliveTicks;
-    private int _pendingHttpKeyframeRequests;
     private int _keepAliveFramesEncoded;
-    private int _httpJoinKeyframesEncoded;
     private int _keepAliveFps = 60;
+    private long _readerLiveCatchupEvents;
+    private long _readerLastCatchupLogTicks;
 
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
@@ -149,14 +150,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         {
             lock (_ringLock) return _ringWritePos;
         }
-    }
-
-    public void RequestHttpKeyframe(string reason)
-    {
-        if (_rtspUrl != null || _disposed) return;
-        Interlocked.Exchange(ref _pendingHttpKeyframeRequests, 1);
-        try { _encodeEvent.Set(); } catch { }
-        Log.Msg($"[FfmpegEnc:{_streamId}] HTTP keyframe requested: {reason}");
     }
 
     private static bool _ffmpegPathSet;
@@ -241,12 +234,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             long available = _ringWritePos - readPos;
             if (available <= 0) return 0;
 
-            if (available > RING_SIZE)
-            {
-                RecordReaderOverrun(readPos, _ringWritePos, available);
-                return -1;
-            }
-
             long latestKeyframePos = Interlocked.Read(ref _lastKeyframeRingPos);
             if (!aligned)
             {
@@ -259,6 +246,31 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                     Log.Msg($"[FfmpegEnc:{_streamId}] Reader aligned to latest keyframe at ringPos={readPos}, liveWritePos={_ringWritePos}, backlog={available} bytes");
                 }
                 if (!aligned) return 0;
+            }
+
+            available = _ringWritePos - readPos;
+            if (available > RING_SIZE)
+            {
+                RecordReaderOverrun(readPos, _ringWritePos, available);
+                return -1;
+            }
+
+            long maxLiveBacklogBytes = GetMaxHttpLiveBacklogBytes();
+            if (aligned && available > maxLiveBacklogBytes)
+            {
+                long kfPos = latestKeyframePos;
+                if (kfPos > readPos && kfPos >= minimumKeyframePos && kfPos >= _ringWritePos - RING_SIZE && kfPos < _ringWritePos)
+                {
+                    long dropped = kfPos - readPos;
+                    readPos = kfPos;
+                    available = _ringWritePos - readPos;
+                    startsAtKeyframe = true;
+                    RecordReaderLiveCatchup(dropped, available, maxLiveBacklogBytes, readPos);
+                }
+                else
+                {
+                    return 0;
+                }
             }
 
             int toRead = (int)Math.Min(available, buffer.Length);
@@ -400,10 +412,13 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _pkt = ffmpeg.av_packet_alloc();
 
             _audioCapture = audioCapture;
-            _audioReadPos = 0;
+            _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            _audioReadPos = _audioCapture?.WritePosition ?? 0;
             _audioSamplesEncoded = 0;
+            _lastAudioPts = -1;
 
             SetupMuxer();
+            StartAudioEncodeThreadIfReady();
 
             var hwDevCtxData = (AVHWDeviceContext*)_hwDeviceCtx->data;
             var d3d11DevCtxData = (AVD3D11VADeviceContext*)hwDevCtxData->hwctx;
@@ -419,8 +434,6 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 Interlocked.Exchange(ref _lastKeyframeRingPos, -1);
             }
             _initialized = true;
-
-            _startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
 
             _encodeThread = new Thread(EncodeLoop) { Name = $"FfmpegEnc:{_streamId}:Encode", IsBackground = true };
             _encodeThread.Start();
@@ -666,11 +679,20 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         _audioScratch = new float[48000 * 2];
         _audioPkt = ffmpeg.av_packet_alloc();
 
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio stream added: AAC 48kHz stereo 128kbps");
+    }
+
+    private void StartAudioEncodeThreadIfReady()
+    {
+        if (_audioCodecCtx == null || _audioFrame == null || _audioPkt == null || _audioCapture == null || !_audioCapture.IsCapturing)
+            return;
+        if (_audioEncodeThread != null)
+            return;
+
         _audioEncodeThread = new Thread(AudioEncodeLoop)
         { Name = $"FfmpegEnc:{_streamId}:Audio", IsBackground = true };
         _audioEncodeThread.Start();
-
-        Log.Msg($"[FfmpegEnc:{_streamId}] Audio stream added: AAC 48kHz stereo 128kbps (own thread)");
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread launched after muxer header");
     }
 
     private static int WriteCallback(void* opaque, byte* buf, int buf_size)
@@ -749,8 +771,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (tex == IntPtr.Zero)
             {
-                bool keyframeRequested = _rtspUrl == null && Interlocked.CompareExchange(ref _pendingHttpKeyframeRequests, 0, 0) > 0;
-                if (_keepAliveTexture != IntPtr.Zero && (keyframeRequested || IsKeepAliveDue(System.Diagnostics.Stopwatch.GetTimestamp())))
+                if (_keepAliveTexture != IntPtr.Zero && IsKeepAliveDue(System.Diagnostics.Stopwatch.GetTimestamp()))
                 {
                     Marshal.AddRef(_keepAliveTexture);
                     tex = _keepAliveTexture;
@@ -824,11 +845,33 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         return Math.Max(1, (int)Math.Ceiling(1000.0 / GetKeepAliveFps()));
     }
 
+    private static long GetMaxHttpLiveBacklogBytes()
+    {
+        long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
+        long halfSecondBytes = bitrate / 16;
+        return Math.Clamp(halfSecondBytes, 256 * 1024L, 2 * 1024 * 1024L);
+    }
+
+    private void RecordReaderLiveCatchup(long droppedBytes, long remainingBytes, long maxBacklogBytes, long readPos)
+    {
+        long events = Interlocked.Increment(ref _readerLiveCatchupEvents);
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long lastTicks = Interlocked.Read(ref _readerLastCatchupLogTicks);
+        bool shouldLog = events <= 3 ||
+            lastTicks == 0 ||
+            (double)(nowTicks - lastTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency >= 2000.0;
+
+        if (!shouldLog)
+            return;
+
+        Interlocked.Exchange(ref _readerLastCatchupLogTicks, nowTicks);
+        Log.Msg($"[FfmpegEnc:{_streamId}] Reader live catch-up: dropped={droppedBytes}B remaining={remainingBytes}B max={maxBacklogBytes}B readPos={readPos} events={events}");
+    }
+
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height, bool keepAliveFrame)
     {
         int ret;
         long ringBefore = _ringWritePos;
-        bool requestHttpKeyframe = false;
 
         try
         {
@@ -878,10 +921,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _hwFrame->pts = videoPts;
             _hwFrame->width = (int)_width;
             _hwFrame->height = (int)_height;
-            requestHttpKeyframe = _rtspUrl == null && Interlocked.Exchange(ref _pendingHttpKeyframeRequests, 0) > 0;
-            _hwFrame->pict_type = requestHttpKeyframe
-                ? AVPictureType.AV_PICTURE_TYPE_I
-                : AVPictureType.AV_PICTURE_TYPE_NONE;
+            _hwFrame->pict_type = AVPictureType.AV_PICTURE_TYPE_NONE;
 
             using (DesktopBuddyMod.Perf.Time("ffmpeg_encode"))
             {
@@ -945,14 +985,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
         _totalFrames++;
         if (keepAliveFrame) _keepAliveFramesEncoded++;
-        if (requestHttpKeyframe) _httpJoinKeyframesEncoded++;
         long ringAfter = _ringWritePos;
         bool logFrame = _totalFrames <= 5 ||
             _totalFrames % 300 == 0 ||
-            (keepAliveFrame && _keepAliveFramesEncoded <= 8) ||
-            (requestHttpKeyframe && _httpJoinKeyframesEncoded <= 8);
+            (keepAliveFrame && _keepAliveFramesEncoded <= 8);
         if (logFrame)
-            Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), keepAlive={_keepAliveFramesEncoded}, keepAliveFrame={keepAliveFrame}, joinKeyframe={requestHttpKeyframe}, joinKeyframes={_httpJoinKeyframesEncoded}, bytesWritten={ringAfter - ringBefore}, ringPos={ringAfter}");
+            Log.Msg($"[FfmpegEnc:{_streamId}] Frame #{_totalFrames} ({width}x{height}), keepAlive={_keepAliveFramesEncoded}, keepAliveFrame={keepAliveFrame}, bytesWritten={ringAfter - ringBefore}, ringPos={ringAfter}");
         LogResourcesIfDue();
     }
 
@@ -1017,9 +1055,32 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         int frameSize = _audioCodecCtx->frame_size;
         int channels = 2;
         int samplesPerFrame = frameSize * channels;
+        int maxReadSamples = Math.Min(_audioScratch.Length, samplesPerFrame * 4);
+        int targetLiveSamples = samplesPerFrame * 4;
+        int maxLiveSamples = samplesPerFrame * 12;
 
-        int read = _audioCapture.ReadSamples(_audioScratch, _audioScratch.Length, ref _audioReadPos);
+        long writePos = _audioCapture.WritePosition;
+        long available = writePos - _audioReadPos;
+        if (available <= 0) return;
+
+        if (available > maxLiveSamples)
+        {
+            long dropped = available - targetLiveSamples;
+            _audioReadPos = writePos - targetLiveSamples;
+            _audioReadPos -= _audioReadPos % samplesPerFrame;
+            available = writePos - _audioReadPos;
+            Log.Msg($"[FfmpegEnc:{_streamId}] Audio live catch-up: dropped {dropped / (double)(48000 * channels):F3}s backlog, remaining {available / (double)(48000 * channels):F3}s");
+        }
+
+        int read = _audioCapture.ReadSamples(_audioScratch, maxReadSamples, ref _audioReadPos);
         if (read <= 0) return;
+
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        double elapsedSec = _startTicks != 0
+            ? (double)(nowTicks - _startTicks) / System.Diagnostics.Stopwatch.Frequency
+            : 0.0;
+        long liveAudioPts = Math.Max(0, (long)(elapsedSec * 48000));
+        long firstFramePts = Math.Max(0, liveAudioPts - (read / channels));
 
         int offset = 0;
         while (offset + samplesPerFrame <= read)
@@ -1038,7 +1099,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 }
             }
 
-            _audioFrame->pts = _audioSamplesEncoded;
+            long audioPts = firstFramePts + (offset / channels);
+            if (audioPts <= _lastAudioPts)
+                audioPts = _lastAudioPts + frameSize;
+            _audioFrame->pts = audioPts;
+            _lastAudioPts = audioPts;
             _audioSamplesEncoded += frameSize;
 
             int ret = ffmpeg.avcodec_send_frame(_audioCodecCtx, _audioFrame);
