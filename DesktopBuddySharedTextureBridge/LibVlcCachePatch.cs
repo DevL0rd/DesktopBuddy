@@ -28,12 +28,11 @@ namespace DesktopBuddySharedTextureBridge
                 var settings = LoadSettings();
                 options.NetworkCaching = settings.NetworkCachingMs;
                 options.LiveCaching = settings.LiveCachingMs;
-                options.ClockJitter = settings.ClockJitterMs;
                 options.SetLogDetail(LogLevels.Error, OnVlcErrorLog);
 
                 SharedTextureBridgePlugin.LogInfo(
                     $"[LibVLC] Cache options: network={options.NetworkCaching}ms live={options.LiveCaching}ms " +
-                    $"file={options.FileCaching}ms disk={options.DiskCaching}ms clockJitter={options.ClockJitter}ms " +
+                    $"file={options.FileCaching}ms disk={options.DiskCaching}ms " +
                     $"logDetail={LogLevels.Error}");
             }
             catch (Exception ex)
@@ -105,10 +104,9 @@ namespace DesktopBuddySharedTextureBridge
                 string json = File.ReadAllText(path);
                 _settings = new CacheSettings
                 {
-                    NetworkCachingMs = ReadLiveCacheMs(json, "libVlcNetworkCachingMs", CacheSettings.Default.NetworkCachingMs),
-                    LiveCachingMs = ReadLiveCacheMs(json, "libVlcLiveCachingMs", CacheSettings.Default.LiveCachingMs),
+                    NetworkCachingMs = ReadCacheMs(json, "libVlcNetworkCachingMs", CacheSettings.Default.NetworkCachingMs),
+                    LiveCachingMs = ReadCacheMs(json, "libVlcLiveCachingMs", CacheSettings.Default.LiveCachingMs),
                     FileCachingMs = ReadCacheMs(json, "libVlcFileCachingMs", CacheSettings.Default.FileCachingMs),
-                    ClockJitterMs = ReadClockJitterMs(json, "libVlcClockJitterMs", CacheSettings.Default.ClockJitterMs),
                 };
             }
             catch (Exception ex)
@@ -164,29 +162,17 @@ namespace DesktopBuddySharedTextureBridge
             return ReadInt(json, key, fallback);
         }
 
-        private static int ReadLiveCacheMs(string json, string key, int fallback)
-        {
-            return Math.Max(200, ReadInt(json, key, fallback));
-        }
-
-        private static int ReadClockJitterMs(string json, string key, int fallback)
-        {
-            return Math.Max(50, ReadInt(json, key, fallback));
-        }
-
         private struct CacheSettings
         {
             public int NetworkCachingMs;
             public int LiveCachingMs;
             public int FileCachingMs;
-            public int ClockJitterMs;
 
             public static CacheSettings Default => new CacheSettings
             {
-                NetworkCachingMs = 200,
-                LiveCachingMs = 200,
+                NetworkCachingMs = 300,
+                LiveCachingMs = 300,
                 FileCachingMs = 300,
-                ClockJitterMs = 50,
             };
         }
     }
