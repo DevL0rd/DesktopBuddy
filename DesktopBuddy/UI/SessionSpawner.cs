@@ -984,8 +984,9 @@ public partial class DesktopBuddyMod
             volumeSliderW;
 
         float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
-        float expandContentW = MathF.Max(0f, MathF.Min(expandContentMaxW, w - barCollapsedW - barGap));
+        float expandContentW = expandContentMaxW;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
+        int barRenderW = Math.Max(w, Math.Max(1, (int)MathF.Ceiling(barExpandedW)));
 
         void StyleButton(Button btn)
         {
@@ -1185,13 +1186,13 @@ public partial class DesktopBuddyMod
         void ApplyBarLayout(float width)
         {
             if (barCanvas != null && !barCanvas.IsDestroyed)
-                barCanvas.Size.Value = new float2(w, barH);
+                barCanvas.Size.Value = new float2(barRenderW, barH);
 
             if (barRenderTex != null && !barRenderTex.IsDestroyed)
-                barRenderTex.Size.Value = new int2(w, (int)barH);
+                barRenderTex.Size.Value = new int2(barRenderW, (int)barH);
 
             if (barBackRenderTex != null && !barBackRenderTex.IsDestroyed)
-                barBackRenderTex.Size.Value = new int2(w, (int)barH);
+                barBackRenderTex.Size.Value = new int2(barRenderW, (int)barH);
 
             if (barBg != null && !barBg.IsDestroyed)
                 barBg.RectTransform.SetFixedRect(new Rect(0f, -barH * 0.5f, width, barH), new float2(0f, 0.5f));
@@ -1200,20 +1201,20 @@ public partial class DesktopBuddyMod
                 barSlot.LocalPosition = float3.Zero;
 
             if (barBackCanvas != null && !barBackCanvas.IsDestroyed)
-                barBackCanvas.Size.Value = new float2(w, barH);
+                barBackCanvas.Size.Value = new float2(barRenderW, barH);
 
             if (barBackBg != null && !barBackBg.IsDestroyed)
                 barBackBg.RectTransform.SetFixedRect(new Rect(-width, -barH * 0.5f, width, barH), new float2(1f, 0.5f));
 
             if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
             {
-                topBarStripRef.Size.Value = new float2(w, barH);
+                topBarStripRef.Size.Value = new float2(barRenderW, barH);
                 topBarStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0f);
             }
 
             if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
             {
-                topBarBackStripRef.Size.Value = new float2(w, barH);
+                topBarBackStripRef.Size.Value = new float2(barRenderW, barH);
                 topBarBackStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0.004f);
             }
         }
@@ -1251,7 +1252,7 @@ public partial class DesktopBuddyMod
         topBarStripRef = AddCurvedRenderPlane(
             root,
             "TopBarCurvedMesh",
-            w,
+            barRenderW,
             barH,
             canvasScale,
             barYPos,
@@ -1269,7 +1270,7 @@ public partial class DesktopBuddyMod
         topBarBackStripRef = AddCurvedRenderPlane(
             root,
             "TopBarBackCurvedMesh",
-            w,
+            barRenderW,
             barH,
             canvasScale,
             barYPos,
