@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -152,83 +151,28 @@ public sealed class MjpegServer : IDisposable
         ctx.Response.Headers["X-Accel-Buffering"] = "no";
 
         long totalBytes = 0;
-        long lastSummaryTicks = Stopwatch.GetTimestamp();
-        long summaryStartTicks = lastSummaryTicks;
-        long writeOps = 0;
-        long slowWrites = 0;
-        long maxWriteTicks = 0;
-        long totalWriteTicks = 0;
-        int maxWriteBytes = 0;
         long readPos = 0;
         bool aligned = false;
-        long readBytes = 0;
-        long chunks = 0;
-        long keyframeChunks = 0;
-        long zeroReads = 0;
-        long waits = 0;
-        long readerOverruns = 0;
         var buffer = new byte[StreamBufferSize];
         try
         {
             while (_running && encoder.IsRunning)
             {
-                int read = encoder.ReadStream(buffer, ref readPos, ref aligned, minimumKeyframePos, out bool startsAtKeyframe);
+                int read = encoder.ReadStream(buffer, ref readPos, ref aligned, minimumKeyframePos, out _);
                 if (read == 0)
                 {
-                    zeroReads++;
                     await encoder.WaitForDataAsync(5).ConfigureAwait(false);
-                    waits++;
                     continue;
                 }
 
                 if (read < 0)
                 {
-                    readerOverruns++;
                     Log.Msg($"[MjpegServer] Stream {streamId} conn={connectionId} fell behind the ring; closing response for clean player reconnect. state=({encoder.GetReaderDiagnostics(readPos, aligned)})");
                     break;
                 }
 
-                long writeStart = Stopwatch.GetTimestamp();
-                long writeTicks;
-                using (DesktopBuddyMod.Perf.Time("stream_http_write"))
-                    await ctx.Response.OutputStream.WriteAsync(buffer, 0, read).ConfigureAwait(false);
-                writeTicks = Stopwatch.GetTimestamp() - writeStart;
-
-                writeOps++;
-                totalWriteTicks += writeTicks;
-                if (writeTicks > maxWriteTicks)
-                {
-                    maxWriteTicks = writeTicks;
-                    maxWriteBytes = read;
-                }
-
+                await ctx.Response.OutputStream.WriteAsync(buffer, 0, read).ConfigureAwait(false);
                 totalBytes += read;
-                readBytes += read;
-                chunks++;
-                if (startsAtKeyframe) keyframeChunks++;
-                if (TicksToMs(writeTicks) >= 25.0)
-                    slowWrites++;
-
-                long nowTicks = Stopwatch.GetTimestamp();
-                if (TicksToMs(nowTicks - lastSummaryTicks) >= 5000.0)
-                {
-                    double summaryMs = TicksToMs(nowTicks - summaryStartTicks);
-                    double streamMbps = summaryMs > 0 ? readBytes * 8.0 / summaryMs / 1000.0 : 0.0;
-                    Log.Msg($"[MjpegServer] Stream client summary stream={streamId} conn={connectionId} sent={totalBytes} readBytes={readBytes} streamMbps={streamMbps:F2} chunks={chunks} keyframeChunks={keyframeChunks} zeroReads={zeroReads} waits={waits} readerOverruns={readerOverruns} writeOps={writeOps} slowWrites={slowWrites} maxWrite={TicksToMs(maxWriteTicks):F2}ms/{maxWriteBytes}B avgWrite={(writeOps > 0 ? TicksToMs(totalWriteTicks) / writeOps : 0):F2}ms state=({encoder.GetReaderDiagnostics(readPos, aligned)})");
-                    lastSummaryTicks = nowTicks;
-                    summaryStartTicks = nowTicks;
-                    readBytes = 0;
-                    chunks = 0;
-                    keyframeChunks = 0;
-                    zeroReads = 0;
-                    waits = 0;
-                    readerOverruns = 0;
-                    writeOps = 0;
-                    slowWrites = 0;
-                    maxWriteTicks = 0;
-                    totalWriteTicks = 0;
-                    maxWriteBytes = 0;
-                }
             }
         }
         catch (Exception ex)
@@ -242,11 +186,6 @@ public sealed class MjpegServer : IDisposable
             try { ctx.Response.Close(); } catch (Exception ex) { Log.Msg($"[MjpegServer] Stream {streamId} response close error: {ex.Message}"); }
             Log.Msg($"[MjpegServer] Stream {streamId} conn={connectionId} ended, sent {totalBytes} bytes state=({encoder.GetReaderDiagnostics(readPos, aligned)})");
         }
-    }
-
-    private static double TicksToMs(long ticks)
-    {
-        return (double)ticks * 1000.0 / Stopwatch.Frequency;
     }
 
     private static string DescribeRequest(HttpListenerRequest request)

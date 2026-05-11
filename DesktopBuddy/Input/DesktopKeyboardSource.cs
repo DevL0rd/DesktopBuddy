@@ -20,7 +20,7 @@ public class DesktopKeyboardSource : Component, IFocusable
         if (!user.IsLocalUser)
             return;
 
-        KeyboardInputRouter.ClearFocused(this);
+        KeyboardInputRouter.UnregisterTarget(this, _keyboardTargetText);
         InputInterface.HideKeyboard(null);
         ReleaseModifiers();
     }
@@ -37,6 +37,7 @@ public class DesktopKeyboardSource : Component, IFocusable
             rotation = WorldManager.TransferRotation(rotation, World, Userspace.UserspaceWorld);
         }
 
+        KeyboardInputRouter.RegisterTarget(this, _keyboardTargetText);
         KeyboardInputRouter.SetFocused(this);
         InputInterface.ShowKeyboard(
             _keyboardTargetText,
@@ -54,7 +55,7 @@ public class DesktopKeyboardSource : Component, IFocusable
 
     public void CloseKeyboard()
     {
-        KeyboardInputRouter.ClearFocused(this);
+        KeyboardInputRouter.UnregisterTarget(this, _keyboardTargetText);
         InputInterface.HideKeyboard(null);
         ReleaseModifiers();
     }
@@ -70,6 +71,13 @@ public class DesktopKeyboardSource : Component, IFocusable
         _keyboardTargetText.SelectionStart.Value = -1;
         _keyboardTargetText.CaretColor.Value = colorX.Clear;
         _keyboardTargetText.SelectionColor.Value = colorX.Clear;
+    }
+
+    protected override void OnDispose()
+    {
+        KeyboardInputRouter.UnregisterTarget(this, _keyboardTargetText);
+        ReleaseModifiers();
+        base.OnDispose();
     }
 
     public void SendKey(Key key)

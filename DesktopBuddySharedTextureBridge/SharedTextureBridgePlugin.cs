@@ -2,7 +2,6 @@ using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
 using System;
-using System.Diagnostics;
 
 namespace DesktopBuddySharedTextureBridge
 {
@@ -12,7 +11,6 @@ namespace DesktopBuddySharedTextureBridge
         internal static ManualLogSource Log;
 
         private SharedTextureBridge _bridge;
-        private float _resourceLogTimer;
 
         private void Awake()
         {
@@ -49,12 +47,6 @@ namespace DesktopBuddySharedTextureBridge
             try
             {
                 _bridge?.Update();
-                _resourceLogTimer += UnityEngine.Time.unscaledDeltaTime;
-                if (_resourceLogTimer >= 2f)
-                {
-                    _resourceLogTimer = 0f;
-                    LogResources();
-                }
             }
             catch (Exception ex)
             {
@@ -100,23 +92,6 @@ namespace DesktopBuddySharedTextureBridge
         internal static void LogError(string message, Exception ex)
         {
             Log?.LogError($"{message}: {ex}");
-        }
-
-        private void LogResources()
-        {
-            try
-            {
-                var process = Process.GetCurrentProcess();
-                process.Refresh();
-                double privateMb = process.PrivateMemorySize64 / 1048576.0;
-                double workingMb = process.WorkingSet64 / 1048576.0;
-                double managedMb = GC.GetTotalMemory(false) / 1048576.0;
-                LogInfo($"[Resources] private={privateMb:F1}MB working={workingMb:F1}MB managed={managedMb:F1}MB activeSlots={_bridge?.ActiveSlotCount ?? 0} pendingBinds={_bridge?.PendingBindCount ?? 0} textureRequests={_bridge?.TotalTextureRequestCount ?? 0}");
-            }
-            catch (Exception ex)
-            {
-                LogWarning($"[Resources] Failed: {ex.Message}");
-            }
         }
     }
 }

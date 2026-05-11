@@ -48,6 +48,9 @@ internal static class Log
 
     internal static void MsgImmediate(string msg)
     {
+        if (msg != null && msg.StartsWith("[CleanupTrace]", StringComparison.Ordinal))
+            return;
+
         var ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
         try { ResoniteModLoader.ResoniteMod.Msg(msg); } catch { }
         WriteLine(ts, msg, false);

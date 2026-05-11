@@ -8,7 +8,8 @@ namespace DesktopBuddy;
 
 public sealed class PerfTimer : IDisposable
 {
-    private readonly Stopwatch _reportSw = Stopwatch.StartNew();
+    private const bool Enabled = false;
+    private readonly Stopwatch _reportSw = Enabled ? Stopwatch.StartNew() : null;
     private const int REPORT_INTERVAL_MS = 5_000;
 
     private readonly Dictionary<string, StepStats> _steps = new();
@@ -28,6 +29,8 @@ public sealed class PerfTimer : IDisposable
 
     public void Record(string step, long elapsedTicks)
     {
+        if (!Enabled) return;
+
         lock (_lock)
         {
             if (!_steps.TryGetValue(step, out var stats))
@@ -56,10 +59,12 @@ public sealed class PerfTimer : IDisposable
         Record(step, (long)(ms * Stopwatch.Frequency / 1000.0));
     }
 
-    public void IncrementFrames() => Interlocked.Increment(ref _totalFrames);
+    public void IncrementFrames() { if (Enabled) Interlocked.Increment(ref _totalFrames); }
 
     public void IncrementDropped(string reason = null)
     {
+        if (!Enabled) return;
+
         Interlocked.Increment(ref _droppedFrames);
         if (!string.IsNullOrEmpty(reason))
             IncrementCounter($"drop:{reason}");
@@ -67,6 +72,8 @@ public sealed class PerfTimer : IDisposable
 
     public void IncrementCounter(string counter, long delta = 1)
     {
+        if (!Enabled) return;
+
         lock (_lock)
         {
             if (_counters.TryGetValue(counter, out var value))
@@ -76,7 +83,7 @@ public sealed class PerfTimer : IDisposable
         }
     }
 
-    public TimedScope Time(string step) => new TimedScope(this, step);
+    public TimedScope Time(string step) => Enabled ? new TimedScope(this, step) : default;
 
     public readonly struct TimedScope : IDisposable
     {
@@ -88,11 +95,12 @@ public sealed class PerfTimer : IDisposable
         {
             _timer = timer;
             _step = step;
-            _startTicks = Stopwatch.GetTimestamp();
+            _startTicks = timer != null ? Stopwatch.GetTimestamp() : 0;
         }
 
         public void Dispose()
         {
+            if (_timer == null) return;
             long elapsed = Stopwatch.GetTimestamp() - _startTicks;
             _timer.Record(_step, elapsed);
         }

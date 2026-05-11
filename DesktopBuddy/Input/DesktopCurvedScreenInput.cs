@@ -6,6 +6,8 @@ namespace DesktopBuddy;
 
 public class DesktopCurvedScreenInput : Component, ITouchable
 {
+    private const float BoundsEpsilon = 0.001f;
+
     public CurvedPlaneMesh ScreenMesh;
     public Func<bool> ShouldIgnore;
     public Action<Component, float2> Pressed;
@@ -75,6 +77,12 @@ public class DesktopCurvedScreenInput : Component, ITouchable
         }
 
         float v = 0.5f - localPoint.y / size.y;
+        if (u < -BoundsEpsilon || u > 1f + BoundsEpsilon ||
+            v < -BoundsEpsilon || v > 1f + BoundsEpsilon)
+        {
+            return false;
+        }
+
         point = new float2(MathX.Clamp01(u), MathX.Clamp01(v));
         return true;
     }

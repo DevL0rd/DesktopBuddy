@@ -23,11 +23,15 @@ if !RESTART! equ 1 (
     call :KillProcessTree Resonite.exe
     call :KillProcessTree Renderite.Host.exe
     call :KillProcessTree Renderite.Renderer.exe
+    call :KillDesktopBuddyCloudflared
     call :WaitForExit Resonite.exe Renderite.Host.exe Renderite.Renderer.exe
+    call :KillDesktopBuddyCloudflared
+    call :WaitForDesktopBuddyCloudflared
     if !ERRORLEVEL! neq 0 (
         echo FAILED TO STOP RESONITE - not building or restarting
         exit /b !ERRORLEVEL!
     )
+    ping -n 3 127.0.0.1 >nul
 )
 
 REM Build the mod (game-side)
@@ -55,6 +59,21 @@ if !RESTART! equ 1 (
 )
 
 ENDLOCAL
+exit /b 0
+
+:KillDesktopBuddyCloudflared
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$procs = Get-CimInstance Win32_Process -Filter \"name='cloudflared.exe'\" | Where-Object { ($_.ExecutablePath -like '*\DesktopBuddyNative\cloudflared.exe') -or ($_.CommandLine -like '*--url http://localhost:48080*') }; " ^
+  "foreach ($p in $procs) { Write-Host ('Stopping DesktopBuddy cloudflared.exe PID ' + $p.ProcessId); Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }"
+exit /b 0
+
+:WaitForDesktopBuddyCloudflared
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$filter = { ($_.ExecutablePath -like '*\DesktopBuddyNative\cloudflared.exe') -or ($_.CommandLine -like '*--url http://localhost:48080*') }; " ^
+  "$deadline = (Get-Date).AddSeconds(20); " ^
+  "do { $procs = @(Get-CimInstance Win32_Process -Filter \"name='cloudflared.exe'\" | Where-Object $filter); if ($procs.Count -eq 0) { exit 0 }; foreach ($p in $procs) { Write-Host ('Waiting: stopping DesktopBuddy cloudflared.exe PID ' + $p.ProcessId); Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); " ^
+  "$procs = @(Get-CimInstance Win32_Process -Filter \"name='cloudflared.exe'\" | Where-Object $filter); if ($procs.Count -eq 0) { exit 0 }; Write-Host 'WARNING: DesktopBuddy cloudflared.exe is still running after forced shutdown:'; $procs | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine | Format-List; exit 1"
+if !ERRORLEVEL! neq 0 exit /b !ERRORLEVEL!
 exit /b 0
 
 :KillProcessTree

@@ -41,10 +41,16 @@ internal static class SoftCamInterop
     internal static extern IntPtr scCreateCamera(int width, int height, float framerate);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr scCreateCameraEx(int width, int height, float framerate, int pixelFormat, int frameFlags);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void scDeleteCamera(IntPtr camera);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void scSendFrame(IntPtr camera, IntPtr imageBits);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void scSendFrameEx(IntPtr camera, IntPtr imageBits, int sourceStride);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.Bool)]

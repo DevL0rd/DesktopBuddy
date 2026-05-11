@@ -13,6 +13,12 @@ public static class WindowInput
     private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
     [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
+
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
@@ -66,6 +72,7 @@ public static class WindowInput
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_SHOWWINDOW = 0x0040;
+    private const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
 
     private delegate void WinEventDelegate(
         IntPtr hWinEventHook,
@@ -187,6 +194,9 @@ public static class WindowInput
     private struct RECT
     {
         public int Left, Top, Right, Bottom;
+
+        public int Width => Right - Left;
+        public int Height => Bottom - Top;
     }
 
     private static bool _touchInitialized;
@@ -284,25 +294,64 @@ public static class WindowInput
         public string szDevice;
     }
 
+    private static int NormalizedToPixel(float value, int size)
+    {
+        if (size <= 1 || float.IsNaN(value) || float.IsInfinity(value))
+            return 0;
+
+        int max = size - 1;
+        float scaled = value * size;
+        if (scaled <= 0f) return 0;
+        if (scaled >= max) return max;
+        return (int)scaled;
+    }
+
+    private static bool TryGetWindowCaptureBounds(IntPtr hWnd, out RECT bounds)
+    {
+        bounds = default;
+        if (hWnd == IntPtr.Zero)
+            return false;
+
+        if (DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out bounds, Marshal.SizeOf<RECT>()) == 0 &&
+            bounds.Width > 0 && bounds.Height > 0)
+        {
+            return true;
+        }
+
+        return GetWindowRect(hWnd, out bounds) && bounds.Width > 0 && bounds.Height > 0;
+    }
+
     private static POINT UvToScreen(IntPtr hWnd, float u, float v, int clientW, int clientH, IntPtr monitorHandle = default)
     {
-        int px = (int)(u * clientW);
-        int py = (int)(v * clientH);
-        var pt = new POINT { X = px, Y = py };
+        int px = NormalizedToPixel(u, clientW);
+        int py = NormalizedToPixel(v, clientH);
         if (hWnd != IntPtr.Zero)
         {
+            if (TryGetWindowCaptureBounds(hWnd, out var bounds))
+            {
+                return new POINT
+                {
+                    X = bounds.Left + NormalizedToPixel(u, bounds.Width),
+                    Y = bounds.Top + NormalizedToPixel(v, bounds.Height)
+                };
+            }
+
+            var pt = new POINT { X = px, Y = py };
             ClientToScreen(hWnd, ref pt);
+            return pt;
         }
-        else if (monitorHandle != IntPtr.Zero)
+
+        var monitorPoint = new POINT { X = px, Y = py };
+        if (monitorHandle != IntPtr.Zero)
         {
             var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
             if (GetMonitorInfo(monitorHandle, ref mi))
             {
-                pt.X += mi.rcMonitor.Left;
-                pt.Y += mi.rcMonitor.Top;
+                monitorPoint.X += mi.rcMonitor.Left;
+                monitorPoint.Y += mi.rcMonitor.Top;
             }
         }
-        return pt;
+        return monitorPoint;
     }
 
     private static IntPtr FocusRoot(IntPtr hWnd)
