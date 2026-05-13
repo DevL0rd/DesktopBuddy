@@ -104,12 +104,15 @@ public partial class DesktopBuddyMod
 
     private static void UpdateSessionTunnelUrls()
     {
-        if (TunnelUrl == null) return;
+        if (TunnelUrl == null || !UseCloudflareTunnel) return;
         foreach (var session in ActiveSessions)
         {
             if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId > 0)
             {
-                var newUrl = new Uri($"{TunnelUrl}/stream/{session.StreamId}");
+                var newUrl = GetBuiltInStreamUrl(session.StreamId);
+                if (newUrl == null)
+                    continue;
+                var capturedSession = session;
                 var vtp = session.VideoTexture;
                 vtp.World.RunInUpdates(0, () =>
                 {
@@ -118,7 +121,7 @@ public partial class DesktopBuddyMod
                         if (vtp != null && !vtp.IsDestroyed)
                         {
                             Msg($"[Tunnel] Updating session VTP: {vtp.URL.Value} -> {newUrl}");
-                            vtp.URL.Value = newUrl;
+                            SetRemoteStreamUrl(capturedSession, newUrl, $"tunnel refresh streamId={capturedSession.StreamId}");
                         }
                     }
                     catch (Exception ex)
@@ -156,6 +159,12 @@ public partial class DesktopBuddyMod
     {
         try
         {
+            if (!UseCloudflareTunnel)
+            {
+                Msg("[Tunnel] Cloudflare disabled by network mode");
+                return;
+            }
+
             if (_cfPath == null)
             {
                 _cfPath = FindCloudflared();
@@ -200,7 +209,6 @@ public partial class DesktopBuddyMod
             proc.ErrorDataReceived += (s, e) =>
             {
                 if (e.Data == null) return;
-                Msg($"[Tunnel/stderr] {e.Data}");
                 if (e.Data.Contains("https://") && e.Data.Contains(".trycloudflare.com"))
                 {
                     int idx = e.Data.IndexOf("https://");
@@ -210,16 +218,23 @@ public partial class DesktopBuddyMod
                     try { url = new Uri(url).GetLeftPart(UriPartial.Authority); } catch (Exception ex) { Msg($"[Tunnel] URL parse error: {ex.Message}"); }
                     string oldUrl = TunnelUrl;
                     TunnelUrl = url;
-                    Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
                     if (oldUrl != url)
+                    {
+                        Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
                         UpdateSessionTunnelUrls();
+                    }
+                }
+                else if (ShouldLogCloudflaredLine(e.Data))
+                {
+                    Msg($"[Tunnel] {e.Data}");
                 }
                 OnTunnelError(e.Data);
             };
             proc.OutputDataReceived += (s, e) =>
             {
                 if (e.Data == null) return;
-                Msg($"[Tunnel/stdout] {e.Data}");
+                if (ShouldLogCloudflaredLine(e.Data))
+                    Msg($"[Tunnel] {e.Data}");
             };
             proc.BeginErrorReadLine();
             proc.BeginOutputReadLine();
@@ -228,6 +243,26 @@ public partial class DesktopBuddyMod
         {
             Msg($"[Tunnel] Error: {ex.Message}");
         }
+    }
+
+    private static bool ShouldLogCloudflaredLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+        if (line.Contains(" INF ", StringComparison.Ordinal))
+            return false;
+        if (line.Contains("Configuration file NUL was empty", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (line.Contains("Cannot determine default configuration path", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (line.Contains("stream ", StringComparison.OrdinalIgnoreCase) && line.Contains("canceled by remote", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (line.Contains("Request failed", StringComparison.OrdinalIgnoreCase) && line.Contains("canceled by remote", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return line.Contains(" ERR ", StringComparison.Ordinal) ||
+               line.Contains(" WRN ", StringComparison.Ordinal) ||
+               line.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+               line.Contains("failed", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AttachTunnelToKillJob(Process proc)

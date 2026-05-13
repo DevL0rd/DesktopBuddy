@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using FFmpeg.AutoGen;
@@ -62,7 +63,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private bool _needsGpuScale;
     private IntPtr _vpDevice, _vpContext, _vpEnum, _vpProcessor;
     private IntPtr _vpOutputView, _vpOutputTexture;
-    private IntPtr _vpInputView, _vpInputViewTex;
+    private IntPtr _vpInputView, _vpInputTexture;
     private long _startTicks;
     private long _lastVideoPts = -1;
     private long _lastKeyframeRingPos = -1;
@@ -82,6 +83,8 @@ public sealed unsafe class FfmpegEncoder : IDisposable
     private int _keepAliveFps = 60;
     private long _readerLiveCatchupEvents;
     private long _readerLastCatchupLogTicks;
+    private long _audioLiveCatchupEvents;
+    private long _audioLastCatchupLogTicks;
 
     public bool IsInitialized => _initialized;
     public bool IsRunning => _initialized;
@@ -339,7 +342,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
                 _codecCtx->height = (int)_height;
                 _codecCtx->time_base = new AVRational { num = 1, den = 90000 };
                 _codecCtx->framerate = new AVRational { num = streamFps, den = 1 };
-                long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
+                long bitrate = Math.Max(1, DesktopBuddyMod.RuntimeBitrateMbps) * 1_000_000L;
                 bool isAmf = name.Contains("amf");
                 long peakBitrate = (long)(bitrate * 1.2);
                 int vbvBuffer = (int)Math.Clamp(bitrate / 4, 500_000L, int.MaxValue);
@@ -462,7 +465,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         encoderWidth = sourceWidth & ~1u;
         encoderHeight = sourceHeight & ~1u;
 
-        uint maxResolution = (uint)Math.Clamp(DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.MaxStreamResolution) ?? 2560, 128, 8192) & ~1u;
+        uint maxResolution = (uint)DesktopBuddyMod.RuntimeMaxStreamResolution & ~1u;
         uint longestEdge = Math.Max(encoderWidth, encoderHeight);
 
         if (longestEdge <= maxResolution)
@@ -476,12 +479,29 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     private static string[] GetEncoderPreference(uint adapterVendorId)
     {
-        return adapterVendorId switch
+        string configured = DesktopBuddyMod.NormalizeEncoderPreference(
+            DesktopBuddyMod.RuntimeEncoderPreference);
+
+        if (configured == "libx264" || configured == "libx265")
         {
-            0x10DE => new[] { "hevc_nvenc", "h264_nvenc" },
-            0x1002 => new[] { "hevc_amf", "h264_amf" },
-            _ => new[] { "hevc_nvenc", "hevc_amf", "h264_nvenc", "h264_amf" }
+            Log.Msg($"[FfmpegEnc] Software encoder '{configured}' is configured, but CPU readback encoding is not enabled in this build; falling back to automatic GPU encoders");
+            configured = "auto";
+        }
+
+        string[] automatic = adapterVendorId switch
+        {
+            0x10DE => new[] { "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv", "hevc_amf", "h264_amf" },
+            0x1002 => new[] { "hevc_amf", "h264_amf", "hevc_qsv", "h264_qsv", "hevc_nvenc", "h264_nvenc" },
+            0x8086 => new[] { "hevc_qsv", "h264_qsv", "hevc_nvenc", "h264_nvenc", "hevc_amf", "h264_amf" },
+            _ => new[] { "hevc_qsv", "h264_qsv", "hevc_nvenc", "hevc_amf", "h264_nvenc", "h264_amf" }
         };
+
+        if (configured == "auto")
+            return automatic;
+
+        return new[] { configured }
+            .Concat(automatic.Where(name => !string.Equals(name, configured, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
     }
 
     private void SetupHardwareContext(IntPtr d3dDevice, AVPixelFormat swFormat)
@@ -724,15 +744,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     public void QueueFrame(IntPtr srcTexture, uint width, uint height)
     {
-        if (_disposed || _initFailed || !_initialized) return;
-        if ((width & ~1u) != _sourceWidth || (height & ~1u) != _sourceHeight)
+        if (_disposed || _initFailed) return;
+        if (_initialized && ((width & ~1u) != _sourceWidth || (height & ~1u) != _sourceHeight))
         {
             if (_totalFrames == 0)
                 Log.Msg($"[FfmpegEnc:{_streamId}] Skipping frame: size mismatch source={_sourceWidth}x{_sourceHeight} encode={_width}x{_height} frame={width}x{height}");
             return;
         }
 
-        if (_startTicks != 0)
+        if (_initialized && _startTicks != 0)
         {
             double elapsedSec = (double)(System.Diagnostics.Stopwatch.GetTimestamp() - _startTicks) / System.Diagnostics.Stopwatch.Frequency;
             long videoPts = (long)(elapsedSec * 90000);
@@ -845,7 +865,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     private static long GetMaxHttpLiveBacklogBytes()
     {
-        long bitrate = Math.Max(1, DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.Bitrate) ?? 10) * 1_000_000L;
+        long bitrate = Math.Max(1, DesktopBuddyMod.RuntimeBitrateMbps) * 1_000_000L;
         long halfSecondBytes = bitrate / 16;
         return Math.Clamp(halfSecondBytes, 256 * 1024L, 2 * 1024 * 1024L);
     }
@@ -855,15 +875,15 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         long events = Interlocked.Increment(ref _readerLiveCatchupEvents);
         long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         long lastTicks = Interlocked.Read(ref _readerLastCatchupLogTicks);
-        bool shouldLog = events <= 3 ||
+        bool shouldLog = events == 1 ||
             lastTicks == 0 ||
-            (double)(nowTicks - lastTicks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency >= 2000.0;
+            (double)(nowTicks - lastTicks) / System.Diagnostics.Stopwatch.Frequency >= 30.0;
 
         if (!shouldLog)
             return;
 
         Interlocked.Exchange(ref _readerLastCatchupLogTicks, nowTicks);
-        Log.Msg($"[FfmpegEnc:{_streamId}] Reader live catch-up: dropped={droppedBytes}B remaining={remainingBytes}B max={maxBacklogBytes}B readPos={readPos} events={events}");
+        Log.Msg($"[FfmpegEnc:{_streamId}] Reader live catch-up summary: dropped={droppedBytes}B remaining={remainingBytes}B max={maxBacklogBytes}B events={events}");
     }
 
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height, bool keepAliveFrame)
@@ -881,15 +901,24 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
             if (_needsVideoProcessor || _needsGpuScale)
             {
+                bool converted = false;
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
                     CopyWithD3dContextLock(() =>
                     {
-                        VideoProcessorConvert(srcTexture);
-                        IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
-                        int dstIndex = (int)_hwFrame->data[1];
-                        CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, _vpOutputTexture, (int)_width, (int)_height);
+                        converted = VideoProcessorConvert(srcTexture);
+                        if (converted)
+                        {
+                            IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
+                            int dstIndex = (int)_hwFrame->data[1];
+                            CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, _vpOutputTexture, (int)_width, (int)_height);
+                        }
                     });
+                }
+                if (!converted)
+                {
+                    ffmpeg.av_frame_unref(_hwFrame);
+                    return;
                 }
             }
             else
@@ -917,7 +946,11 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _hwFrame->pts = videoPts;
             _hwFrame->width = (int)_width;
             _hwFrame->height = (int)_height;
-            _hwFrame->pict_type = AVPictureType.AV_PICTURE_TYPE_NONE;
+            _hwFrame->pict_type = _totalFrames == 0
+                ? AVPictureType.AV_PICTURE_TYPE_I
+                : AVPictureType.AV_PICTURE_TYPE_NONE;
+            if (_totalFrames == 0)
+                _hwFrame->flags |= ffmpeg.AV_FRAME_FLAG_KEY;
 
             using (DesktopBuddyMod.Perf.Time("ffmpeg_encode"))
             {
@@ -985,7 +1018,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
 
     private static int GetStreamFps()
     {
-        int configured = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.StreamFps) ?? 60;
+        int configured = DesktopBuddyMod.RuntimeStreamFps;
         return Math.Clamp(configured, 1, 240);
     }
 
@@ -1023,7 +1056,7 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             _audioReadPos = writePos - targetLiveSamples;
             _audioReadPos -= _audioReadPos % samplesPerFrame;
             available = writePos - _audioReadPos;
-            Log.Msg($"[FfmpegEnc:{_streamId}] Audio live catch-up: dropped {dropped / (double)(48000 * channels):F3}s backlog, remaining {available / (double)(48000 * channels):F3}s");
+            RecordAudioLiveCatchup(dropped, available, channels);
         }
 
         int read = _audioCapture.ReadSamples(_audioScratch, maxReadSamples, ref _audioReadPos);
@@ -1092,6 +1125,22 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         int unconsumed = read - offset;
         if (unconsumed > 0)
             _audioReadPos -= unconsumed;
+    }
+
+    private void RecordAudioLiveCatchup(long droppedSamples, long remainingSamples, int channels)
+    {
+        long events = Interlocked.Increment(ref _audioLiveCatchupEvents);
+        long nowTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long lastTicks = Interlocked.Read(ref _audioLastCatchupLogTicks);
+        bool shouldLog = events == 1 ||
+            lastTicks == 0 ||
+            (double)(nowTicks - lastTicks) / System.Diagnostics.Stopwatch.Frequency >= 30.0;
+
+        if (!shouldLog)
+            return;
+
+        Interlocked.Exchange(ref _audioLastCatchupLogTicks, nowTicks);
+        Log.Msg($"[FfmpegEnc:{_streamId}] Audio live catch-up summary: dropped {droppedSamples / (double)(48000 * channels):F3}s, remaining {remainingSamples / (double)(48000 * channels):F3}s, events={events}");
     }
 
     private static void CopyTextureToFrame(IntPtr deviceContext, IntPtr dstTexture, int dstArrayIndex, IntPtr srcTexture, int width, int height)
@@ -1236,6 +1285,18 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         };
         var devVt = *(IntPtr**)d3dDevice;
         var createTexFn = (delegate* unmanaged[Stdcall]<IntPtr, TEX2D_DESC*, IntPtr, out IntPtr, int>)devVt[5];
+        var inputDesc = new TEX2D_DESC
+        {
+            Width = inputW, Height = inputH, MipLevels = 1, ArraySize = 1,
+            Format = 87,
+            SampleCount = 1, SampleQuality = 0,
+            Usage = 0,
+            BindFlags = 0x20,
+            CPUAccessFlags = 0, MiscFlags = 0
+        };
+        hr = createTexFn(d3dDevice, &inputDesc, IntPtr.Zero, out _vpInputTexture);
+        if (hr < 0) throw new Exception($"CreateTexture2D video processor input failed hr=0x{hr:X8}");
+
         hr = createTexFn(d3dDevice, &outputDesc, IntPtr.Zero, out _vpOutputTexture);
         if (hr < 0) throw new Exception($"CreateTexture2D video processor output failed hr=0x{hr:X8}");
 
@@ -1259,17 +1320,26 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         Log.Msg($"[FfmpegEnc:{_streamId}] Video Processor ready: BGRA {inputW}x{inputH} -> {(outputNv12 ? "NV12" : "BGRA")} {outputW}x{outputH}, inCs=0, outCs=0x{outCs.Value:X}");
     }
 
-    private void VideoProcessorConvert(IntPtr bgraTexture)
+    private bool VideoProcessorConvert(IntPtr bgraTexture)
     {
-        if (_vpInputView == IntPtr.Zero || _vpInputViewTex != bgraTexture)
+        if (_vpInputTexture == IntPtr.Zero)
+            return false;
+
+        CopyTextureToFrame(_deviceContext, _vpInputTexture, 0, bgraTexture, (int)_sourceWidth, (int)_sourceHeight);
+
+        if (_vpInputView == IntPtr.Zero)
         {
             if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; }
             var ivDesc = new VP_INPUT_VIEW_DESC { FourCC = 0, ViewDimension = 1, MipSlice = 0, ArraySlice = 0 };
             var vpDevVt = *(IntPtr**)_vpDevice;
             var createIVFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, VP_INPUT_VIEW_DESC*, out IntPtr, int>)vpDevVt[8];
-            int hr = createIVFn(_vpDevice, bgraTexture, _vpEnum, &ivDesc, out _vpInputView);
-            if (hr < 0) { Log.Msg($"[FfmpegEnc:{_streamId}] CreateVideoProcessorInputView failed hr=0x{hr:X8}"); _vpInputView = IntPtr.Zero; return; }
-            _vpInputViewTex = bgraTexture;
+            int hr = createIVFn(_vpDevice, _vpInputTexture, _vpEnum, &ivDesc, out _vpInputView);
+            if (hr < 0)
+            {
+                Log.Msg($"[FfmpegEnc:{_streamId}] CreateVideoProcessorInputView failed hr=0x{hr:X8}");
+                _vpInputView = IntPtr.Zero;
+                return false;
+            }
         }
 
         var stream = new VP_STREAM
@@ -1282,7 +1352,12 @@ public sealed unsafe class FfmpegEncoder : IDisposable
         var vpCtxVt = *(IntPtr**)_vpContext;
         var bltFn = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr, uint, uint, VP_STREAM*, int>)vpCtxVt[53];
         int bltHr = bltFn(_vpContext, _vpProcessor, _vpOutputView, 0, 1, &stream);
-        if (bltHr < 0) Log.Msg($"[FfmpegEnc:{_streamId}] VideoProcessorBlt failed hr=0x{bltHr:X8}");
+        if (bltHr < 0)
+        {
+            Log.Msg($"[FfmpegEnc:{_streamId}] VideoProcessorBlt failed hr=0x{bltHr:X8}");
+            return false;
+        }
+        return true;
     }
 
     private static string FfmpegError(int error)
@@ -1357,8 +1432,9 @@ public sealed unsafe class FfmpegEncoder : IDisposable
             Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose VP START stream={_streamId}");
             try
             {
-                if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; _vpInputViewTex = IntPtr.Zero; }
+                if (_vpInputView != IntPtr.Zero) { Marshal.Release(_vpInputView); _vpInputView = IntPtr.Zero; }
                 if (_vpOutputView != IntPtr.Zero) { Marshal.Release(_vpOutputView); _vpOutputView = IntPtr.Zero; }
+                if (_vpInputTexture != IntPtr.Zero) { Marshal.Release(_vpInputTexture); _vpInputTexture = IntPtr.Zero; }
                 if (_vpOutputTexture != IntPtr.Zero) { Marshal.Release(_vpOutputTexture); _vpOutputTexture = IntPtr.Zero; }
                 if (_vpProcessor != IntPtr.Zero) { Marshal.Release(_vpProcessor); _vpProcessor = IntPtr.Zero; }
                 if (_vpEnum != IntPtr.Zero) { Marshal.Release(_vpEnum); _vpEnum = IntPtr.Zero; }

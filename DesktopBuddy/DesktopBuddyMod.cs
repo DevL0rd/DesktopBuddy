@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Globalization;
@@ -21,12 +24,17 @@ public partial class DesktopBuddyMod : ResoniteMod
 {
     public override string Name => "DesktopBuddy";
     public override string Author => "DevL0rd";
-    public override string Version => "1.0.11";
+    internal const string DesktopBuddyVersion = "1.0.12";
+    public override string Version => DesktopBuddyVersion;
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
-    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 11);
+    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 12);
     internal static ModConfiguration? Config;
     private static bool _configResetForNewDefaults;
+    private static int _runtimeBitrateMbps = 10;
+    private static int _runtimeStreamFps = 60;
+    private static int _runtimeMaxStreamResolution = 2560;
+    private static string _runtimeEncoderPreference = "auto";
 
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> SpatialAudioEnabled =
@@ -49,18 +57,6 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("maxStreamResolution", "Maximum encoded stream long-edge resolution. 2560 is 2K/QHD.", () => 2560);
 
     [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> LibVlcNetworkCachingMs =
-        new("libVlcNetworkCachingMs", "libVLC network cache in milliseconds for DesktopBuddy streams.", () => 300);
-
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> LibVlcLiveCachingMs =
-        new("libVlcLiveCachingMs", "libVLC live cache in milliseconds for DesktopBuddy streams.", () => 300);
-
-    [AutoRegisterConfigKey]
-    internal static readonly ModConfigurationKey<int> LibVlcFileCachingMs =
-        new("libVlcFileCachingMs", "libVLC file cache in milliseconds for DesktopBuddy streams.", () => 300);
-
-    [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<bool> UseMediaMtx =
         new("useMediaMtx", "Use an external MediaMTX server for streaming instead of the built-in Cloudflare HTTP stream.", () => false);
 
@@ -77,8 +73,56 @@ public partial class DesktopBuddyMod : ResoniteMod
         new("mediaMtxStreamName", "MediaMTX stream name (path component of the RTSP URL). Leave blank to auto-generate a random name per session.", () => "");
 
     [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> StreamNetworkMode =
+        new("streamNetworkMode", "Built-in stream access mode: cloudflare or port_forward.", () => "cloudflare");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PortForwardHostMode =
+        new("portForwardHostMode", "Port-forward host mode: auto or manual.", () => "auto");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PortForwardAutoIpMode =
+        new("portForwardAutoIpMode", "Auto port-forward host IP source. External public IPv4 is always used.", () => "external");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PortForwardHost =
+        new("portForwardHost", "Manual public hostname or IP for port-forwarded built-in streams.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> PortForwardUseNat =
+        new("portForwardUseNat", "Automatically create a UPnP/NAT TCP port mapping for the built-in stream port.", () => false);
+
+    [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<string> PanelCurvePreferences =
         new("panelCurvePreferences", "Saved DesktopBuddy panel curve values, keyed by application executable path or shared desktop capture.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> ViewerCullingMode =
+        new("viewerCullingMode", "Viewer culling mode for remote streams: frustum or distance.", () => "frustum");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> ViewerCullingPreview =
+        new("viewerCullingPreview", "Show the viewer culling preview guide on DesktopBuddy panels.", () => false);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> ViewerFrustumWidth =
+        new("viewerFrustumWidth", "Viewer frustum culling preview angle in degrees.", () => 120.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> ViewerFrustumDepth =
+        new("viewerFrustumDepth", "Viewer frustum culling depth in meters.", () => 3.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> ViewerDistance =
+        new("viewerDistance", "Viewer distance culling radius in meters.", () => 3.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> EncoderPreference =
+        new("encoderPreference", "Explicit stream encoder preference, or auto.", () => "auto");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> PreferredGpuLuid =
+        new("preferredGpuLuid", "Preferred DXGI adapter LUID for DesktopBuddy capture/encoding, or blank for auto.", () => "");
 
     internal static bool IsMediaMtxEnabled =>
         Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
@@ -209,6 +253,73 @@ public partial class DesktopBuddyMod : ResoniteMod
     private static volatile bool _tunnelRestarting;
     internal static readonly PerfTimer Perf = new();
 
+    internal static string NormalizeStreamNetworkMode(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "_");
+        return value == "port_forward" ? "port_forward" : "cloudflare";
+    }
+
+    internal static string NormalizePortForwardHostMode(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant();
+        return value == "manual" ? "manual" : "auto";
+    }
+
+    internal static string NormalizePortForwardAutoIpMode(string value)
+    {
+        return "external";
+    }
+
+    internal static bool UseCloudflareTunnel =>
+        Config == null || NormalizeStreamNetworkMode(Config.GetValue(StreamNetworkMode)) == "cloudflare";
+
+    internal static Uri GetBuiltInStreamUrl(int streamId)
+    {
+        string baseUrl = GetBuiltInStreamBaseUrl();
+        return string.IsNullOrWhiteSpace(baseUrl) ? null : new Uri($"{baseUrl}/stream/{streamId}");
+    }
+
+    internal static string GetBuiltInStreamBaseUrl()
+    {
+        if (NormalizeStreamNetworkMode(Config?.GetValue(StreamNetworkMode)) == "cloudflare")
+            return TunnelUrl;
+
+        string host = ResolvePortForwardHost();
+        return string.IsNullOrWhiteSpace(host) ? null : $"http://{host}:{STREAM_PORT}";
+    }
+
+    internal static string ResolvePortForwardHost()
+    {
+        if (Config != null && NormalizePortForwardHostMode(Config.GetValue(PortForwardHostMode)) == "manual")
+            return Config.GetValue(PortForwardHost)?.Trim();
+
+        return GetAutoExternalIPv4Address();
+    }
+
+    internal static string GetBestLocalIPv4Address()
+    {
+        try
+        {
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                    continue;
+
+                foreach (var address in nic.GetIPProperties().UnicastAddresses)
+                {
+                    if (address.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address.Address))
+                        return address.Address.ToString();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Network] Failed to auto-detect local IP: {ex.Message}");
+        }
+
+        return "";
+    }
+
     internal static SharedTextureBridgeChannel? TextureBridgeChannel;
     private static bool _textureBridgeOpened;
 
@@ -228,7 +339,14 @@ public partial class DesktopBuddyMod : ResoniteMod
     internal enum WindowEventType { NewTopLevelWindow, TitleChanged }
 
     private static string _latestVersion;
+    private static string _remoteVersion;
+    private static string _remoteSha;
+    private static string _remoteChangelog;
+    private static string _updateCheckError;
+    private static DateTime _lastUpdateCheckUtc;
+    private static volatile bool _updateCheckInProgress;
     private static bool _updateShown;
+    private static volatile bool _settingsConfigDirty;
 
     public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
     {
@@ -291,7 +409,13 @@ public partial class DesktopBuddyMod : ResoniteMod
                 StreamServer = new MjpegServer(STREAM_PORT);
                 StreamServer.Start();
                 Msg($"Stream server started on port {STREAM_PORT}");
-                System.Threading.Tasks.Task.Run(() => StartTunnel());
+                if (UseCloudflareTunnel)
+                    System.Threading.Tasks.Task.Run(() => StartTunnel());
+                else
+                {
+                    Msg($"[PortForward] Built-in stream available at {GetBuiltInStreamBaseUrl() ?? "(no host configured)"}");
+                    ApplyPortForwardNatMapping();
+                }
             }
             catch (Exception ex)
             {
@@ -309,6 +433,7 @@ public partial class DesktopBuddyMod : ResoniteMod
                     AudioRouter.ResetProcessToDefault(session.ProcessId);
             }
             KillTunnel();
+            RemovePortForwardNatMapping();
             try { StreamServer?.Dispose(); } catch { }
         };
 
@@ -355,7 +480,7 @@ public partial class DesktopBuddyMod : ResoniteMod
             if (_configResetForNewDefaults)
             {
                 ApplyFreshConfigDefaults();
-                Msg("[Config] Applied fresh defaults: spatialAudio=false bitrate=10 streamFps=60 maxStreamResolution=2560 libVLC cache=300ms");
+                Msg("[Config] Applied fresh defaults: spatialAudio=false bitrate=10 streamFps=60 maxStreamResolution=2560 network=cloudflare");
             }
             else
             {
@@ -367,22 +492,27 @@ public partial class DesktopBuddyMod : ResoniteMod
 
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
             Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
-            int networkCacheMs = Config.GetValue(LibVlcNetworkCachingMs);
-            int liveCacheMs = Config.GetValue(LibVlcLiveCachingMs);
-            int fileCacheMs = Config.GetValue(LibVlcFileCachingMs);
-            if (networkCacheMs == 50 || networkCacheMs == 200) networkCacheMs = 300;
-            if (liveCacheMs == 50 || liveCacheMs == 200) liveCacheMs = 300;
-            if (fileCacheMs == 50 || fileCacheMs == 100) fileCacheMs = 300;
-            Config.Set(LibVlcNetworkCachingMs, Math.Clamp(networkCacheMs, 0, 5000));
-            Config.Set(LibVlcLiveCachingMs, Math.Clamp(liveCacheMs, 0, 5000));
-            Config.Set(LibVlcFileCachingMs, Math.Clamp(fileCacheMs, 0, 5000));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
             Config.Set(MediaMtxStreamName, Config.GetValue(MediaMtxStreamName));
+            Config.Set(StreamNetworkMode, NormalizeStreamNetworkMode(Config.GetValue(StreamNetworkMode)));
+            Config.Set(PortForwardHostMode, NormalizePortForwardHostMode(Config.GetValue(PortForwardHostMode)));
+            Config.Set(PortForwardAutoIpMode, NormalizePortForwardAutoIpMode(Config.GetValue(PortForwardAutoIpMode)));
+            Config.Set(PortForwardHost, Config.GetValue(PortForwardHost)?.Trim() ?? "");
+            Config.Set(PortForwardUseNat, Config.GetValue(PortForwardUseNat));
             Config.Set(PanelCurvePreferences, Config.GetValue(PanelCurvePreferences) ?? "");
+            Config.Set(ViewerCullingMode, NormalizeViewerCullingMode(Config.GetValue(ViewerCullingMode)));
+            Config.Set(ViewerCullingPreview, Config.GetValue(ViewerCullingPreview));
+            float viewerFrustumAngle = Config.GetValue(ViewerFrustumWidth);
+            Config.Set(ViewerFrustumWidth, viewerFrustumAngle < 5f ? 120f : Math.Clamp(viewerFrustumAngle, 30f, 170f));
+            Config.Set(ViewerFrustumDepth, Math.Clamp(Config.GetValue(ViewerFrustumDepth), 1f, 10f));
+            Config.Set(ViewerDistance, Math.Clamp(Config.GetValue(ViewerDistance), 1f, 10f));
+            Config.Set(EncoderPreference, NormalizeEncoderPreference(Config.GetValue(EncoderPreference)));
+            Config.Set(PreferredGpuLuid, Config.GetValue(PreferredGpuLuid)?.Trim() ?? "");
             Config.Save();
             _configResetForNewDefaults = false;
+            RefreshRuntimeStreamSettingsFromConfig();
         }
         catch (Exception ex)
         {
@@ -397,14 +527,105 @@ public partial class DesktopBuddyMod : ResoniteMod
         Config.Set(Bitrate, 10);
         Config.Set(StreamFps, 60);
         Config.Set(MaxStreamResolution, 2560);
-        Config.Set(LibVlcNetworkCachingMs, 300);
-        Config.Set(LibVlcLiveCachingMs, 300);
-        Config.Set(LibVlcFileCachingMs, 300);
         Config.Set(UseMediaMtx, false);
         Config.Set(MediaMtxHost, "");
         Config.Set(MediaMtxPort, 8554);
         Config.Set(MediaMtxStreamName, "");
+        Config.Set(StreamNetworkMode, "cloudflare");
+        Config.Set(PortForwardHostMode, "auto");
+        Config.Set(PortForwardAutoIpMode, "external");
+        Config.Set(PortForwardHost, "");
+        Config.Set(PortForwardUseNat, false);
         Config.Set(PanelCurvePreferences, "");
+        Config.Set(ViewerCullingMode, "frustum");
+        Config.Set(ViewerCullingPreview, false);
+        Config.Set(ViewerFrustumWidth, 120.0f);
+        Config.Set(ViewerFrustumDepth, 3.0f);
+        Config.Set(ViewerDistance, 3.0f);
+        Config.Set(EncoderPreference, "auto");
+        Config.Set(PreferredGpuLuid, "");
+    }
+
+    internal static string NormalizeViewerCullingMode(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant();
+        return value == "distance" ? "distance" : "frustum";
+    }
+
+    internal static string NormalizeEncoderPreference(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "_");
+        return value switch
+        {
+            "hevc_nvenc" or "h264_nvenc" or
+            "hevc_amf" or "h264_amf" or
+            "hevc_qsv" or "h264_qsv" or
+            "libx264" or "libx265" => value,
+            _ => "auto"
+        };
+    }
+
+    internal static int RuntimeBitrateMbps => Math.Clamp(Volatile.Read(ref _runtimeBitrateMbps), 1, 200);
+    internal static int RuntimeStreamFps => Math.Clamp(Volatile.Read(ref _runtimeStreamFps), 1, 240);
+    internal static int RuntimeMaxStreamResolution => Math.Clamp(Volatile.Read(ref _runtimeMaxStreamResolution), 128, 8192);
+    internal static string RuntimeEncoderPreference => NormalizeEncoderPreference(_runtimeEncoderPreference);
+
+    private static void RefreshRuntimeStreamSettingsFromConfig()
+    {
+        try
+        {
+            if (Config == null) return;
+            Volatile.Write(ref _runtimeBitrateMbps, Math.Clamp(Config.GetValue(Bitrate), 1, 200));
+            Volatile.Write(ref _runtimeStreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
+            Volatile.Write(ref _runtimeMaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
+            _runtimeEncoderPreference = NormalizeEncoderPreference(Config.GetValue(EncoderPreference));
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Config] Failed to refresh runtime stream settings: {ex.Message}");
+        }
+    }
+
+    private static void ApplyRuntimeSetting<T>(ModConfigurationKey<T> key, T value)
+    {
+        if (ReferenceEquals(key, Bitrate) && value is int bitrate)
+            Volatile.Write(ref _runtimeBitrateMbps, Math.Clamp(bitrate, 1, 200));
+        else if (ReferenceEquals(key, StreamFps) && value is int fps)
+            Volatile.Write(ref _runtimeStreamFps, Math.Clamp(fps, 1, 240));
+        else if (ReferenceEquals(key, MaxStreamResolution) && value is int resolution)
+            Volatile.Write(ref _runtimeMaxStreamResolution, Math.Clamp(resolution, 128, 8192));
+        else if (ReferenceEquals(key, EncoderPreference) && value is string encoder)
+            _runtimeEncoderPreference = NormalizeEncoderPreference(encoder);
+    }
+
+    internal static void SaveConfigValue<T>(ModConfigurationKey<T> key, T value)
+    {
+        try
+        {
+            if (Config == null) return;
+            ApplyRuntimeSetting(key, value);
+            Config.Set(key, value);
+            _settingsConfigDirty = true;
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Config] Failed to set {key?.Name}: {ex.Message}");
+        }
+    }
+
+    internal static void FlushSettingsConfig()
+    {
+        try
+        {
+            if (Config == null || !_settingsConfigDirty) return;
+            _settingsConfigDirty = false;
+            Config.Save();
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Config] Failed to save settings: {ex.Message}");
+            _settingsConfigDirty = true;
+        }
     }
 
     private static void DetectStoredConfigVersionMismatch()

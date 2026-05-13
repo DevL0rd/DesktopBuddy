@@ -357,7 +357,7 @@ public partial class DesktopBuddyMod
                     else
                     {
                         newEncoder = StreamServer?.CreateEncoder(newStreamId);
-                        newUrl = StreamServer != null && TunnelUrl != null ? new Uri($"{TunnelUrl}/stream/{newStreamId}") : null;
+                        newUrl = StreamServer != null ? GetBuiltInStreamUrl(newStreamId) : null;
                     }
                     session.StreamId = newStreamId;
 
@@ -402,7 +402,7 @@ public partial class DesktopBuddyMod
                     if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && newUrl != null)
                     {
                         Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
-                        session.VideoTexture.URL.Value = newUrl;
+                        SetRemoteStreamUrl(session, newUrl, $"encoder resize streamId={newStreamId}");
                     }
 
                     Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
@@ -418,7 +418,7 @@ public partial class DesktopBuddyMod
                     continue;
                 }
 
-                if (VCam != null && !VCam.ManuallyDisabled &&
+                if (VCam != null && !VCam.ManuallyDisabled && VCam.ConsumerConnected &&
                     session.VCamCamera != null && !session.VCamCamera.IsDestroyed &&
                     !session.VCamRenderPending)
                 {

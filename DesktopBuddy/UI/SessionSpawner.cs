@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +19,12 @@ public partial class DesktopBuddyMod
 {
     private const float DesktopPanelCurvature = 0.18f;
     private const int DesktopPanelCurveSegments = 48;
+    private const int DesktopSurfaceRenderQueue = 2500;
+    private const int SettingsBackdropBlurRenderQueue = 2990;
+    private const int SettingsUiRenderQueue = 3004;
+    private const float TopBarSurfaceZOffset = -0.006f;
+    private const float TopBarBackZOffset = 0.004f;
+    private const float TopBarHoverCollapseDelaySeconds = 2f;
     private static int _nextTopBarRenderHostId;
 
     private static CurvedPlaneMesh AddCurvedTexturePlane(
@@ -28,7 +36,8 @@ public partial class DesktopBuddyMod
         IAssetProvider<ITexture2D> texture,
         float zOffset,
         bool flipY,
-        float offsetUnits)
+        float offsetUnits,
+        int renderQueue = DesktopSurfaceRenderQueue)
     {
         var slot = parent.AddSlot(name);
         slot.LocalPosition = new float3(0f, 0f, zOffset);
@@ -52,6 +61,7 @@ public partial class DesktopBuddyMod
         material.Sidedness.Value = Sidedness.Double;
         material.ZWrite.Value = ZWrite.On;
         material.OffsetUnits.Value = offsetUnits;
+        material.RenderQueue.Value = renderQueue;
         if (flipY)
         {
             material.TextureScale.Value = new float2(1f, -1f);
@@ -75,6 +85,10 @@ public partial class DesktopBuddyMod
         mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
         mesh.Segments.Value = DesktopPanelCurveSegments;
         renderer.Mesh.Target = mesh;
+
+        var collider = slot.AttachComponent<MeshCollider>();
+        collider.Mesh.Target = mesh;
+        collider.Sidedness.Value = MeshColliderSidedness.DualSided;
 
         var material = slot.AttachComponent<PBS_DualSidedMetallic>();
         material.AlbedoColor.Value = new colorX(0.08f, 0.08f, 0.1f, 1f);
@@ -175,12 +189,436 @@ public partial class DesktopBuddyMod
         return mesh;
     }
 
+    private static CurvedPlaneMesh AddCurvedMeshOnly(Slot parent, string name, float width, float height, float scale, float yOffset, float zOffset)
+    {
+        var slot = parent.AddSlot(name);
+        slot.LocalPosition = new float3(0f, yOffset, zOffset);
+        slot.LocalScale = float3.One * scale;
+
+        var mesh = slot.AttachComponent<CurvedPlaneMesh>();
+        mesh.Size.Value = new float2(width, height);
+        mesh.Curvature.Value = DesktopPanelCurvature;
+        mesh.AspectRatioCompensation.Value = CurvedPlaneMesh.CurvatureAspectRatioCompensation.DecreaseWidth;
+        mesh.Segments.Value = DesktopPanelCurveSegments;
+        return mesh;
+    }
+
+    private static BlurMaterial AddCurvedMeshBackdropBlur(Slot slot, CurvedPlaneMesh mesh, int iterations, float spread, int renderQueue)
+    {
+        var renderer = slot.AttachComponent<MeshRenderer>();
+        renderer.Mesh.Target = mesh;
+
+        var material = slot.AttachComponent<BlurMaterial>();
+        material.Iterations.Value = iterations;
+        material.Spread.Value = float2.One * spread;
+        material.PerObject.Value = true;
+        material.RenderQueue.Value = renderQueue;
+        material.ZWrite.Value = ZWrite.Off;
+        material.ZTest.Value = FrooxEngine.ZTest.LessOrEqual;
+        material.Sidedness.Value = Sidedness.Front;
+        material.BlendMode.Value = BlendMode.Opaque;
+        material.UsePoissonDisc.Value = true;
+        material.Refract.Value = false;
+        material.DepthFadeDivisor.Value = 1f;
+        renderer.Materials.Add(material);
+        return material;
+    }
+
     private static float GetCurvedPanelDepth(CurvedPlaneMesh mesh, float scale)
     {
         if (mesh == null || mesh.IsDestroyed)
             return 0f;
 
         return GetCurvedPanelDepthAtU(mesh, 0.5f, scale);
+    }
+
+    private static void SetupViewerCullingGate(
+        DesktopSession session,
+        Slot streamSlot,
+        VideoTextureProvider videoTex,
+        FrooxEngine.User owner)
+    {
+        if (session == null || streamSlot == null || videoTex == null)
+            return;
+
+        var gateSlot = session.Root.AddSlot("ViewerCullingGate");
+
+        var viewerAllowed = gateSlot.AttachComponent<ValueField<bool>>();
+        viewerAllowed.Value.Value = true;
+        var viewerOverride = gateSlot.AttachComponent<ValueUserOverride<bool>>();
+        viewerOverride.Target.Target = viewerAllowed.Value;
+        viewerOverride.Default.Value = true;
+        viewerOverride.CreateOverrideOnWrite.Value = false;
+        viewerOverride.ClearOnUserLeave.Value = true;
+
+        var previewAllowed = gateSlot.AttachComponent<ValueField<bool>>();
+        previewAllowed.Value.Value = false;
+        var previewOverride = gateSlot.AttachComponent<ValueUserOverride<bool>>();
+        previewOverride.Target.Target = previewAllowed.Value;
+        previewOverride.Default.Value = false;
+        previewOverride.CreateOverrideOnWrite.Value = false;
+        previewOverride.ClearOnUserLeave.Value = true;
+
+        var rangeAllowed = gateSlot.AttachComponent<ValueField<bool>>();
+        rangeAllowed.Value.Value = false;
+
+        var triggerSlot = session.Root.AddSlot("ViewerCullingTrigger");
+        triggerSlot.LocalPosition = float3.Zero;
+        triggerSlot.LocalRotation = floatQ.Identity;
+        triggerSlot.LocalScale = float3.One;
+
+        var tracker = triggerSlot.AttachComponent<ColliderUserTracker>();
+        tracker.TriggersOnly.Value = true;
+
+        var sphere = triggerSlot.AttachComponent<SphereCollider>();
+        sphere.Type.Value = ColliderType.Trigger;
+        sphere.IgnoreRaycasts.Value = true;
+
+        var box = triggerSlot.AttachComponent<BoxCollider>();
+        box.Type.Value = ColliderType.Trigger;
+        box.IgnoreRaycasts.Value = true;
+
+        rangeAllowed.Value.DriveFrom(tracker.IsLocalUserInside);
+
+        var finalAllowed = gateSlot.AttachComponent<ValueField<bool>>();
+        finalAllowed.Value.Value = false;
+        var finalOverride = gateSlot.AttachComponent<ValueUserOverride<bool>>();
+        finalOverride.Target.Target = finalAllowed.Value;
+        finalOverride.Default.Value = false;
+        finalOverride.CreateOverrideOnWrite.Value = false;
+        finalOverride.PersistentOverrides.Value = false;
+        finalOverride.ClearOnUserLeave.Value = true;
+
+        var urlDriver = gateSlot.AttachComponent<BooleanValueDriver<Uri>>();
+        urlDriver.TargetField.Target = videoTex.URL;
+        urlDriver.FalseValue.Value = null;
+        urlDriver.TrueValue.Value = null;
+        urlDriver.State.DriveFrom(finalAllowed.Value);
+
+        session.ViewerAllowedField = viewerAllowed;
+        session.PreviewAllowedField = previewAllowed;
+        session.RangeAllowedField = rangeAllowed;
+        session.FinalStreamAllowedField = finalAllowed;
+        session.ViewerStreamAllowed = viewerOverride;
+        session.PreviewStreamAllowed = previewOverride;
+        session.FinalStreamAllowedOverride = finalOverride;
+        session.StreamUrlDriver = urlDriver;
+        session.CullingTracker = tracker;
+        session.CullingTriggerSlot = triggerSlot;
+        session.CullingSphereCollider = sphere;
+        session.CullingFrustumCollider = box;
+
+        viewerOverride.SetOverride(owner, false);
+        previewOverride.SetOverride(owner, false);
+
+        foreach (var user in session.Root.World.AllUsers.Where(u => u.IsPresentInWorld))
+        {
+            if (user == owner)
+                viewerOverride.SetOverride(user, false);
+            else if (IsViewerStreamEnabled(session, user))
+                viewerOverride.SetOverride(user, true);
+        }
+
+        UpdateViewerCullingTrigger(session);
+        StartViewerCullingPlaybackLoop(session, videoTex);
+    }
+
+    private static bool IsLocalSessionOwner(DesktopSession session)
+    {
+        var localUser = session?.Root?.World?.LocalUser;
+        if (session == null || localUser == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(session.OwnerUserId) &&
+            string.Equals(session.OwnerUserId, localUser.UserID, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return string.IsNullOrWhiteSpace(session.OwnerUserId) &&
+            ReferenceEquals(localUser, session.Root.World.LocalUser);
+    }
+
+    private static bool IsSessionOwner(DesktopSession session, FrooxEngine.User user)
+    {
+        if (session == null || user == null)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(session.OwnerUserId) &&
+            string.Equals(session.OwnerUserId, user.UserID, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return string.IsNullOrWhiteSpace(session.OwnerUserId) &&
+            ReferenceEquals(user, session.Root?.World?.LocalUser);
+    }
+
+    private static string LocalViewerKey(FrooxEngine.User user)
+    {
+        if (!string.IsNullOrWhiteSpace(user?.UserID))
+            return user.UserID;
+        return user?.UserName;
+    }
+
+    private static bool IsLocalViewerStreamEnabled(DesktopSession session)
+    {
+        var localUser = session?.Root?.World?.LocalUser;
+        if (session == null || localUser == null || IsLocalSessionOwner(session))
+            return false;
+
+        string key = LocalViewerKey(localUser);
+        return string.IsNullOrWhiteSpace(key) ||
+            !session.ViewerStreamEnabledByUserId.TryGetValue(key, out bool enabled) ||
+            enabled;
+    }
+
+    private static bool ShouldLocalStreamBeAllowedWithoutGrace(DesktopSession session)
+    {
+        if (session?.ViewerAllowedField == null || session.PreviewAllowedField == null || session.RangeAllowedField == null)
+            return true;
+
+        bool previewAllowed = session.LocalPreviewingRemoteStream;
+        bool viewerAllowed = IsLocalViewerStreamEnabled(session);
+        bool rangeAllowed = session.RangeAllowedField.Value.Value;
+        return rangeAllowed && (previewAllowed || viewerAllowed);
+    }
+
+    private static bool IsLocalStreamAllowedByGraceGate(DesktopSession session)
+    {
+        if (session?.FinalStreamAllowedField == null || session.FinalStreamAllowedField.IsDestroyed)
+            return ShouldLocalStreamBeAllowedWithoutGrace(session);
+
+        return session.FinalStreamAllowedField.Value.Value;
+    }
+
+    private static void SetLocalStreamAllowedByGraceGate(DesktopSession session, bool allowed)
+    {
+        if (session?.FinalStreamAllowedField == null || session.FinalStreamAllowedField.IsDestroyed)
+            return;
+
+        if (session.FinalStreamAllowedField.Value.Value == allowed)
+            return;
+
+        var localUser = session.Root?.World?.LocalUser;
+        if (session.FinalStreamAllowedOverride != null && !session.FinalStreamAllowedOverride.IsDestroyed && localUser != null)
+            session.FinalStreamAllowedOverride.SetOverride(localUser, allowed);
+        else
+            session.FinalStreamAllowedField.Value.Value = allowed;
+    }
+
+    private static HashSet<string> GetUsersInsideCullingTrigger(DesktopSession session)
+    {
+        var inside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tracker = session?.CullingTracker;
+        if (tracker == null || tracker.IsDestroyed)
+            return inside;
+
+        try
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var field = typeof(ColliderUserTracker).GetField("_usersInside", flags);
+            if (field?.GetValue(tracker) is not IEnumerable usersInside)
+                return inside;
+
+            foreach (object entry in usersInside)
+            {
+                object userRef = entry?.GetType().GetProperty("Value")?.GetValue(entry);
+                if (userRef is not UserRef userReference)
+                    continue;
+
+                string key = ViewerKey(userReference.Target);
+                if (!string.IsNullOrWhiteSpace(key))
+                    inside.Add(key);
+            }
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Culling] Failed to read ColliderUserTracker users: {ex.Message}");
+        }
+
+        return inside;
+    }
+
+    private static bool GetAppliedStreamAllowed(DesktopSession session, FrooxEngine.User user)
+    {
+        string key = ViewerKey(user);
+        return !string.IsNullOrWhiteSpace(key) &&
+            session.CullingAppliedStreamAllowedByUserId.TryGetValue(key, out bool allowed) &&
+            allowed;
+    }
+
+    private static void SetStreamAllowedForUser(DesktopSession session, FrooxEngine.User user, bool allowed)
+    {
+        string key = ViewerKey(user);
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        if (session.CullingAppliedStreamAllowedByUserId.TryGetValue(key, out bool previous) && previous == allowed)
+            return;
+
+        session.CullingAppliedStreamAllowedByUserId[key] = allowed;
+        if (session.FinalStreamAllowedOverride != null && !session.FinalStreamAllowedOverride.IsDestroyed)
+            session.FinalStreamAllowedOverride.SetOverride(user, allowed);
+    }
+
+    private static void StartViewerCullingPlaybackLoop(DesktopSession session, VideoTextureProvider videoTex)
+    {
+        if (session?.Root?.World == null || videoTex == null)
+            return;
+
+        int generation = ++session.CullingGateGeneration;
+        session.CullingOutOfRangeSince = -1.0;
+        session.CullingAppliedStreamAllowedByUserId.Clear();
+        session.CullingOutOfRangeSinceByUserId.Clear();
+
+        void Tick()
+        {
+            if (session.Root == null || session.Root.IsDestroyed || videoTex.IsDestroyed || generation != session.CullingGateGeneration)
+                return;
+
+            double now = session.Root.World.Time.WorldTime;
+            var inside = GetUsersInsideCullingTrigger(session);
+            var presentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var user in session.Root.World.AllUsers.Where(u => u.IsPresentInWorld))
+            {
+                string key = ViewerKey(user);
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
+
+                presentKeys.Add(key);
+
+                bool streamEnabledForUser = IsSessionOwner(session, user)
+                    ? session.LocalPreviewingRemoteStream
+                    : IsViewerStreamEnabled(session, user);
+                bool rangeAllowed = inside.Contains(key);
+                bool wasAllowed = GetAppliedStreamAllowed(session, user);
+
+                bool shouldPlay;
+                if (streamEnabledForUser && rangeAllowed)
+                {
+                    session.CullingOutOfRangeSinceByUserId.Remove(key);
+                    shouldPlay = true;
+                }
+                else if (streamEnabledForUser && wasAllowed)
+                {
+                    if (!session.CullingOutOfRangeSinceByUserId.TryGetValue(key, out double outOfRangeSince))
+                    {
+                        outOfRangeSince = now;
+                        session.CullingOutOfRangeSinceByUserId[key] = outOfRangeSince;
+                    }
+
+                    shouldPlay = now - outOfRangeSince < 5.0;
+                }
+                else
+                {
+                    session.CullingOutOfRangeSinceByUserId.Remove(key);
+                    shouldPlay = false;
+                }
+
+                SetStreamAllowedForUser(session, user, shouldPlay);
+            }
+
+            foreach (string key in session.CullingAppliedStreamAllowedByUserId.Keys.ToArray())
+            {
+                if (presentKeys.Contains(key))
+                    continue;
+
+                session.CullingAppliedStreamAllowedByUserId.Remove(key);
+                session.CullingOutOfRangeSinceByUserId.Remove(key);
+            }
+
+            bool localShouldPlay = IsLocalStreamAllowedByGraceGate(session);
+            if (localShouldPlay)
+            {
+                if (!videoTex.IsPlaying)
+                    videoTex.Play();
+            }
+            else if (videoTex.IsPlaying)
+            {
+                videoTex.Stop();
+            }
+
+            session.Root.World.RunInUpdates(2, Tick);
+        }
+
+        session.Root.World.RunInUpdates(1, Tick);
+    }
+
+    private static bool IsLocalStreamPlaybackAllowedNow(DesktopSession session)
+    {
+        return IsLocalStreamAllowedByGraceGate(session);
+    }
+
+    private static void SetRemoteStreamUrl(DesktopSession session, Uri url, string reason)
+    {
+        var videoTex = session?.VideoTexture;
+        if (videoTex == null || videoTex.IsDestroyed)
+            return;
+
+        session.StreamUrl = url;
+        bool playbackAllowed = IsLocalStreamPlaybackAllowedNow(session);
+        if (!playbackAllowed && videoTex.IsPlaying)
+            videoTex.Stop();
+
+        if (session.StreamUrlDriver != null && !session.StreamUrlDriver.IsDestroyed)
+            session.StreamUrlDriver.TrueValue.Value = url;
+        else
+            videoTex.URL.Value = playbackAllowed ? url : null;
+
+        if (!playbackAllowed && videoTex.IsPlaying)
+            videoTex.Stop();
+
+        if (!string.IsNullOrWhiteSpace(reason))
+            Msg($"[RemoteStream] URL set ({reason}): {url}");
+    }
+
+    private static void ClearRemoteStreamUrl(DesktopSession session, string reason)
+    {
+        var videoTex = session?.VideoTexture;
+        if (videoTex == null || videoTex.IsDestroyed)
+            return;
+
+        if (videoTex.IsPlaying)
+            videoTex.Stop();
+
+        if (session.StreamUrlDriver != null && !session.StreamUrlDriver.IsDestroyed)
+            session.StreamUrlDriver.TrueValue.Value = null;
+        videoTex.URL.Value = null;
+
+        if (!string.IsNullOrWhiteSpace(reason))
+            Msg($"[RemoteStream] URL cleared ({reason})");
+    }
+
+    private static void UpdateViewerCullingTrigger(DesktopSession session)
+    {
+        if (session?.CullingTriggerSlot == null || session.CullingTriggerSlot.IsDestroyed)
+            return;
+
+        float range = Math.Clamp(Config?.GetValue(ViewerDistance) ?? Config?.GetValue(ViewerFrustumDepth) ?? 3f, 1f, 10f);
+        string mode = NormalizeViewerCullingMode(Config?.GetValue(ViewerCullingMode));
+        float originZ = GetCullingPreviewOriginZ(session);
+
+        if (session.CullingSphereCollider != null && !session.CullingSphereCollider.IsDestroyed)
+        {
+            session.CullingSphereCollider.Enabled = mode == "distance";
+            session.CullingSphereCollider.Radius.Value = range;
+            session.CullingSphereCollider.Offset.Value = new float3(0f, 0f, originZ);
+        }
+
+        if (session.CullingFrustumCollider != null && !session.CullingFrustumCollider.IsDestroyed)
+        {
+            int panelPixelsW = session.LastKnownW > 0 ? session.LastKnownW : MathX.RoundToInt(session.Canvas?.Size.Value.x ?? 0f);
+            int panelPixelsH = session.LastKnownH > 0 ? session.LastKnownH : MathX.RoundToInt(session.Canvas?.Size.Value.y ?? 0f);
+            float scale = session.PanelCanvasScale > 0f ? session.PanelCanvasScale : 0.0005f;
+            float panelW = Math.Max(1, panelPixelsW) * scale;
+            float panelH = Math.Max(1, panelPixelsH) * scale;
+            float angle = NormalizeViewerFrustumAngle(Config?.GetValue(ViewerFrustumWidth) ?? 120f);
+            float verticalAngle = angle * 0.5f;
+            float farHalfW = panelW * 0.5f + MathF.Tan(angle * MathF.PI / 360f) * range;
+            float farHalfH = panelH * 0.5f + MathF.Tan(verticalAngle * MathF.PI / 360f) * range;
+
+            session.CullingFrustumCollider.Enabled = mode != "distance";
+            session.CullingFrustumCollider.Size.Value = new float3(farHalfW * 2f, farHalfH * 2f, range);
+            session.CullingFrustumCollider.Offset.Value = new float3(0f, 0f, originZ - range * 0.5f);
+        }
     }
 
     private static float GetCurvedPanelDepthAtU(CurvedPlaneMesh mesh, float u, float scale)
@@ -358,11 +796,13 @@ public partial class DesktopBuddyMod
         CurvedPlaneMesh streamPlaneRef = null;
         CurvedPlaneMesh topBarStripRef = null;
         CurvedPlaneMesh topBarBackStripRef = null;
+        CurvedPlaneMesh topBarBlurMeshRef = null;
         DesktopUVRayExit displayRayExitRef = null;
         TextRenderer titleTextRef = null;
         Slot deviceIndicatorsSlot = null;
         string panelCurvePreferenceKey = GetPanelCurvePreferenceKey(hwnd);
         float currentPanelCurvature = GetPanelCurvePreference(panelCurvePreferenceKey, DesktopPanelCurvature);
+        DesktopSession session = null;
 
         void ApplyPanelCurvature(float curvature)
         {
@@ -382,6 +822,12 @@ public partial class DesktopBuddyMod
 
             if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
                 topBarBackStripRef.Curvature.Value = currentPanelCurvature;
+
+            if (topBarBlurMeshRef != null && !topBarBlurMeshRef.IsDestroyed)
+                topBarBlurMeshRef.Curvature.Value = currentPanelCurvature;
+
+            if (session != null)
+                ResizeSettingsPanel(session, session.LastKnownW > 0 ? session.LastKnownW : w, session.LastKnownH > 0 ? session.LastKnownH : h, canvasScale, currentPanelCurvature);
         }
 
         var displaySlot = root.AddLocalSlot("Display", false);
@@ -437,18 +883,9 @@ public partial class DesktopBuddyMod
 
         var displayBg = ui.Image(new colorX(0f, 0f, 0f, 1f));
         displayBg.Tint.Value = colorX.Clear;
+        displayBg.InteractionTarget.Value = false;
         ui.NestInto(displayBg.RectTransform);
-
-        var rawImage = ui.RawImage(procTex);
-        rawImage.UVRect.Value = new Rect(new float2(0f, 1f), new float2(1f, -1f));
-        rawImage.Tint.Value = new colorX(1f, 1f, 1f, 0f);
-        Msg("[StartStreaming] Canvas + RawImage created");
-
-        var mat = displaySlot.AttachComponent<UI_UnlitMaterial>();
-        mat.BlendMode.Value = BlendMode.Alpha;
-        mat.ZWrite.Value = ZWrite.On;
-        mat.OffsetUnits.Value = 100f;
-        rawImage.Material.Target = mat;
+        Msg("[StartStreaming] Interaction canvas created");
 
         var displayCameraSlot = interactionSlot.AddSlot("InteractionCamera");
         displayCameraSlot.LocalPosition = float3.Zero;
@@ -456,7 +893,7 @@ public partial class DesktopBuddyMod
         displayRayExitRef = displayCameraSlot.AttachComponent<DesktopUVRayExit>();
         displayRayExitRef.Size = new float2(w, h);
 
-        frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f);
+        frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f, renderQueue: DesktopSurfaceRenderQueue);
         ApplyPanelCurvature(currentPanelCurvature);
 
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
@@ -479,11 +916,10 @@ public partial class DesktopBuddyMod
             }
         }
 
-        var session = new DesktopSession
+        session = new DesktopSession
         {
             Streamer = streamer,
             Texture = procTex,
-            TextureImage = rawImage,
             Canvas = ui.Canvas,
             Root = root,
             Hwnd = hwnd,
@@ -492,6 +928,9 @@ public partial class DesktopBuddyMod
             SharedTextureSlot = sharedTextureSlot,
             LastKnownW = w,
             LastKnownH = h,
+            PanelMesh = frontPlaneRef,
+            PanelCanvasScale = canvasScale,
+            OwnerUserId = root.World.LocalUser?.UserID,
             SeenRelatedHwnds = seenRelatedHwnds,
         };
         ActiveSessions.Add(session);
@@ -672,12 +1111,12 @@ public partial class DesktopBuddyMod
         directInput.Released = SendDesktopReleased;
         directInput.Hovering = SendDesktopHovering;
 
-        float barH = 64f;
-        float barMarginTop = 10f * canvasScale;
-        float barPad = 8f;
+        float barH = 60f;
+        float barMarginBottom = 12f * canvasScale;
+        float barPad = 7f;
         float barGap = 8f;
-        float avatarW = 48f;
-        float toggleW = 36f;
+        float avatarW = 46f;
+        int initialBarRenderW = Math.Max(1, w);
         const float deviceIndicatorTopOffset = 0.02f;
         float DeviceIndicatorY() => worldHalfH + deviceIndicatorTopOffset;
         float DeviceIndicatorZ() => 0.001f + GetCurvedPanelDepth(frontPlaneRef, canvasScale);
@@ -706,7 +1145,7 @@ public partial class DesktopBuddyMod
         var barCameraSlot = barRenderHost.AddSlot("TopBarCamera");
         barCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
         var barRenderTex = barCameraSlot.AttachComponent<RenderTextureProvider>();
-        barRenderTex.Size.Value = new int2(w, (int)barH);
+        barRenderTex.Size.Value = new int2(initialBarRenderW, (int)barH);
         barRenderTex.WrapModeU.Value = TextureWrapMode.Clamp;
         barRenderTex.WrapModeV.Value = TextureWrapMode.Clamp;
 
@@ -727,7 +1166,7 @@ public partial class DesktopBuddyMod
         var barBackCameraSlot = barRenderHost.AddSlot("TopBarBackCamera");
         barBackCameraSlot.LocalPosition = new float3(0f, 0f, -1f);
         var barBackRenderTex = barBackCameraSlot.AttachComponent<RenderTextureProvider>();
-        barBackRenderTex.Size.Value = new int2(w, (int)barH);
+        barBackRenderTex.Size.Value = new int2(initialBarRenderW, (int)barH);
         barBackRenderTex.WrapModeU.Value = TextureWrapMode.Clamp;
         barBackRenderTex.WrapModeV.Value = TextureWrapMode.Clamp;
 
@@ -749,6 +1188,7 @@ public partial class DesktopBuddyMod
         barSlot.LocalScale = float3.One;
 
         var barCanvas = barSlot.AttachComponent<Canvas>();
+        barCanvas.Size.Value = new float2(initialBarRenderW, barH);
         barCanvas.Collider.Target.SetTrigger();
 
         const float topBarBackgroundOffset = 500f;
@@ -759,34 +1199,34 @@ public partial class DesktopBuddyMod
 
         var barMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barMat.BlendMode.Value = BlendMode.Alpha;
-        barMat.ZWrite.Value = ZWrite.On;
+        barMat.ZWrite.Value = ZWrite.Off;
         barMat.OffsetUnits.Value = topBarBackgroundOffset;
 
         var barElementMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barElementMat.BlendMode.Value = BlendMode.Alpha;
         barElementMat.Sidedness.Value = Sidedness.Front;
-        barElementMat.ZWrite.Value = ZWrite.On;
+        barElementMat.ZWrite.Value = ZWrite.Off;
         barElementMat.OffsetFactor.Value = -1f;
         barElementMat.OffsetUnits.Value = topBarForegroundOffset;
 
         var barFillMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barFillMat.BlendMode.Value = BlendMode.Alpha;
         barFillMat.Sidedness.Value = Sidedness.Front;
-        barFillMat.ZWrite.Value = ZWrite.On;
+        barFillMat.ZWrite.Value = ZWrite.Off;
         barFillMat.OffsetFactor.Value = -1f;
         barFillMat.OffsetUnits.Value = topBarFillOffset;
 
         var barTopMat = barSlot.AttachComponent<UI_UnlitMaterial>();
         barTopMat.BlendMode.Value = BlendMode.Alpha;
         barTopMat.Sidedness.Value = Sidedness.Front;
-        barTopMat.ZWrite.Value = ZWrite.On;
+        barTopMat.ZWrite.Value = ZWrite.Off;
         barTopMat.OffsetFactor.Value = -1f;
         barTopMat.OffsetUnits.Value = topBarTopOffset;
 
         var barTextMat = barSlot.AttachComponent<UI_TextUnlitMaterial>();
         barTextMat.BlendMode.Value = BlendMode.Alpha;
         barTextMat.Sidedness.Value = Sidedness.Front;
-        barTextMat.ZWrite.Value = ZWrite.On;
+        barTextMat.ZWrite.Value = ZWrite.Off;
         barTextMat.OffsetFactor.Value = -1f;
         barTextMat.OffsetUnits.Value = topBarTextOffset;
 
@@ -794,103 +1234,47 @@ public partial class DesktopBuddyMod
         barBackSlot.LocalScale = float3.One;
 
         var barBackCanvas = barBackSlot.AttachComponent<Canvas>();
+        barBackCanvas.Size.Value = new float2(initialBarRenderW, barH);
         barBackCanvas.Collider.RawTarget.Enabled = false;
 
         var barBackMat = barBackSlot.AttachComponent<UI_UnlitMaterial>();
         barBackMat.BlendMode.Value = BlendMode.Alpha;
         barBackMat.Sidedness.Value = Sidedness.Double;
-        barBackMat.ZWrite.Value = ZWrite.On;
+        barBackMat.ZWrite.Value = ZWrite.Off;
         barBackMat.OffsetUnits.Value = topBarBackgroundOffset;
 
         var barBackTextMat = barBackSlot.AttachComponent<UI_TextUnlitMaterial>();
         barBackTextMat.BlendMode.Value = BlendMode.Alpha;
         barBackTextMat.Sidedness.Value = Sidedness.Double;
-        barBackTextMat.ZWrite.Value = ZWrite.On;
+        barBackTextMat.ZWrite.Value = ZWrite.Off;
         barBackTextMat.OffsetFactor.Value = -1f;
         barBackTextMat.OffsetUnits.Value = topBarTextOffset;
 
         var barUi = new UIBuilder(barCanvas);
-        var barBg = barUi.Image(new colorX(0.1f, 0.1f, 0.12f, 1f));
+        var barBgColor = new colorX(0.055f, 0.06f, 0.08f, 0.8f);
+        var barBg = barUi.Image(barBgColor);
         barBg.Material.Target = barMat;
         var roundedSprite = TextureProviderSettings.ClampWrap(barSlot.AttachComponent<SpriteProvider>());
         roundedSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         roundedSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
-        roundedSprite.FixedSize.Value = 16f;
+        roundedSprite.FixedSize.Value = barH * 0.5f;
         barBg.Sprite.Target = roundedSprite;
         barBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
-        barBg.Tint.Value = new colorX(0.1f, 0.1f, 0.12f, 1f);
+        barBg.Tint.Value = barBgColor;
 
         var barBackUi = new UIBuilder(barBackCanvas);
         var barBackBg = barBackUi.Image(new colorX(0.08f, 0.08f, 0.1f, 1f));
         barBackBg.Material.Target = barBackMat;
         barBackBg.Sprite.Target = roundedSprite;
         barBackBg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
-        barBackUi.NestInto(barBackBg.RectTransform);
-        var barBackLayout = barBackUi.HorizontalLayout(8f, padding: 10f, childAlignment: Alignment.MiddleLeft);
-        barBackLayout.ForceExpandWidth.Value = false;
-
-        barBackUi.Style.MinWidth = 40f;
-        barBackUi.Style.PreferredWidth = 40f;
-        barBackUi.Style.MinHeight = 40f;
-        barBackUi.Style.PreferredHeight = 40f;
-        barBackUi.Style.FlexibleWidth = -1f;
-        barBackUi.Style.FlexibleHeight = -1f;
-
-        StaticTexture2D barBackIconTex = hwnd != IntPtr.Zero
-            ? ContextMenuPatch.GetIconTexture(hwnd, root.Engine, barBackSlot)
-            : ContextMenuPatch.GetDesktopIconTexture(root.Engine, barBackSlot);
-        if (barBackIconTex != null)
-        {
-            var barBackIconMat = barBackSlot.AttachComponent<UI_UnlitMaterial>();
-            barBackIconMat.Texture.Target = barBackIconTex;
-            barBackIconMat.BlendMode.Value = BlendMode.Alpha;
-            barBackIconMat.Sidedness.Value = Sidedness.Double;
-            barBackIconMat.ZWrite.Value = ZWrite.On;
-            barBackIconMat.OffsetFactor.Value = -1f;
-            barBackIconMat.OffsetUnits.Value = topBarForegroundOffset;
-
-            var barBackIcon = barBackUi.RawImage(barBackIconTex);
-            barBackIcon.PreserveAspect.Value = true;
-            barBackIcon.Material.Target = barBackIconMat;
-        }
-        else
-        {
-            barBackUi.Empty("IconPlaceholder");
-        }
-
-        barBackUi.Style.MinWidth = 80f;
-        barBackUi.Style.PreferredWidth = 180f;
-        barBackUi.Style.MinHeight = 48f;
-        barBackUi.Style.PreferredHeight = 48f;
-        barBackUi.Style.FlexibleWidth = 1f;
-        barBackUi.Style.FlexibleHeight = -1f;
-        var barBackTitle = barBackUi.Text(title, bestFit: true, alignment: Alignment.MiddleLeft);
-        barBackTitle.RectTransform.AddFixedPadding(0f, 0f, 0f, 4f);
-        titleTextRef = barBackTitle.Slot.GetComponent<TextRenderer>();
-        barBackTitle.Size.Value = 20f;
-        barBackTitle.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
-        barBackTitle.Material.Target = barBackTextMat;
-        root.World.RunInUpdates(2, () =>
-        {
-            try
-            {
-                var autoMat = barBackTitle.Slot.GetComponentInParents<UI_TextUnlitMaterial>();
-                if (autoMat != null)
-                {
-                    autoMat.Sidedness.Value = Sidedness.Double;
-                    autoMat.OffsetFactor.Value = -1f;
-                    autoMat.OffsetUnits.Value = topBarTextOffset;
-                }
-            }
-            catch (Exception ex) { Msg($"[TopBarBackPanel] Text material fix error: {ex.Message}"); }
-        });
-        barBackUi.NestOut();
+        barBackBg.Tint.Value = new colorX(0.055f, 0.06f, 0.08f, 0.8f);
 
         var barMask = barBg.Slot.AttachComponent<Mask>();
         barMask.ShowMaskGraphic.Value = true;
         barUi.NestInto(barBg.RectTransform);
         var barLayout = barUi.HorizontalLayout(8f, padding: 8f, childAlignment: Alignment.MiddleLeft);
         barLayout.ForceExpandWidth.Value = false;
+
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
 
@@ -910,7 +1294,7 @@ public partial class DesktopBuddyMod
         var avatarMaskSprite = TextureProviderSettings.ClampWrap(imageSpaceSlot.AttachComponent<SpriteProvider>());
         avatarMaskSprite.Texture.Target = UIBuilder.GetCircleTexture(root.World);
         avatarMaskSprite.Borders.Value = new float4(0.49f, 0.49f, 0.49f, 0.49f);
-        avatarMaskSprite.FixedSize.Value = 18f;
+        avatarMaskSprite.FixedSize.Value = avatarW * 0.5f;
         imgMaskImage.Sprite.Target = avatarMaskSprite;
         imgMaskImage.NineSliceSizing.Value = NineSliceSizing.FixedSize;
         imgMaskImage.Material.Target = barElementMat;
@@ -946,47 +1330,31 @@ public partial class DesktopBuddyMod
 
         var avatarImage = barUi.Image(avatarTex);
         avatarImage.Material.Target = barTopMat;
-        var avatarButton = avatarImage.Slot.AttachComponent<Button>();
+        avatarImage.InteractionTarget.Value = false;
         barUi.NestOut();
-
-        string userName = localUser?.UserName ?? "Unknown";
-        float desiredNameW = MathX.Max(60f, userName.Length * 12f);
-        float collapsedFixedW = barPad * 2f + avatarW + barGap * 2f + toggleW;
-        float availableNameW = MathF.Max(0f, w - collapsedFixedW);
-        float nameW = MathF.Min(desiredNameW, availableNameW);
-        bool compactName = nameW < desiredNameW - 0.5f;
-        barUi.Style.FlexibleWidth = -1f;
-        barUi.Style.MinWidth = nameW;
-        barUi.Style.PreferredWidth = nameW;
-        barUi.Style.FlexibleHeight = 1f;
-        barUi.Style.MinHeight = -1f;
-        var nameText = barUi.Text(userName, bestFit: compactName, alignment: Alignment.MiddleLeft);
-        nameText.Size.Value = 18f;
-        nameText.Color.Value = new colorX(0.9f, 0.9f, 0.9f, 1f);
-        nameText.Material.Target = barTextMat;
 
         const float expandGap = 6f;
         const float expandPadding = 6f;
         const float expandSeparatorW = 1f;
-        const float expandButtonW = 30f;
+        const float expandButtonW = 36f;
         const float curveLabelW = 38f;
         const float curveSliderW = 80f;
         const float volumeIconW = 24f;
         const float volumeSliderW = 100f;
         const float expandContentMaxW =
             expandPadding * 2f +
-            expandGap * 10f +
+            expandGap * 12f +
             expandSeparatorW * 3f +
-            expandButtonW * 4f +
+            expandButtonW * 6f +
             curveLabelW +
             curveSliderW +
             volumeIconW +
             volumeSliderW;
 
-        float barCollapsedW = barPad * 2f + avatarW + barGap + nameW + barGap + toggleW;
+        float barCollapsedW = barPad * 2f + avatarW;
         float expandContentW = expandContentMaxW;
         float barExpandedW = barCollapsedW + barGap + expandContentW;
-        int barRenderW = Math.Max(w, Math.Max(1, (int)MathF.Ceiling(barExpandedW)));
+        int barRenderW = Math.Max(1, w);
 
         void StyleButton(Button btn)
         {
@@ -994,57 +1362,43 @@ public partial class DesktopBuddyMod
             if (textComp != null)
             {
                 textComp.Size.Value = 18f;
-                textComp.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
+                textComp.Color.Value = new colorX(0.92f, 0.93f, 0.98f, 1f);
                 textComp.Material.Target = barTextMat;
             }
             var txtRenderer = btn.Slot.GetComponentInChildren<TextRenderer>();
             if (txtRenderer != null)
             {
-                txtRenderer.Color.Value = new colorX(0.85f, 0.85f, 0.88f, 1f);
+                txtRenderer.Color.Value = new colorX(0.92f, 0.93f, 0.98f, 1f);
             }
             if (btn.ColorDrivers.Count > 0)
             {
                 var cd = btn.ColorDrivers[0];
-                cd.NormalColor.Value = colorX.Clear;
-                cd.HighlightColor.Value = new colorX(1f, 1f, 1f, 0.15f);
-                cd.PressColor.Value = new colorX(1f, 1f, 1f, 0.08f);
+                cd.NormalColor.Value = new colorX(0.12f, 0.13f, 0.17f, 0.88f);
+                cd.HighlightColor.Value = new colorX(0.24f, 0.18f, 0.42f, 0.95f);
+                cd.PressColor.Value = new colorX(0.12f, 0.34f, 0.58f, 0.95f);
             }
 
             var image = btn.Slot.GetComponent<Image>();
             if (image != null)
             {
-                image.Tint.Value = colorX.Clear;
-                image.Sprite.Target = null;
+                image.Tint.Value = new colorX(0.12f, 0.13f, 0.17f, 0.88f);
+                image.Sprite.Target = roundedSprite;
+                image.NineSliceSizing.Value = NineSliceSizing.FixedSize;
                 image.Material.Target = barElementMat;
             }
         }
 
-        FrooxEngine.User PressingUser(ButtonEventData data) => data.source?.Slot?.ActiveUser ?? root.World.LocalUser;
-
-        barUi.Style.MinWidth = 36f;
-        barUi.Style.PreferredWidth = 36f;
-        barUi.Style.MinHeight = 48f;
-        barUi.Style.PreferredHeight = 48f;
+        barUi.Style.MinWidth = 0f;
+        barUi.Style.PreferredWidth = 0f;
+        barUi.Style.MinHeight = 0f;
+        barUi.Style.PreferredHeight = 0f;
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = -1f;
-        var toggleBtn = barUi.Button("≡");
-        StyleButton(toggleBtn);
-        if (toggleBtn.ColorDrivers.Count > 0)
-        {
-            var cd = toggleBtn.ColorDrivers[0];
-            cd.PressColor.Value = new colorX(0.15f, 0.15f, 0.18f, 1f);
-        }
-        var toggleImg = toggleBtn.Slot.GetComponent<Image>();
-        if (toggleImg != null && roundedSprite != null)
-        {
-            toggleImg.Sprite.Target = roundedSprite;
-            toggleImg.NineSliceSizing.Value = NineSliceSizing.FixedSize;
-        }
-        var toggleText = toggleBtn.Slot.GetComponentInChildren<TextRenderer>();
-        if (toggleText != null) toggleText.Size.Value = 42f;
 
+        var toggleBtn = barUi.Button("≡");
         barUi.Style.FlexibleWidth = -1f;
         barUi.Style.FlexibleHeight = 1f;
+        toggleBtn.Slot.ActiveSelf = false;
         barUi.Style.MinWidth = expandContentW;
         barUi.Style.PreferredWidth = expandContentW;
         barUi.Style.MinHeight = 48f;
@@ -1057,13 +1411,36 @@ public partial class DesktopBuddyMod
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = 1f;
 
+        ep.Style.MinWidth = expandButtonW;
+        ep.Style.PreferredWidth = expandButtonW;
+        ep.Style.MinHeight = 40f;
+        ep.Style.PreferredHeight = 40f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = -1f;
+        var settingsBtn = ep.Button("\u2699");
+        StyleButton(settingsBtn);
+        settingsBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            int panelW = session.LastKnownW > 0 ? session.LastKnownW : w;
+            int panelH = session.LastKnownH > 0 ? session.LastKnownH : h;
+            ToggleSettingsPanel(root, session, panelW, panelH, canvasScale, currentPanelCurvature);
+        };
+
+        ep.Style.MinWidth = expandButtonW;
+        ep.Style.PreferredWidth = expandButtonW;
+        ep.Style.MinHeight = 40f;
+        ep.Style.PreferredHeight = 40f;
+        ep.Style.FlexibleWidth = -1f;
+        ep.Style.FlexibleHeight = -1f;
+        var previewBtn = ep.Button("\U0001F441"); StyleButton(previewBtn);
+
         ep.Style.MinWidth = 1f;
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
         ep.Style.FlexibleWidth = -1f;
         ep.Style.FlexibleHeight = -1f;
-        var separatorA = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        var separatorA = ep.Image(new colorX(0.42f, 0.44f, 0.48f, 0.48f));
         separatorA.Material.Target = barElementMat;
 
         ep.Style.MinWidth = expandButtonW;
@@ -1081,7 +1458,7 @@ public partial class DesktopBuddyMod
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
-        var separatorB = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        var separatorB = ep.Image(new colorX(0.42f, 0.44f, 0.48f, 0.48f));
         separatorB.Material.Target = barElementMat;
 
         ep.Style.MinWidth = expandButtonW;
@@ -1096,7 +1473,7 @@ public partial class DesktopBuddyMod
         ep.Style.PreferredWidth = 1f;
         ep.Style.MinHeight = 32f;
         ep.Style.PreferredHeight = 32f;
-        var separatorC = ep.Image(new colorX(0.4f, 0.4f, 0.45f, 0.4f));
+        var separatorC = ep.Image(new colorX(0.42f, 0.44f, 0.48f, 0.48f));
         separatorC.Material.Target = barElementMat;
 
         ep.Style.MinWidth = curveLabelW;
@@ -1121,9 +1498,16 @@ public partial class DesktopBuddyMod
         curveUi.Style.FlexibleHeight = 1f;
         var curveSlider = curveUi.Slider<float>(20f, currentPanelCurvature, 0f, 1f, false,
             out var curveLine, out var curveFillLine, out var curveHandle);
+        curveLine.Tint.Value = SettingsPanelSoft;
+        curveFillLine.Tint.Value = SettingsAccent;
+        curveHandle.Tint.Value = SettingsText;
         curveLine.Material.Target = barElementMat;
         curveFillLine.Material.Target = barFillMat;
         curveHandle.Material.Target = barTopMat;
+        ApplyPurpleBlueGradient(curveFillLine, 10f, 0.98f, interactionTarget: false);
+        var curveHandleGradient = ApplyPurpleBlueGradient(curveHandle, 18f, 0.98f, interactionTarget: false);
+        if (curveHandleGradient != null && curveSlider.ColorDrivers.Count > 0)
+            curveSlider.ColorDrivers[0].ColorDrive.Target = curveHandleGradient.TintBottomRight;
         curveRow.GetComponentInChildren<Image>(image => image.Slot.Name == "Background").Material.Target = barElementMat;
         curveRow.ForeachComponentInChildren<FrooxEngine.UIX.Text>(text => text.Material.Target = barTextMat);
         float pendingPanelCurvature = currentPanelCurvature;
@@ -1163,9 +1547,22 @@ public partial class DesktopBuddyMod
         streamVolUi.Style.FlexibleHeight = 1f;
         var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false,
             out var volLine, out var volFillLine, out var volHandle);
+        var volSliderOverride = streamVolRow.AttachComponent<ValueUserOverride<float>>();
+        volSliderOverride.Target.Target = volSlider.Value;
+        volSliderOverride.Default.Value = 1f;
+        volSliderOverride.CreateOverrideOnWrite.Value = true;
+        volSliderOverride.PersistentOverrides.Value = false;
+        volSliderOverride.ClearOnUserLeave.Value = true;
+        volLine.Tint.Value = SettingsPanelSoft;
+        volFillLine.Tint.Value = SettingsAccent;
+        volHandle.Tint.Value = SettingsText;
         volLine.Material.Target = barElementMat;
         volFillLine.Material.Target = barFillMat;
         volHandle.Material.Target = barTopMat;
+        ApplyPurpleBlueGradient(volFillLine, 10f, 0.98f, interactionTarget: false);
+        var volHandleGradient = ApplyPurpleBlueGradient(volHandle, 18f, 0.98f, interactionTarget: false);
+        if (volHandleGradient != null && volSlider.ColorDrivers.Count > 0)
+            volSlider.ColorDrivers[0].ColorDrive.Target = volHandleGradient.TintBottomRight;
         streamVolRow.GetComponentInChildren<Image>(image => image.Slot.Name == "Background").Material.Target = barElementMat;
         streamVolRow.ForeachComponentInChildren<FrooxEngine.UIX.Text>(text => text.Material.Target = barTextMat);
 
@@ -1177,11 +1574,66 @@ public partial class DesktopBuddyMod
         widthSmooth.Value.Target = widthField.Value;
         widthSmooth.WriteBack.Value = false;
 
-        float barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
+        BlurMaterial topBarBlur = null;
+        StaticTexture2D topBarBlurMask = null;
+        int topBarBlurMaskWidth = 0;
+        int topBarBlurMaskHeight = 0;
+        int topBarBlurPillWidth = 0;
+
+        float barYPos = -worldHalfH - barH / 2f * canvasScale - barMarginBottom;
         widthField.Value.Value = barCollapsedW;
         widthSmooth.TargetValue.Value = barCollapsedW;
         float currentBarWidth = barCollapsedW;
         bool barExpanded = false;
+
+        void UpdateTopBarBlurMask(int canvasWidthPx, int heightPx, int pillWidthPx)
+        {
+            if (topBarBlur == null || topBarBlur.IsDestroyed ||
+                topBarBlurMask == null || topBarBlurMask.IsDestroyed ||
+                root == null || root.IsDestroyed)
+                return;
+
+            canvasWidthPx = Math.Max(1, canvasWidthPx);
+            pillWidthPx = Math.Max(1, pillWidthPx);
+
+            if (topBarBlurMaskWidth == canvasWidthPx && topBarBlurMaskHeight == heightPx && topBarBlurPillWidth == pillWidthPx)
+                return;
+
+            topBarBlurMaskWidth = canvasWidthPx;
+            topBarBlurMaskHeight = heightPx;
+            topBarBlurPillWidth = pillWidthPx;
+
+            var tex = topBarBlurMask;
+            var blur = topBarBlur;
+            var engine = root.Engine;
+            byte[] data = CreateCenteredRoundedMaskPixels(canvasWidthPx, heightPx, pillWidthPx, heightPx, barH * 0.5f, out int texW, out int texH);
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var bitmap = new Bitmap2D(data, texW, texH, Renderite.Shared.TextureFormat.RGBA32, false, Renderite.Shared.ColorProfile.Linear, false);
+                    var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
+                    if (uri == null)
+                        return;
+
+                    tex.World.RunInUpdates(0, () =>
+                    {
+                        if (tex.IsDestroyed || blur.IsDestroyed)
+                            return;
+
+                        tex.URL.Value = uri;
+                        blur.SpreadMagnitudeTexture.Target = tex;
+                        blur.SpreadTextureScale.Value = float2.One;
+                        blur.SpreadTextureOffset.Value = float2.Zero;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[TopBar] Blur mask generation failed: {ex.Message}");
+                }
+            });
+        }
 
         void ApplyBarLayout(float width)
         {
@@ -1195,7 +1647,7 @@ public partial class DesktopBuddyMod
                 barBackRenderTex.Size.Value = new int2(barRenderW, (int)barH);
 
             if (barBg != null && !barBg.IsDestroyed)
-                barBg.RectTransform.SetFixedRect(new Rect(0f, -barH * 0.5f, width, barH), new float2(0f, 0.5f));
+                barBg.RectTransform.SetFixedRect(new Rect(width * -0.5f, -barH * 0.5f, width, barH), new float2(0.5f, 0.5f));
 
             if (barSlot != null && !barSlot.IsDestroyed)
                 barSlot.LocalPosition = float3.Zero;
@@ -1204,19 +1656,27 @@ public partial class DesktopBuddyMod
                 barBackCanvas.Size.Value = new float2(barRenderW, barH);
 
             if (barBackBg != null && !barBackBg.IsDestroyed)
-                barBackBg.RectTransform.SetFixedRect(new Rect(-width, -barH * 0.5f, width, barH), new float2(1f, 0.5f));
+                barBackBg.RectTransform.SetFixedRect(new Rect(width * -0.5f, -barH * 0.5f, width, barH), new float2(0.5f, 0.5f));
 
             if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
             {
                 topBarStripRef.Size.Value = new float2(barRenderW, barH);
-                topBarStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0f);
+                topBarStripRef.Slot.LocalPosition = new float3(0f, barYPos, TopBarSurfaceZOffset);
             }
 
             if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
             {
                 topBarBackStripRef.Size.Value = new float2(barRenderW, barH);
-                topBarBackStripRef.Slot.LocalPosition = new float3(0f, barYPos, 0.004f);
+                topBarBackStripRef.Slot.LocalPosition = new float3(0f, barYPos, TopBarBackZOffset);
             }
+
+            if (topBarBlurMeshRef != null && !topBarBlurMeshRef.IsDestroyed)
+            {
+                topBarBlurMeshRef.Size.Value = new float2(barRenderW, barH);
+                topBarBlurMeshRef.Slot.LocalPosition = new float3(0f, barYPos, TopBarSurfaceZOffset);
+            }
+
+            UpdateTopBarBlurMask(Math.Max(1, barRenderW), Math.Max(1, (int)MathF.Ceiling(barH)), Math.Max(1, (int)MathF.Ceiling(width)));
         }
 
         void BarUpdateLoop()
@@ -1240,15 +1700,87 @@ public partial class DesktopBuddyMod
                 root.World.RunInUpdates(1, BarUpdateLoop);
         }
 
-        toggleBtn.LocalPressed += (IButton b, ButtonEventData d) =>
+        Button barHoverButton = barBg.Slot.AttachComponent<Button>();
+        barHoverButton.RequireInitialPress.Value = false;
+        if (barHoverButton.ColorDrivers.Count > 0)
         {
-            if (root == null || root.IsDestroyed || widthSmooth == null || widthSmooth.IsDestroyed) return;
-            barExpanded = !barExpanded;
+            var cd = barHoverButton.ColorDrivers[0];
+            cd.NormalColor.Value = barBgColor;
+            cd.HighlightColor.Value = barBgColor;
+            cd.PressColor.Value = barBgColor;
+            cd.DisabledColor.Value = barBgColor;
+        }
+
+        int hoverCollapseGeneration = 0;
+
+        void SetBarExpanded(bool expanded)
+        {
+            if (root == null || root.IsDestroyed || widthSmooth == null || widthSmooth.IsDestroyed)
+                return;
+
+            if (barExpanded == expanded)
+                return;
+
+            barExpanded = expanded;
             if (expandPanel != null && !expandPanel.IsDestroyed)
                 expandPanel.ActiveSelf = barExpanded;
             widthSmooth.TargetValue.Value = barExpanded ? barExpandedW : barCollapsedW;
             root.World.RunInUpdates(1, BarUpdateLoop);
-        };
+        }
+
+        bool AnyBarControlHovered()
+        {
+            return (barHoverButton != null && !barHoverButton.IsDestroyed && barHoverButton.IsHovering.Value) ||
+                   (settingsBtn != null && !settingsBtn.IsDestroyed && settingsBtn.IsHovering.Value) ||
+                   (previewBtn != null && !previewBtn.IsDestroyed && previewBtn.IsHovering.Value) ||
+                   (kbBtn != null && !kbBtn.IsDestroyed && kbBtn.IsHovering.Value) ||
+                   (anchorBtn != null && !anchorBtn.IsDestroyed && anchorBtn.IsHovering.Value) ||
+                   (privateBtn != null && !privateBtn.IsDestroyed && privateBtn.IsHovering.Value) ||
+                   (resyncBtn != null && !resyncBtn.IsDestroyed && resyncBtn.IsHovering.Value) ||
+                   (curveSlider != null && !curveSlider.IsDestroyed && curveSlider.IsHovering.Value) ||
+                   (volSlider != null && !volSlider.IsDestroyed && volSlider.IsHovering.Value);
+        }
+
+        void ScheduleCollapseWhenHoverLeaves()
+        {
+            if (root == null || root.IsDestroyed) return;
+
+            int generation = ++hoverCollapseGeneration;
+            root.World.RunInSeconds(TopBarHoverCollapseDelaySeconds, () =>
+            {
+                if (root == null || root.IsDestroyed)
+                    return;
+
+                if (generation != hoverCollapseGeneration)
+                    return;
+
+                if (AnyBarControlHovered())
+                    return;
+
+                SetBarExpanded(false);
+            });
+        }
+
+        void TrackHover(Button button)
+        {
+            if (button == null)
+                return;
+            button.LocalHoverEnter += (_, _) =>
+            {
+                hoverCollapseGeneration++;
+                SetBarExpanded(true);
+            };
+            button.LocalHoverStay += (_, _) => SetBarExpanded(true);
+            button.LocalHoverLeave += (_, _) => ScheduleCollapseWhenHoverLeaves();
+        }
+
+        TrackHover(barHoverButton);
+        TrackHover(settingsBtn);
+        TrackHover(previewBtn);
+        TrackHover(kbBtn);
+        TrackHover(anchorBtn);
+        TrackHover(privateBtn);
+        TrackHover(resyncBtn);
         topBarStripRef = AddCurvedRenderPlane(
             root,
             "TopBarCurvedMesh",
@@ -1256,7 +1788,7 @@ public partial class DesktopBuddyMod
             barH,
             canvasScale,
             barYPos,
-            0f,
+            TopBarSurfaceZOffset,
             barRenderTex,
             barCamera,
             addCollider: true,
@@ -1264,8 +1796,11 @@ public partial class DesktopBuddyMod
             zWrite: ZWrite.Off,
             offsetUnits: 120f,
             blendMode: BlendMode.Alpha,
-            renderQueue: 3001,
+            renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f);
+        topBarBlurMeshRef = topBarStripRef;
+        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 24, 0.0044f, SettingsBackdropBlurRenderQueue);
+        topBarBlurMask = TextureProviderSettings.ClampWrap(topBarStripRef.Slot.AttachComponent<StaticTexture2D>());
         RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
         topBarBackStripRef = AddCurvedRenderPlane(
             root,
@@ -1274,7 +1809,7 @@ public partial class DesktopBuddyMod
             barH,
             canvasScale,
             barYPos,
-            0.004f,
+            TopBarBackZOffset,
             barBackRenderTex,
             null,
             addCollider: false,
@@ -1282,7 +1817,7 @@ public partial class DesktopBuddyMod
             zWrite: ZWrite.Off,
             offsetUnits: 121f,
             blendMode: BlendMode.Alpha,
-            renderQueue: 3002,
+            renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f,
             textureScale: new float2(-1f, 1f),
             textureOffset: new float2(1f, 0f));
@@ -1290,7 +1825,7 @@ public partial class DesktopBuddyMod
         ApplyBarLayout(barCollapsedW);
         root.World.RunInUpdates(1, BarUpdateLoop);
 
-        Msg($"[TopBar] Created, user '{userName}'");
+        Msg("[TopBar] Created bottom hover menu");
 
         Slot keyboardSlot = null;
         DesktopKeyboardSource keyboardSource = null;
@@ -1313,42 +1848,34 @@ public partial class DesktopBuddyMod
             keyboardSource.OpenKeyboard();
         };
 
-        ValueUserOverride<bool> streamVisRef = null;
         VideoTextureProvider videoTexRef = null;
-        var previewUsers = new HashSet<FrooxEngine.User>();
-
-        avatarButton.LocalPressed += (IButton b, ButtonEventData d) =>
+        previewBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
             if (displaySlot == null || displaySlot.IsDestroyed ||
-                streamVisRef == null || streamVisRef.IsDestroyed)
+                videoTexRef == null || videoTexRef.IsDestroyed)
             {
-                Msg("[Preview] No stream available");
+                Msg("[Preview] No remote stream visual available");
                 return;
             }
 
-            var user = PressingUser(d);
-            if (user == null)
-            {
-                Msg("[Preview] No pressing user");
-                return;
-            }
+            session.LocalPreviewingRemoteStream = !session.LocalPreviewingRemoteStream;
+            if (session.PreviewStreamAllowed != null && !session.PreviewStreamAllowed.IsDestroyed)
+                session.PreviewStreamAllowed.SetOverride(root.World.LocalUser, session.LocalPreviewingRemoteStream);
+            if (session.StreamVisualAllowed != null && !session.StreamVisualAllowed.IsDestroyed)
+                session.StreamVisualAllowed.SetOverride(root.World.LocalUser, session.LocalPreviewingRemoteStream);
+            displaySlot.ActiveSelf = !session.LocalPreviewingRemoteStream;
+            if (!session.LocalPreviewingRemoteStream && videoTexRef.IsPlaying)
+                videoTexRef.Stop();
+            else if (session.LocalPreviewingRemoteStream && !videoTexRef.IsPlaying && videoTexRef.IsAssetAvailable)
+                videoTexRef.Play();
 
-            bool streamPreview = !previewUsers.Contains(user);
-            if (streamPreview)
-                previewUsers.Add(user);
-            else
-                previewUsers.Remove(user);
+            var img = previewBtn.Slot.GetComponent<Image>();
+            if (img != null)
+                img.Tint.Value = session.LocalPreviewingRemoteStream
+                    ? new colorX(0.24f, 0.18f, 0.42f, 0.95f)
+                    : new colorX(0.12f, 0.13f, 0.17f, 0.88f);
 
-            streamVisRef.SetOverride(user, streamPreview);
-            if (user == root.World.LocalUser)
-            {
-                displaySlot.ActiveSelf = !streamPreview;
-                avatarImage.Tint.Value = streamPreview
-                    ? new colorX(1f, 0.05f, 0.03f, 1f)
-                    : colorX.White;
-            }
-
-            Msg($"[Preview] {user.UserName}: stream={streamPreview}, direct={!streamPreview}");
+            Msg($"[Preview] Local stream preview={(session.LocalPreviewingRemoteStream ? "remote" : "direct")}");
         };
 
         resyncBtn.LocalPressed += (IButton b, ButtonEventData d) =>
@@ -1360,7 +1887,7 @@ public partial class DesktopBuddyMod
                 return;
             }
 
-            var savedUrl = videoTexRef.URL.Value;
+            var savedUrl = session.StreamUrl ?? videoTexRef.URL.Value;
             if (savedUrl == null)
             {
                 Msg("[Resync] No URL is currently bound");
@@ -1368,14 +1895,12 @@ public partial class DesktopBuddyMod
             }
 
             Msg($"[Resync] Forcing full reload: {savedUrl}");
-            videoTexRef.Stop();
-            videoTexRef.URL.Value = null;
+            ClearRemoteStreamUrl(session, "manual resync");
             root.World.RunInUpdates(10, () =>
             {
                 if (videoTexRef != null && !videoTexRef.IsDestroyed)
                 {
-                    videoTexRef.URL.Value = savedUrl;
-                    videoTexRef.Play();
+                    SetRemoteStreamUrl(session, savedUrl, "manual resync restore");
                     Msg($"[Resync] URL restored: {savedUrl}");
                 }
             });
@@ -1518,14 +2043,13 @@ public partial class DesktopBuddyMod
             {
                 if (isPrivate)
                 {
-                    savedStreamUrl = videoTexRef.URL.Value?.ToString();
-                    videoTexRef.URL.Value = null;
-                    videoTexRef.Stop();
+                    savedStreamUrl = (session.StreamUrl ?? videoTexRef.URL.Value)?.ToString();
+                    ClearRemoteStreamUrl(session, "private mode");
                     Msg("[Private] Stream disconnected");
                 }
                 else if (savedStreamUrl != null)
                 {
-                    videoTexRef.URL.Value = new Uri(savedStreamUrl);
+                    SetRemoteStreamUrl(session, new Uri(savedStreamUrl), "private mode restore");
                     Msg($"[Private] Stream restored: {savedStreamUrl}");
                 }
             }
@@ -1536,23 +2060,6 @@ public partial class DesktopBuddyMod
 
         bool isDesktopCapture = hwnd == IntPtr.Zero;
         uint capturedPid = processId;
-
-        var ownerRef = root.AttachComponent<ReferenceField<FrooxEngine.User>>();
-        ownerRef.Reference.Target = root.World.LocalUser;
-
-        if (!(Config?.GetValue(SpatialAudioEnabled) ?? false))
-        {
-            volSlider.Value.OnValueChange += (SyncField<float> field) =>
-            {
-                if (ownerRef.Reference.Target == root.World.LocalUser)
-                {
-                    if (isDesktopCapture)
-                        WindowVolume.SetMasterVolume(field.Value);
-                    else if (capturedPid != 0)
-                        WindowVolume.SetProcessVolume(capturedPid, field.Value);
-                }
-            };
-        }
 
         Canvas streamCanvasRef = null;
 
@@ -1567,22 +2074,32 @@ public partial class DesktopBuddyMod
             _updateShown = true;
             var capturedRoot = root;
             var capturedWorld = root.World;
-            float capturedW = w;
-            float capturedScale = canvasScale;
+            var capturedSession = session;
+            int capturedW = w;
+            int capturedH = h;
+            float capturedCanvasScale = canvasScale;
+            float capturedCurvature = currentPanelCurvature;
             System.Threading.Tasks.Task.Run(() =>
             {
                 CheckForUpdate();
                 if (_latestVersion == null) return;
                 capturedWorld.RunInUpdates(0, () =>
                 {
-                    if (capturedRoot.IsDestroyed) return;
-                    ShowUpdatePopup(capturedRoot, capturedW, capturedScale);
+                    if (capturedRoot.IsDestroyed || capturedSession == null) return;
+                    OpenSettingsPanel(
+                        capturedRoot,
+                        capturedSession,
+                        capturedSession.LastKnownW > 0 ? capturedSession.LastKnownW : capturedW,
+                        capturedSession.LastKnownH > 0 ? capturedSession.LastKnownH : capturedH,
+                        capturedCanvasScale,
+                        capturedCurvature,
+                        SettingsPanelTab.UpdateInfo);
                 });
             });
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        bool allowRemoteStream = useMediaMtx || (StreamServer != null && TunnelUrl != null);
+        bool allowRemoteStream = useMediaMtx || (StreamServer != null && GetBuiltInStreamBaseUrl() != null);
         if (allowRemoteStream)
         {
             try
@@ -1606,8 +2123,8 @@ public partial class DesktopBuddyMod
                         else
                         {
                             encoder = StreamServer.CreateEncoder(streamId);
-                            url = new Uri($"{TunnelUrl}/stream/{streamId}");
-                            Msg($"[RemoteStream] Using Cloudflare HTTP stream: {url}");
+                            url = GetBuiltInStreamUrl(streamId);
+                            Msg($"[RemoteStream] Using built-in HTTP stream: {url}");
                         }
 
                         var audio = new AudioCapture();
@@ -1656,10 +2173,9 @@ public partial class DesktopBuddyMod
 
                 var videoSlot = root.AddSlot("StreamProvider");
                 var videoTex = TextureProviderSettings.ClampWrap(videoSlot.AttachComponent<VideoTextureProvider>());
-                videoTex.ForcePlaybackEngine.Value = "libVLC";
                 videoTex.Stream.Value = true;
                 videoTex.URL.Value = null;
-                videoTex.Volume.Value = 0f;
+                videoTex.Volume.Value = 1f;
                 videoTexRef = videoTex;
                 session.VideoTexture = videoTex;
                 var streamUrl = shared.StreamUrl;
@@ -1667,8 +2183,10 @@ public partial class DesktopBuddyMod
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
                 audioOutput.Volume.Value = 1f;
+                audioOutput.Spatialize.Value = false;
+                audioOutput.SpatialBlend.Value = 0f;
+                audioOutput.IgnoreAudioEffects.Value = true;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
-                audioOutput.ExludeUser(root.World.LocalUser);
 
                 var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
                 volDriver.DriveTarget.Target = audioOutput.Volume;
@@ -1686,16 +2204,19 @@ public partial class DesktopBuddyMod
 
                 var streamSlot = root.AddSlot("RemoteStreamVisual");
                 streamSlot.LocalScale = float3.One * canvasScale;
+                var ownerStreamVisual = streamSlot.AttachComponent<ValueUserOverride<bool>>();
+                ownerStreamVisual.Target.Target = streamSlot.ActiveSelf_Field;
+                ownerStreamVisual.Default.Value = true;
+                ownerStreamVisual.CreateOverrideOnWrite.Value = false;
+                ownerStreamVisual.ClearOnUserLeave.Value = true;
+                ownerStreamVisual.SetOverride(root.World.LocalUser, false);
+                session.StreamVisualAllowed = ownerStreamVisual;
 
-                var streamVis = streamSlot.AttachComponent<ValueUserOverride<bool>>();
-                streamVis.Target.Target = streamSlot.ActiveSelf_Field;
-                streamVis.Default.Value = true;
-                streamVis.CreateOverrideOnWrite.Value = false;
-                streamVis.SetOverride(root.World.LocalUser, false);
-                streamVisRef = streamVis;
-                Msg("[RemoteStream] Per-user visibility on visual (local=false, others=true)");
+                Msg("[RemoteStream] Per-user culling gate controls stream visibility and playback");
 
-                streamPlaneRef = AddCurvedTexturePlane(streamSlot, "VideoTextureCurvedPlane", w, h, 1f, videoTex, 0f, flipY: false, offsetUnits: -100f);
+                SetupViewerCullingGate(session, streamSlot, videoTex, root.World.LocalUser);
+
+                streamPlaneRef = AddCurvedTexturePlane(streamSlot, "VideoTextureCurvedPlane", w, h, 1f, videoTex, 0f, flipY: false, offsetUnits: -100f, renderQueue: DesktopSurfaceRenderQueue);
                 ApplyPanelCurvature(currentPanelCurvature);
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
@@ -1706,6 +2227,7 @@ public partial class DesktopBuddyMod
 
                 var streamBg = streamUi.Image(new colorX(0f, 0f, 0f, 1f));
                 streamBg.Tint.Value = colorX.Clear;
+                streamBg.InteractionTarget.Value = false;
                 streamUi.NestInto(streamBg.RectTransform);
 
                 var streamImg = streamUi.RawImage(videoTex);
@@ -1731,8 +2253,7 @@ public partial class DesktopBuddyMod
 
                     if (ready && !isPrivate)
                     {
-                        videoTex.URL.Value = streamUrl;
-                        videoTex.Play();
+                        SetRemoteStreamUrl(session, streamUrl, $"initial bind streamId={shared.StreamId}");
                         streamUrlBound = true;
                         Msg($"[RemoteStream] URL bound after encoder readiness: attempt={attempt} streamId={shared.StreamId} {nvEncoder.ReadableStreamState}");
                         return;
@@ -1751,6 +2272,7 @@ public partial class DesktopBuddyMod
                 }
 
                 int checkCount = 0;
+                bool loggedPlaybackReady = false;
                 root.World.RunInUpdates(30, () => CheckVideoState());
                 void CheckVideoState()
                 {
@@ -1760,12 +2282,16 @@ public partial class DesktopBuddyMod
                     string playbackEngine = videoTex.CurrentPlaybackEngine?.Value ?? "null";
                     bool isPlaying = videoTex.IsPlaying;
                     float clockErr = videoTex.CurrentClockError?.Value ?? -1f;
-                    Msg($"[RemoteStream] Check #{checkCount}: urlBound={streamUrlBound} avail={assetAvail} engine={playbackEngine} playing={isPlaying} clockErr={clockErr:F2}");
+                    if (assetAvail && !loggedPlaybackReady)
+                    {
+                        loggedPlaybackReady = true;
+                        Msg($"[RemoteStream] Playback ready: streamId={shared.StreamId} engine={playbackEngine}");
+                    }
 
-                    if (streamUrlBound && assetAvail && !isPlaying)
+                    if (streamUrlBound && assetAvail && !isPlaying && IsLocalStreamPlaybackAllowedNow(session))
                     {
                         videoTex.Play();
-                        Msg("[RemoteStream] Called Play() on VideoTextureProvider");
+                        Msg($"[RemoteStream] Restarted VideoTextureProvider playback streamId={shared.StreamId} clockErr={clockErr:F2}");
                     }
 
                     if (checkCount < 10)
@@ -1781,7 +2307,7 @@ public partial class DesktopBuddyMod
         }
         else
         {
-            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} TunnelUrl={TunnelUrl ?? "null"}");
+            Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} StreamBase={GetBuiltInStreamBaseUrl() ?? "null"}");
         }
 
         grabbable = root.AttachComponent<Grabbable>();
@@ -1819,12 +2345,10 @@ public partial class DesktopBuddyMod
                     {
                         float3 velocity = (posHistory[newest] - posHistory[oldest]) / (float)dt;
                         float speed = velocity.Magnitude;
-                        Msg($"[Throw] Release velocity: {speed:F2} m/s");
 
                         if (speed > 3f)
                         {
                             thrown = true;
-                            Msg($"[Throw] Thrown! velocity={speed:F2} m/s");
 
                             var cc = root.AttachComponent<CharacterController>();
                             cc.SimulatingUser.Target = localUser;
@@ -1897,7 +2421,8 @@ public partial class DesktopBuddyMod
             h = newH;
             worldHalfW = newW / 2f * canvasScale;
             worldHalfH = newH / 2f * canvasScale;
-            barYPos = worldHalfH + barH / 2f * canvasScale + barMarginTop;
+            barRenderW = Math.Max(1, newW);
+            barYPos = -worldHalfH - barH / 2f * canvasScale - barMarginBottom;
             ApplyBarLayout(currentBarWidth);
 
             if (session.Collider != null && !session.Collider.IsDestroyed)
@@ -1921,8 +2446,8 @@ public partial class DesktopBuddyMod
             if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
                 streamCanvasRef.Size.Value = new float2(newW, newH);
 
-            if (topBarStripRef != null && !topBarStripRef.IsDestroyed)
-                topBarStripRef.Size.Value = new float2(newW, barH);
+            ResizeSettingsPanel(session, newW, newH, canvasScale, currentPanelCurvature);
+            UpdateViewerCullingTrigger(session);
 
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
                 keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);

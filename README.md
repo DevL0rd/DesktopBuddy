@@ -28,10 +28,11 @@ The zip is already structured for the Resonite root. There is no DesktopBuddy Ma
 - Registers SoftCam so the virtual camera appears as **DesktopBuddy - Camera**
 - Installs VB-Cable so the virtual microphone appears as **CABLE Output**
 - Disables VB-Cable loopback
-- Installs required renderer dependencies: RenderiteHook and BepInEx.Renderer
+- Installs required renderer dependencies: BepInEx.Renderer, plus RenderiteHook only when a game-side BepInEx/BepisLoader install is present
 - Checks that `DesktopBuddySharedTextureBridge.dll` is in the renderer plugin folder
 
 The setup script is safe to run repeatedly. It checks existing dependencies first and skips work that is already done. A reboot may be required after VB-Cable installation.
+It also disables any stale `rml_mods\RenderiteHook.dll`, because RenderiteHook is not a Resonite Mod Loader mod and will fail if loaded from `rml_mods`.
 
 ## Troubleshooting
 
