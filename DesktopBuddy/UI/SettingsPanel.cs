@@ -15,6 +15,8 @@ public partial class DesktopBuddyMod
 {
     private const float SettingsPanelZOffset = -0.018f;
     private const int SettingsPanelRenderQueue = SettingsUiRenderQueue;
+    private const float SettingsStickScrollDeadzone = 0.16f;
+    private const float SettingsStickScrollPixelsPerTick = 36f;
     private static readonly colorX SettingsBg = new(0.055f, 0.06f, 0.072f, 0.84f);
     private static readonly colorX SettingsPanel = new(0.085f, 0.095f, 0.115f, 0.94f);
     private static readonly colorX SettingsPanelSoft = new(0.115f, 0.125f, 0.15f, 0.94f);
@@ -38,6 +40,7 @@ public partial class DesktopBuddyMod
         (SettingsPanelTab.Stream, "Stream", "\U0001F4E1"),
         (SettingsPanelTab.Network, "Network", "\u2601"),
         (SettingsPanelTab.Devices, "Devices", "\U0001F3A5"),
+        (SettingsPanelTab.Audio, "Audio", "\U0001F50A"),
         (SettingsPanelTab.Debug, "Debug", "\U0001F9F0"),
         (SettingsPanelTab.UpdateInfo, "Info", "\u2139"),
     };
@@ -84,9 +87,13 @@ public partial class DesktopBuddyMod
             state.RenderHost.ActiveSelf = active;
 
         if (active)
+        {
             RebuildSettingsPanel(state, session);
+            StartSettingsStickScrollLoop(state);
+        }
         else
         {
+            state.StickScrollGeneration++;
             StopVirtualCameraPreview(session);
             FlushSettingsConfig();
         }
@@ -136,6 +143,9 @@ public partial class DesktopBuddyMod
         var canvas = canvasSlot.AttachComponent<Canvas>();
         canvas.Size.Value = new float2(renderW, renderH);
         canvas.Collider.Target.SetTrigger();
+        DesktopCanvasIds.Add(canvas.ReferenceID);
+        canvas.Destroyed += _ => DesktopCanvasIds.Remove(canvas.ReferenceID);
+        Msg($"[Settings] Registered canvas {canvas.ReferenceID} for locomotion suppression");
 
         var state = new SettingsPanelState
         {
@@ -176,7 +186,7 @@ public partial class DesktopBuddyMod
         mesh.Slot.ActiveSelf = false;
         state.Mesh = mesh;
         state.SurfaceSlot = mesh.Slot;
-        state.BackgroundBlur = AddCurvedMeshBackdropBlur(mesh.Slot, mesh, 24, 0.0044f, SettingsBackdropBlurRenderQueue);
+        state.BackgroundBlur = AddCurvedMeshBackdropBlur(mesh.Slot, mesh, 64, 0.012f, SettingsBackdropBlurRenderQueue);
         state.BackgroundBlurMask = TextureProviderSettings.ClampWrap(mesh.Slot.AttachComponent<StaticTexture2D>());
         UpdateSettingsBlurMask(state);
         RegisterTopBarRaycastPortal(mesh.Slot, renderRoot);
@@ -328,6 +338,9 @@ public partial class DesktopBuddyMod
             case SettingsPanelTab.Stream:
                 BuildStreamTab(contentUi, state, session);
                 break;
+            case SettingsPanelTab.Audio:
+                BuildAudioTab(contentUi, state, session);
+                break;
             case SettingsPanelTab.Network:
                 BuildNetworkTab(contentUi, state);
                 break;
@@ -342,6 +355,54 @@ public partial class DesktopBuddyMod
                 break;
         }
         ScheduleScrollbarGeometryUpdate(state);
+    }
+
+    private static void StartSettingsStickScrollLoop(SettingsPanelState state)
+    {
+        if (state?.OwnerRoot?.World == null)
+            return;
+
+        int generation = ++state.StickScrollGeneration;
+
+        void Tick()
+        {
+            if (state.OwnerRoot == null || state.OwnerRoot.IsDestroyed ||
+                state.SurfaceSlot == null || state.SurfaceSlot.IsDestroyed ||
+                !state.SurfaceSlot.ActiveSelf || generation != state.StickScrollGeneration)
+                return;
+
+            ProcessSettingsStickScroll(state);
+            state.OwnerRoot.World.RunInUpdates(1, Tick);
+        }
+
+        state.OwnerRoot.World.RunInUpdates(1, Tick);
+    }
+
+    private static void ProcessSettingsStickScroll(SettingsPanelState state)
+    {
+        var world = state?.OwnerRoot?.World;
+        var localUserRoot = world?.LocalUser?.Root;
+        if (world == null || localUserRoot == null || state.RenderRoot == null || state.RenderRoot.IsDestroyed)
+            return;
+
+        var handler = localUserRoot.GetRegisteredComponent((InteractionHandler h) => h.Side.Value == Chirality.Right);
+        var currentTouchable = handler?.Laser?.CurrentTouchable;
+        if (currentTouchable == null || !(currentTouchable is IAxisActionReceiver receiver))
+            return;
+
+        var touchableSlot = currentTouchable.Slot;
+        if (touchableSlot == null || !touchableSlot.IsChildOf(state.RenderRoot, includeSelf: true))
+            return;
+
+        var controller = world.InputInterface.GetControllerNode(Chirality.Right);
+        if (controller == null)
+            return;
+
+        float axisY = controller.Axis.Value.y;
+        if (Math.Abs(axisY) <= SettingsStickScrollDeadzone)
+            return;
+
+        receiver.ProcessAxis(handler.Laser.TouchSource, new float2(0f, axisY * SettingsStickScrollPixelsPerTick));
     }
 
     private static void BuildViewersTab(UIBuilder ui, SettingsPanelState state, DesktopSession session)
@@ -504,6 +565,108 @@ public partial class DesktopBuddyMod
     private static string NormalizeGpuDisplayName(string name)
     {
         return string.Join(" ", (name ?? "Unnamed GPU").Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static void BuildAudioTab(UIBuilder ui, SettingsPanelState state, DesktopSession session)
+    {
+        AddSectionHeader(ui, "Stream Audio");
+        AddFloatSlider(ui, state, "Volume", Config?.GetValue(StreamAudioOutputVolume) ?? 1f, 0f, 1f, value =>
+        {
+            SaveConfigValue(StreamAudioOutputVolume, NormalizeStreamAudioOutputVolume(value));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddOptionRow(ui, state, "Mode", NormalizeStreamAudioGlobalMode(Config?.GetValue(StreamAudioGlobalMode)),
+            new[] { ("global", "Global"), ("auto", "Auto"), ("positional", "Positional") },
+            value =>
+            {
+                SaveConfigValue(StreamAudioGlobalMode, NormalizeStreamAudioGlobalMode(value));
+                ApplyStreamAudioSettingsToAllSessions();
+            }, preferredColumns: 3, cellWidth: 126f);
+
+        AddSectionHeader(ui, "Spatial Output");
+        AddCheckbox(ui, state, "Spatialize", Config?.GetValue(StreamAudioSpatialize) ?? true, value =>
+        {
+            SaveConfigValue(StreamAudioSpatialize, value);
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Spatial blend", Config?.GetValue(StreamAudioSpatialBlend) ?? 1f, 0f, 1f, value =>
+        {
+            SaveConfigValue(StreamAudioSpatialBlend, Math.Clamp(value, 0f, 1f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddOptionRow(ui, state, "Distance space", NormalizeStreamAudioDistanceSpace(Config?.GetValue(StreamAudioDistanceSpace)),
+            new[] { ("global", "Global"), ("local", "Local") },
+            value =>
+            {
+                SaveConfigValue(StreamAudioDistanceSpace, NormalizeStreamAudioDistanceSpace(value));
+                ApplyStreamAudioSettingsToAllSessions();
+            }, preferredColumns: 2, cellWidth: 126f);
+        AddOptionRow(ui, state, "Rolloff", NormalizeStreamAudioRolloffMode(Config?.GetValue(StreamAudioRolloffMode)),
+            new[] { ("logarithmic_fade_off", "Log fade"), ("linear", "Linear") },
+            value =>
+            {
+                SaveConfigValue(StreamAudioRolloffMode, NormalizeStreamAudioRolloffMode(value));
+                ApplyStreamAudioSettingsToAllSessions();
+            }, preferredColumns: 2, cellWidth: 126f);
+        AddFloatSlider(ui, state, "Min distance", Config?.GetValue(StreamAudioMinDistance) ?? 1f, 0f, 10f, value =>
+        {
+            SaveConfigValue(StreamAudioMinDistance, Math.Clamp(value, 0f, 10f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Max distance", Config?.GetValue(StreamAudioMaxDistance) ?? 30f, 1f, 50f, value =>
+        {
+            SaveConfigValue(StreamAudioMaxDistance, Math.Clamp(value, 1f, 50f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Spatial start", Config?.GetValue(StreamAudioSpatializationStartDistance) ?? 0.01f, 0f, 10f, value =>
+        {
+            SaveConfigValue(StreamAudioSpatializationStartDistance, Math.Clamp(value, 0f, 10f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Transition range", Config?.GetValue(StreamAudioSpatializationTransitionRange) ?? 0.01f, 0f, 10f, value =>
+        {
+            SaveConfigValue(StreamAudioSpatializationTransitionRange, Math.Clamp(value, 0f, 10f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Min scale", Config?.GetValue(StreamAudioMinScale) ?? 0f, 0f, 1000f, value =>
+        {
+            SaveConfigValue(StreamAudioMinScale, Math.Clamp(value, 0f, 1000f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Max scale", Config?.GetValue(StreamAudioMaxScale) ?? 1000f, 0f, 1000f, value =>
+        {
+            SaveConfigValue(StreamAudioMaxScale, Math.Clamp(value, 0f, 1000f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+
+        AddSectionHeader(ui, "Playback");
+        AddOptionRow(ui, state, "Type group", NormalizeStreamAudioTypeGroup(Config?.GetValue(StreamAudioTypeGroup)),
+            new[] { ("multimedia", "Multimedia"), ("sound_effect", "Sound"), ("voice", "Voice"), ("ui", "UI") },
+            value =>
+            {
+                SaveConfigValue(StreamAudioTypeGroup, NormalizeStreamAudioTypeGroup(value));
+                ApplyStreamAudioSettingsToAllSessions();
+            }, preferredColumns: 4, cellWidth: 108f);
+        AddCheckbox(ui, state, "Ignore audio effects", Config?.GetValue(StreamAudioIgnoreAudioEffects) ?? true, value =>
+        {
+            SaveConfigValue(StreamAudioIgnoreAudioEffects, value);
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Pitch", Config?.GetValue(StreamAudioPitch) ?? 1f, 0.5f, 2f, value =>
+        {
+            SaveConfigValue(StreamAudioPitch, Math.Clamp(value, 0.5f, 2f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddFloatSlider(ui, state, "Doppler", Config?.GetValue(StreamAudioDopplerLevel) ?? 0f, 0f, 1f, value =>
+        {
+            SaveConfigValue(StreamAudioDopplerLevel, Math.Clamp(value, 0f, 1f));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
+        AddIntField(ui, state, "Priority", Config?.GetValue(StreamAudioPriority) ?? 128, 0, 256, value =>
+        {
+            SaveConfigValue(StreamAudioPriority, Math.Clamp(value, 0, 256));
+            ApplyStreamAudioSettingsToAllSessions();
+        });
     }
 
     private static int NormalizeStreamResolution(int value)
@@ -734,12 +897,12 @@ public partial class DesktopBuddyMod
         }, buttonLabel: "Export");
 
         AddSectionHeader(ui, "Debug Log");
-        float logHeight = Math.Clamp(state.ModalHeight - 440f, 140f, 240f);
+        float logHeight = Math.Clamp(state.ModalHeight - 360f, 180f, 340f);
         ui.Style.MinHeight = logHeight;
         ui.Style.PreferredHeight = logHeight;
         ui.Style.FlexibleWidth = 1f;
         ui.Style.FlexibleHeight = -1f;
-        var logUi = BeginRoundedScroll(ui, state, "DebugLogScroll", logHeight, Alignment.BottomLeft, out var logScroll);
+        var logUi = BeginRoundedScroll(ui, state, "DebugLogScroll", logHeight, Alignment.BottomLeft, out var logScroll, new colorX(0f, 0f, 0f, 0.8f));
         logUi.Style.MinHeight = Math.Max(160f, logHeight - 24f);
         logUi.Style.PreferredHeight = Math.Max(160f, logHeight - 24f);
         logUi.Style.FlexibleWidth = 1f;
@@ -805,7 +968,7 @@ public partial class DesktopBuddyMod
         AddButtonRow(ui, state, "Reset settings to defaults", () => ResetSettingsToDefaults(state, session), buttonLabel: "Reset");
 
         AddSectionHeader(ui, "Changelog");
-        float changelogHeight = Math.Clamp(state.ModalHeight - 540f, 140f, 240f);
+        float changelogHeight = Math.Clamp((state.ModalHeight - 540f) * 3f, 360f, 720f);
         var changelogUi = BeginRoundedScroll(ui, state, "UpdateChangelogScroll", changelogHeight, Alignment.TopLeft, out _);
         string changelog = string.IsNullOrWhiteSpace(_remoteChangelog)
             ? (_updateCheckInProgress ? "Checking CHANGELOG.txt..." : "No CHANGELOG.txt release asset found.")
@@ -813,7 +976,10 @@ public partial class DesktopBuddyMod
         changelogUi.Style.MinHeight = Math.Max(140f, changelogHeight - 24f);
         changelogUi.Style.PreferredHeight = Math.Max(140f, changelogHeight - 24f);
         changelogUi.Style.FlexibleWidth = 1f;
+        changelogUi.PushStyle();
+        changelogUi.Style.SupressLayoutElement = true;
         var text = changelogUi.Text(changelog, bestFit: false, alignment: Alignment.TopLeft);
+        changelogUi.PopStyle();
         text.Size.Value = 14f;
         text.Color.Value = SettingsSubtext;
         text.LineHeight.Value = 1.12f;
@@ -844,6 +1010,7 @@ public partial class DesktopBuddyMod
                     UpdateCullingPreview(active, active.SettingsPanel);
                 }
             }
+            ApplyStreamAudioSettingsToAllSessions();
             RequestStreamEncoderRestart(session, "settings reset");
             Msg("[Settings] Reset settings to defaults");
         }
@@ -890,13 +1057,13 @@ public partial class DesktopBuddyMod
         });
     }
 
-    private static UIBuilder BeginRoundedScroll(UIBuilder ui, SettingsPanelState state, string name, float minHeight, Alignment alignment, out ScrollRect scroll)
+    private static UIBuilder BeginRoundedScroll(UIBuilder ui, SettingsPanelState state, string name, float minHeight, Alignment alignment, out ScrollRect scroll, colorX? frameTint = null)
     {
         ui.Style.MinHeight = minHeight;
         ui.Style.PreferredHeight = minHeight;
         ui.Style.FlexibleWidth = 1f;
         ui.Style.FlexibleHeight = minHeight <= 0f ? 1f : -1f;
-        var frame = ui.Image(new colorX(0.07f, 0.078f, 0.095f, 0.72f));
+        var frame = ui.Image(frameTint ?? new colorX(0.07f, 0.078f, 0.095f, 0.72f));
         frame.Sprite.Target = CreateRoundedSprite(frame.Slot, state.Canvas.World, 16f);
         frame.NineSliceSizing.Value = NineSliceSizing.FixedSize;
         ui.NestInto(frame.RectTransform);

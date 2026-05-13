@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -11,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading;
+using Awwdio;
 using HarmonyLib;
 using ResoniteModLoader;
 using FrooxEngine;
@@ -28,7 +30,7 @@ public partial class DesktopBuddyMod : ResoniteMod
     public override string Version => DesktopBuddyVersion;
     public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
 
-    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 12);
+    private static readonly Version CurrentConfigSchemaVersion = new(1, 0, 13);
     internal static ModConfiguration? Config;
     private static bool _configResetForNewDefaults;
     private static int _runtimeBitrateMbps = 10;
@@ -123,6 +125,74 @@ public partial class DesktopBuddyMod : ResoniteMod
     [AutoRegisterConfigKey]
     internal static readonly ModConfigurationKey<string> PreferredGpuLuid =
         new("preferredGpuLuid", "Preferred DXGI adapter LUID for DesktopBuddy capture/encoding, or blank for auto.", () => "");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioOutputVolume =
+        new("streamAudioOutputVolume", "Default local stream AudioOutput volume.", () => 1.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> StreamAudioGlobalMode =
+        new("streamAudioGlobalMode", "Stream AudioOutput global mode: auto, global, or positional.", () => "positional");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> StreamAudioSpatialize =
+        new("streamAudioSpatialize", "Enable stream AudioOutput spatialization.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioSpatialBlend =
+        new("streamAudioSpatialBlend", "Stream AudioOutput spatial blend.", () => 1.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> StreamAudioDistanceSpace =
+        new("streamAudioDistanceSpace", "Stream AudioOutput distance space: local or global.", () => "global");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioDopplerLevel =
+        new("streamAudioDopplerLevel", "Stream AudioOutput doppler level.", () => 0.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioPitch =
+        new("streamAudioPitch", "Stream AudioOutput pitch.", () => 1.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<bool> StreamAudioIgnoreAudioEffects =
+        new("streamAudioIgnoreAudioEffects", "Bypass Resonite audio effects for stream playback.", () => true);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> StreamAudioTypeGroup =
+        new("streamAudioTypeGroup", "Stream AudioOutput type group: multimedia, sound_effect, voice, or ui.", () => "multimedia");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<string> StreamAudioRolloffMode =
+        new("streamAudioRolloffMode", "Stream AudioOutput rolloff mode: logarithmic_fade_off or linear.", () => "linear");
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioMinDistance =
+        new("streamAudioMinDistance", "Stream AudioOutput minimum distance.", () => 1.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioMaxDistance =
+        new("streamAudioMaxDistance", "Stream AudioOutput maximum distance.", () => 30.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioSpatializationStartDistance =
+        new("streamAudioSpatializationStartDistance", "Stream AudioOutput spatialization start distance.", () => 0.01f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioSpatializationTransitionRange =
+        new("streamAudioSpatializationTransitionRange", "Stream AudioOutput spatialization transition range.", () => 0.01f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<int> StreamAudioPriority =
+        new("streamAudioPriority", "Stream AudioOutput priority.", () => 128);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioMinScale =
+        new("streamAudioMinScale", "Stream AudioOutput local-distance minimum scale clamp.", () => 0.0f);
+
+    [AutoRegisterConfigKey]
+    internal static readonly ModConfigurationKey<float> StreamAudioMaxScale =
+        new("streamAudioMaxScale", "Stream AudioOutput local-distance maximum scale clamp.", () => 1000.0f);
 
     internal static bool IsMediaMtxEnabled =>
         Config?.GetValue(UseMediaMtx) == true && !string.IsNullOrWhiteSpace(Config?.GetValue(MediaMtxHost));
@@ -510,6 +580,23 @@ public partial class DesktopBuddyMod : ResoniteMod
             Config.Set(ViewerDistance, Math.Clamp(Config.GetValue(ViewerDistance), 1f, 10f));
             Config.Set(EncoderPreference, NormalizeEncoderPreference(Config.GetValue(EncoderPreference)));
             Config.Set(PreferredGpuLuid, Config.GetValue(PreferredGpuLuid)?.Trim() ?? "");
+            Config.Set(StreamAudioOutputVolume, NormalizeStreamAudioOutputVolume(Config.GetValue(StreamAudioOutputVolume)));
+            Config.Set(StreamAudioGlobalMode, NormalizeStreamAudioGlobalMode(Config.GetValue(StreamAudioGlobalMode)));
+            Config.Set(StreamAudioSpatialize, Config.GetValue(StreamAudioSpatialize));
+            Config.Set(StreamAudioSpatialBlend, Math.Clamp(Config.GetValue(StreamAudioSpatialBlend), 0f, 1f));
+            Config.Set(StreamAudioDistanceSpace, NormalizeStreamAudioDistanceSpace(Config.GetValue(StreamAudioDistanceSpace)));
+            Config.Set(StreamAudioDopplerLevel, Math.Clamp(Config.GetValue(StreamAudioDopplerLevel), 0f, 1f));
+            Config.Set(StreamAudioPitch, Math.Clamp(Config.GetValue(StreamAudioPitch), 0.5f, 2f));
+            Config.Set(StreamAudioIgnoreAudioEffects, Config.GetValue(StreamAudioIgnoreAudioEffects));
+            Config.Set(StreamAudioTypeGroup, NormalizeStreamAudioTypeGroup(Config.GetValue(StreamAudioTypeGroup)));
+            Config.Set(StreamAudioRolloffMode, NormalizeStreamAudioRolloffMode(Config.GetValue(StreamAudioRolloffMode)));
+            Config.Set(StreamAudioMinDistance, Math.Clamp(Config.GetValue(StreamAudioMinDistance), 0f, 10f));
+            Config.Set(StreamAudioMaxDistance, Math.Clamp(Config.GetValue(StreamAudioMaxDistance), 1f, 50f));
+            Config.Set(StreamAudioSpatializationStartDistance, Math.Clamp(Config.GetValue(StreamAudioSpatializationStartDistance), 0f, 10f));
+            Config.Set(StreamAudioSpatializationTransitionRange, Math.Clamp(Config.GetValue(StreamAudioSpatializationTransitionRange), 0f, 10f));
+            Config.Set(StreamAudioPriority, Math.Clamp(Config.GetValue(StreamAudioPriority), 0, 256));
+            Config.Set(StreamAudioMinScale, Math.Clamp(Config.GetValue(StreamAudioMinScale), 0f, 1000f));
+            Config.Set(StreamAudioMaxScale, Math.Clamp(Config.GetValue(StreamAudioMaxScale), 0f, 1000f));
             Config.Save();
             _configResetForNewDefaults = false;
             RefreshRuntimeStreamSettingsFromConfig();
@@ -544,6 +631,23 @@ public partial class DesktopBuddyMod : ResoniteMod
         Config.Set(ViewerDistance, 3.0f);
         Config.Set(EncoderPreference, "auto");
         Config.Set(PreferredGpuLuid, "");
+        Config.Set(StreamAudioOutputVolume, 1.0f);
+        Config.Set(StreamAudioGlobalMode, "positional");
+        Config.Set(StreamAudioSpatialize, true);
+        Config.Set(StreamAudioSpatialBlend, 1.0f);
+        Config.Set(StreamAudioDistanceSpace, "global");
+        Config.Set(StreamAudioDopplerLevel, 0.0f);
+        Config.Set(StreamAudioPitch, 1.0f);
+        Config.Set(StreamAudioIgnoreAudioEffects, true);
+        Config.Set(StreamAudioTypeGroup, "multimedia");
+        Config.Set(StreamAudioRolloffMode, "linear");
+        Config.Set(StreamAudioMinDistance, 1.0f);
+        Config.Set(StreamAudioMaxDistance, 30.0f);
+        Config.Set(StreamAudioSpatializationStartDistance, 0.01f);
+        Config.Set(StreamAudioSpatializationTransitionRange, 0.01f);
+        Config.Set(StreamAudioPriority, 128);
+        Config.Set(StreamAudioMinScale, 0.0f);
+        Config.Set(StreamAudioMaxScale, 1000.0f);
     }
 
     internal static string NormalizeViewerCullingMode(string value)
@@ -563,6 +667,125 @@ public partial class DesktopBuddyMod : ResoniteMod
             "libx264" or "libx265" => value,
             _ => "auto"
         };
+    }
+
+    internal static float NormalizeStreamAudioOutputVolume(float value) => Math.Clamp(value, 0f, 1f);
+
+    internal static string NormalizeStreamAudioGlobalMode(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant();
+        return value == "auto" || value == "global" ? value : "positional";
+    }
+
+    internal static string NormalizeStreamAudioDistanceSpace(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant();
+        return value == "local" ? "local" : "global";
+    }
+
+    internal static string NormalizeStreamAudioTypeGroup(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "_");
+        return value switch
+        {
+            "soundeffect" or "sound_effect" => "sound_effect",
+            "voice" => "voice",
+            "ui" or "user_interface" => "ui",
+            _ => "multimedia"
+        };
+    }
+
+    internal static string NormalizeStreamAudioRolloffMode(string value)
+    {
+        value = (value ?? "").Trim().ToLowerInvariant().Replace("-", "_").Replace(" ", "_");
+        return value == "logarithmic_fade_off" || value == "logarithmicfadeoff" ? "logarithmic_fade_off" : "linear";
+    }
+
+    private static bool? ParseStreamAudioGlobalMode(string value)
+    {
+        return NormalizeStreamAudioGlobalMode(value) switch
+        {
+            "auto" => null,
+            "positional" => false,
+            _ => true
+        };
+    }
+
+    private static AudioDistanceSpace ParseStreamAudioDistanceSpace(string value)
+    {
+        return NormalizeStreamAudioDistanceSpace(value) == "local"
+            ? AudioDistanceSpace.Local
+            : AudioDistanceSpace.Global;
+    }
+
+    private static AudioTypeGroup ParseStreamAudioTypeGroup(string value)
+    {
+        return NormalizeStreamAudioTypeGroup(value) switch
+        {
+            "sound_effect" => AudioTypeGroup.SoundEffect,
+            "voice" => AudioTypeGroup.Voice,
+            "ui" => AudioTypeGroup.UI,
+            _ => AudioTypeGroup.Multimedia
+        };
+    }
+
+    private static AudioRolloffCurve ParseStreamAudioRolloffMode(string value)
+    {
+        return NormalizeStreamAudioRolloffMode(value) == "linear"
+            ? AudioRolloffCurve.Linear
+            : AudioRolloffCurve.LogarithmicFadeOff;
+    }
+
+    internal static void ApplyStreamAudioSettings(DesktopSession session)
+    {
+        if (session == null || Config == null)
+            return;
+
+        try
+        {
+            float outputVolume = NormalizeStreamAudioOutputVolume(Config.GetValue(StreamAudioOutputVolume));
+            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed)
+                session.VideoTexture.Volume.Value = 1f;
+
+            if (session.StreamVolumeSlider != null && !session.StreamVolumeSlider.IsDestroyed)
+                session.StreamVolumeSlider.Value.Value = outputVolume;
+
+            var output = session.StreamAudioOutput;
+            if (output == null || output.IsDestroyed)
+                return;
+
+            output.Volume.Value = outputVolume;
+            output.Global.Value = ParseStreamAudioGlobalMode(Config.GetValue(StreamAudioGlobalMode));
+            output.Spatialize.Value = Config.GetValue(StreamAudioSpatialize);
+            output.SpatialBlend.Value = Math.Clamp(Config.GetValue(StreamAudioSpatialBlend), 0f, 1f);
+            output.DistanceSpace.Value = ParseStreamAudioDistanceSpace(Config.GetValue(StreamAudioDistanceSpace));
+            output.DopplerLevel.Value = Math.Clamp(Config.GetValue(StreamAudioDopplerLevel), 0f, 1f);
+            output.Pitch.Value = Math.Clamp(Config.GetValue(StreamAudioPitch), 0.5f, 2f);
+            output.IgnoreAudioEffects.Value = Config.GetValue(StreamAudioIgnoreAudioEffects);
+            output.AudioTypeGroup.Value = ParseStreamAudioTypeGroup(Config.GetValue(StreamAudioTypeGroup));
+            output.RolloffMode.Value = ParseStreamAudioRolloffMode(Config.GetValue(StreamAudioRolloffMode));
+            output.MinDistance.Value = Math.Clamp(Config.GetValue(StreamAudioMinDistance), 0f, 10f);
+            output.MaxDistance.Value = Math.Clamp(Config.GetValue(StreamAudioMaxDistance), 1f, 50f);
+            output.SpatializationStartDistance.Value = Math.Clamp(Config.GetValue(StreamAudioSpatializationStartDistance), 0f, 10f);
+            output.SpatializationTransitionRange.Value = Math.Clamp(Config.GetValue(StreamAudioSpatializationTransitionRange), 0f, 10f);
+            output.Priority.Value = Math.Clamp(Config.GetValue(StreamAudioPriority), 0, 256);
+            output.MinScale.Value = Math.Clamp(Config.GetValue(StreamAudioMinScale), 0f, 1000f);
+            output.MaxScale.Value = Math.Clamp(Config.GetValue(StreamAudioMaxScale), 0f, 1000f);
+        }
+        catch (Exception ex)
+        {
+            Msg($"[StreamAudio] Failed to apply settings: {ex.Message}");
+        }
+    }
+
+    internal static void ApplyStreamAudioSettingsToAllSessions()
+    {
+        foreach (var session in ActiveSessions.ToList())
+        {
+            if (session == null || session.Cleaned)
+                continue;
+            ApplyStreamAudioSettings(session);
+        }
     }
 
     internal static int RuntimeBitrateMbps => Math.Clamp(Volatile.Read(ref _runtimeBitrateMbps), 1, 200);
