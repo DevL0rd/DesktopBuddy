@@ -1,0 +1,41 @@
+DesktopBuddy Changelog
+
+This file is uploaded with each GitHub release so DesktopBuddy can show the latest changelog in-game.
+
+Unreleased
+
+DesktopBuddy gets a major in-world control upgrade in this release, with a new curved Settings panel, a redesigned quick menu, richer streaming controls, and cleaner release/install tooling.
+
+Highlights
+- Added a curved DesktopBuddy Settings panel that matches the main panel shape and opens directly in-world.
+- Redesigned the bottom quick menu as a compact hover pill with the new purple-to-blue visual theme.
+- Added tabbed settings for viewers, stream quality, networking, virtual devices, debug logs, and update info.
+- Added viewer-aware stream controls with per-user enable toggles and live culling status.
+- Added frustum and distance-based viewer culling with an in-world preview guide.
+- Added local-only stream playback gating so viewers outside the culling area stop receiving the stream while the panel itself remains visible.
+- Added a short grace period when viewers leave the culling area so streams do not flicker on brief boundary crossings.
+- Added stream presets for resolution, FPS, bitrate, encoder preference, and preferred GPU selection.
+- Added network controls for Cloudflare, port forwarding, automatic external IP detection, manual host entry, and stream port settings.
+- Added virtual device status cards for SoftCam, VB-Cable, virtual camera, virtual mic, and experimental spatial audio.
+- Added a rounded virtual camera preview on the devices page.
+- Added an in-game update/info page with project info, GitHub access, current version, changelog display, and reset-to-defaults.
+- Added a combined debug log export that includes DesktopBuddy and renderer-side logs.
+- Added an in-game debug log viewer that keeps the newest lines visible.
+
+Streaming And Audio
+- Stream audio now plays at full source volume and is controlled locally by each user.
+- Owner stream preview uses the same stream playback path as remote viewers.
+- Stream playback now starts and stops per user instead of disabling shared panel visuals.
+- Stream quality changes are applied through the runtime stream pipeline instead of requiring broad manual resets.
+
+Visual Polish
+- Settings and quick-menu surfaces now use rounded blurred backdrops that match the curved DesktopBuddy panel.
+- Controls, section headers, toggles, sliders, text fields, status badges, and scroll areas have been rethemed for a cleaner premium look.
+- Status badges have been standardized across network and virtual-device pages.
+- Viewer rows now use a cleaner list presentation with avatar-style icons.
+
+Build, Install, And Packaging
+- Build scripts now refresh game-side and renderer-side dependency DLLs from the installed game where appropriate.
+- Harmony and game/render-side references are refreshed from the local Resonite install.
+- Packaging and installer scripts were updated for the current dependency layout.
+- Release automation now includes the changelog artifact used by the in-game update page.

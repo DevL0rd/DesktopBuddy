@@ -28,6 +28,7 @@
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
     <ResoniteLibrariesPath>$(ResonitePath)\Libraries</ResoniteLibrariesPath>
+    <ResoniteRmlLibsPath>$(ResonitePath)\rml_libs</ResoniteRmlLibsPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,8 +37,53 @@
     <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0.1" />
   </ItemGroup>
 
-  <!-- Reference DLLs from lib/ (repo-local, works in CI) -->
+  <!-- Game DLLs are refreshed from the local Resonite install as a single source of truth. -->
   <ItemGroup>
+    <ResoniteGameReference Include="FrooxEngine">
+      <SourcePath>$(ResonitePath)\FrooxEngine.dll</SourcePath>
+      <HintPath>$(LibPath)\FrooxEngine.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="Elements.Core">
+      <SourcePath>$(ResonitePath)\Elements.Core.dll</SourcePath>
+      <HintPath>$(LibPath)\Elements.Core.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="Elements.Assets">
+      <SourcePath>$(ResonitePath)\Elements.Assets.dll</SourcePath>
+      <HintPath>$(LibPath)\Elements.Assets.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="SkyFrost.Base">
+      <SourcePath>$(ResonitePath)\SkyFrost.Base.dll</SourcePath>
+      <HintPath>$(LibPath)\SkyFrost.Base.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="SkyFrost.Base.Models">
+      <SourcePath>$(ResonitePath)\SkyFrost.Base.Models.dll</SourcePath>
+      <HintPath>$(LibPath)\SkyFrost.Base.Models.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="Renderite.Shared">
+      <SourcePath>$(ResonitePath)\Renderite.Shared.dll</SourcePath>
+      <HintPath>$(LibPath)\Renderite.Shared.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="Awwdio">
+      <SourcePath>$(ResonitePath)\Awwdio.dll</SourcePath>
+      <HintPath>$(LibPath)\Awwdio.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="BepuPhysics">
+      <SourcePath>$(ResonitePath)\BepuPhysics.dll</SourcePath>
+      <HintPath>$(LibPath)\BepuPhysics.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="FrooxEngine.Store">
+      <SourcePath>$(ResonitePath)\FrooxEngine.Store.dll</SourcePath>
+      <HintPath>$(LibPath)\FrooxEngine.Store.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="ResoniteModLoader">
+      <SourcePath>$(ResoniteLibrariesPath)\ResoniteModLoader.dll</SourcePath>
+      <HintPath>$(LibPath)\ResoniteModLoader.dll</HintPath>
+    </ResoniteGameReference>
+    <ResoniteGameReference Include="0Harmony">
+      <SourcePath>$(ResoniteRmlLibsPath)\0Harmony.dll</SourcePath>
+      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
+    </ResoniteGameReference>
+
     <Reference Include="FrooxEngine">
       <HintPath>$(LibPath)\FrooxEngine.dll</HintPath>
       <Private>false</Private>
@@ -48,10 +94,6 @@
     </Reference>
     <Reference Include="Elements.Assets">
       <HintPath>$(LibPath)\Elements.Assets.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="ResoniteModLoader">
-      <HintPath>$(LibPath)\ResoniteModLoader.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="SkyFrost.Base">
@@ -78,25 +120,25 @@
       <HintPath>$(LibPath)\FrooxEngine.Store.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="ResoniteModLoader">
+      <HintPath>$(LibPath)\ResoniteModLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
   <Target Name="RefreshLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <ResoniteReferenceLibs Include="$(ResonitePath)\FrooxEngine.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\Elements.Core.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\Elements.Assets.dll" />
-      <ResoniteReferenceLibs Include="$(ResoniteLibrariesPath)\ResoniteModLoader.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\SkyFrost.Base.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\SkyFrost.Base.Models.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\Renderite.Shared.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\Awwdio.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\BepuPhysics.dll" />
-      <ResoniteReferenceLibs Include="$(ResonitePath)\FrooxEngine.Store.dll" />
+      <MissingResoniteGameReference Include="@(ResoniteGameReference)" Condition="!Exists('%(ResoniteGameReference.SourcePath)')" />
     </ItemGroup>
+    <Error Condition="'@(MissingResoniteGameReference)' != ''" Text="[lib] Missing game reference DLL(s) in $(ResonitePath): @(MissingResoniteGameReference->'%(SourcePath)', ', ')" />
     <MakeDir Directories="$(LibPath)" />
-    <Copy SourceFiles="@(ResoniteReferenceLibs)" DestinationFolder="$(LibPath)" SkipUnchangedFiles="true" />
-    <Message Text="[lib] Refreshed game-side reference DLLs from $(ResonitePath)" Importance="high" />
+    <Copy SourceFiles="@(ResoniteGameReference->'%(SourcePath)')" DestinationFiles="@(ResoniteGameReference->'%(HintPath)')" SkipUnchangedFiles="true" />
+    <Message Text="[lib] Refreshed game reference DLLs from $(ResonitePath): @(ResoniteGameReference)" Importance="high" />
   </Target>
 
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->

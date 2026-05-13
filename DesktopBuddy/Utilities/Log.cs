@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Threading;
 
 namespace DesktopBuddy;
@@ -64,6 +67,70 @@ internal static class Log
                 File.WriteAllText(FilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] DesktopBuddy session started\n");
         }
         catch { }
+    }
+
+    internal static string[] GetRecentLines(int maxLines = 100)
+    {
+        maxLines = Math.Clamp(maxLines, 1, 100);
+        try
+        {
+            lock (_fileWriteLock)
+            {
+                if (!File.Exists(FilePath))
+                    return Array.Empty<string>();
+
+                var queue = new Queue<string>(maxLines);
+                foreach (string line in File.ReadLines(FilePath))
+                {
+                    if (queue.Count == maxLines)
+                        queue.Dequeue();
+                    queue.Enqueue(line);
+                }
+                return queue.ToArray();
+            }
+        }
+        catch (Exception ex)
+        {
+            return new[] { $"[DesktopBuddy] Failed to read log tail: {ex.Message}" };
+        }
+    }
+
+    internal static string ExportCombinedLog()
+    {
+        string resoniteDir = Path.GetDirectoryName(Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".") ?? ".";
+        string logsDir = Path.Combine(resoniteDir, "Logs");
+        if (!Directory.Exists(logsDir))
+            logsDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
+
+        string exportPath = Path.Combine(logsDir, $"DesktopBuddy_Combined_{Environment.MachineName}_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
+        var builder = new StringBuilder();
+
+        AppendLogSection(builder, "DesktopBuddy", FilePath);
+        AppendLogSection(builder, "Renderer BepInEx", Path.Combine(resoniteDir, "Renderer", "BepInEx", "LogOutput.log"));
+
+        File.WriteAllText(exportPath, builder.ToString());
+        Msg($"[Log] Exported combined log: {exportPath}");
+        return exportPath;
+    }
+
+    private static void AppendLogSection(StringBuilder builder, string title, string path)
+    {
+        builder.AppendLine($"===== {title} =====");
+        builder.AppendLine(path);
+
+        try
+        {
+            if (File.Exists(path))
+                builder.AppendLine(File.ReadAllText(path));
+            else
+                builder.AppendLine("(missing)");
+        }
+        catch (Exception ex)
+        {
+            builder.AppendLine($"(failed to read: {ex.Message})");
+        }
+
+        builder.AppendLine();
     }
 
     private static void WriterLoop()

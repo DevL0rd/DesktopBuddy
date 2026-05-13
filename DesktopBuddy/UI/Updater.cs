@@ -1,8 +1,10 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
+using System.Text.Json;
+using Elements.Core;
 using FrooxEngine;
 using FrooxEngine.UIX;
-using Elements.Core;
 
 namespace DesktopBuddy;
 
@@ -12,37 +14,117 @@ public partial class DesktopBuddyMod
     {
         try
         {
+            _updateCheckError = null;
             var buildSha = BuildInfo.GitSha;
             Msg($"[Update] Current build: {buildSha}");
 
             using var http = new System.Net.Http.HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(8);
             http.DefaultRequestHeaders.Add("User-Agent", "DesktopBuddy");
             var json = http.GetStringAsync("https://api.github.com/repos/DevL0rd/DesktopBuddy/releases/latest").Result;
-            var match = System.Text.RegularExpressions.Regex.Match(json, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
-            if (match.Success)
+            using var doc = JsonDocument.Parse(json);
+            var release = doc.RootElement;
+            if (!release.TryGetProperty("tag_name", out var tagElement))
+                return;
+
+            var tag = tagElement.GetString() ?? "";
+            string remoteSha;
+            if (tag.StartsWith("build-", StringComparison.OrdinalIgnoreCase))
             {
-                var tag = match.Groups[1].Value;
-                // Extract SHA from tag tail: "DesktopBuddy-Alpha-2026.04.14_10.20.41_7cb92c7" → "7cb92c7"
-                // Also handles legacy "build-<sha>" format.
-                string remoteSha;
-                if (tag.StartsWith("build-", StringComparison.OrdinalIgnoreCase))
+                remoteSha = tag.Substring(6);
+            }
+            else
+            {
+                var shaMatch = System.Text.RegularExpressions.Regex.Match(tag, @"_([0-9a-fA-F]{7,40})$");
+                remoteSha = shaMatch.Success ? shaMatch.Groups[1].Value : tag;
+            }
+
+            _remoteVersion = tag;
+            _remoteSha = remoteSha;
+            _remoteChangelog = ExtractReleaseChangelog(release, http);
+            _lastUpdateCheckUtc = DateTime.UtcNow;
+            Msg($"[Update] Latest release: {tag} (sha: {remoteSha})");
+            _latestVersion = buildSha != "unknown" && remoteSha != buildSha ? tag : null;
+        }
+        catch (Exception ex)
+        {
+            _updateCheckError = ex.Message;
+            _lastUpdateCheckUtc = DateTime.UtcNow;
+            Msg($"[Update] Check failed: {ex.Message}");
+        }
+    }
+
+    private static string ExtractReleaseChangelog(JsonElement release, System.Net.Http.HttpClient http)
+    {
+        try
+        {
+            if (release.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var asset in assets.EnumerateArray())
                 {
-                    remoteSha = tag.Substring(6);
+                    string name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
+                    if (!string.Equals(name, "CHANGELOG.txt", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    string url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() ?? "" : "";
+                    if (string.IsNullOrWhiteSpace(url))
+                        continue;
+
+                    string artifact = http.GetStringAsync(url).Result;
+                    if (!string.IsNullOrWhiteSpace(artifact))
+                        return TrimChangelog(artifact);
                 }
-                else
-                {
-                    var shaMatch = System.Text.RegularExpressions.Regex.Match(tag, @"_([0-9a-fA-F]{7,40})$");
-                    remoteSha = shaMatch.Success ? shaMatch.Groups[1].Value : tag;
-                }
-                Msg($"[Update] Latest release: {tag} (sha: {remoteSha})");
-                if (buildSha != "unknown" && remoteSha != buildSha)
-                    _latestVersion = tag;
             }
         }
         catch (Exception ex)
         {
-            Msg($"[Update] Check failed: {ex.Message}");
+            Msg($"[Update] Changelog fetch failed: {ex.Message}");
         }
+
+        return "";
+    }
+
+    private static string TrimChangelog(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+
+        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n')
+            .Split('\n')
+            .Take(80)
+            .ToArray();
+        string trimmed = string.Join("\n", lines).Trim();
+        return trimmed.Length <= 5000 ? trimmed : trimmed.Substring(0, 5000).TrimEnd() + "\n...";
+    }
+
+    private static void QueueUpdateInfoCheck(SettingsPanelState state)
+    {
+        if (_updateCheckInProgress)
+            return;
+        if (_lastUpdateCheckUtc != default && DateTime.UtcNow - _lastUpdateCheckUtc < TimeSpan.FromMinutes(5))
+            return;
+
+        _updateCheckInProgress = true;
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                CheckForUpdate();
+            }
+            finally
+            {
+                _updateCheckInProgress = false;
+                var world = state?.OwnerRoot?.World;
+                if (world != null)
+                {
+                    world.RunInUpdates(1, () =>
+                    {
+                        if (state.SurfaceSlot != null && !state.SurfaceSlot.IsDestroyed && state.SurfaceSlot.ActiveSelf && state.ActiveTab == SettingsPanelTab.UpdateInfo)
+                            RebuildSettingsPanel(state, state.Session);
+                    });
+                }
+            }
+        });
     }
 
     private static void ShowUpdatePopup(Slot root, float w, float canvasScale)

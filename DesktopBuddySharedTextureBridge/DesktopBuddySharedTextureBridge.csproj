@@ -15,6 +15,7 @@
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
     <ResoniteRendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</ResoniteRendererManagedPath>
     <BepInExCorePath>$(ResonitePath)\Renderer\BepInEx\core</BepInExCorePath>
+    <ResoniteRmlLibsPath>$(ResonitePath)\rml_libs</ResoniteRmlLibsPath>
   </PropertyGroup>
 
   <!-- BepInEx 5.x + Harmony (reference-only) -->
@@ -57,17 +58,22 @@
   <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
   <Target Name="RefreshRendererLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <BepInExReferenceLibs Include="$(BepInExCorePath)\BepInEx.dll" />
-      <BepInExReferenceLibs Include="$(BepInExCorePath)\0Harmony.dll" />
+      <RendererLoaderReferenceLibs Include="$(ResoniteRmlLibsPath)\0Harmony.dll">
+        <DestinationPath>$(LibPath)\0Harmony.dll</DestinationPath>
+      </RendererLoaderReferenceLibs>
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.CoreModule.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Unity.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Shared.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Assembly-CSharp.dll" />
+      <MissingRendererLoaderReferenceLibs Include="@(RendererLoaderReferenceLibs)" Condition="!Exists('%(RendererLoaderReferenceLibs.Identity)')" />
+      <MissingRendererReferenceLibs Include="@(RendererReferenceLibs)" Condition="!Exists('%(RendererReferenceLibs.Identity)')" />
     </ItemGroup>
+    <Error Condition="'@(MissingRendererLoaderReferenceLibs)' != ''" Text="[lib] Missing renderer loader reference DLL(s): @(MissingRendererLoaderReferenceLibs)" />
+    <Error Condition="'@(MissingRendererReferenceLibs)' != ''" Text="[lib] Missing renderer reference DLL(s): @(MissingRendererReferenceLibs)" />
     <MakeDir Directories="$(LibPath)" />
     <MakeDir Directories="$(RendererManagedPath)" />
-    <Copy SourceFiles="@(BepInExReferenceLibs)" DestinationFolder="$(LibPath)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RendererLoaderReferenceLibs)" DestinationFiles="@(RendererLoaderReferenceLibs->'%(DestinationPath)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RendererReferenceLibs)" DestinationFolder="$(RendererManagedPath)" SkipUnchangedFiles="true" />
     <Message Text="[lib] Refreshed renderer reference DLLs from $(ResonitePath)" Importance="high" />
   </Target>

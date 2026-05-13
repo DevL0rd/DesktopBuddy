@@ -18,22 +18,3 @@ See the [README](https://github.com/DevL0rd/DesktopBuddy#readme) for troubleshoo
 > **WARNING**
 > DesktopBuddy currently supports **Resonite Mod Loader only** on a **vanilla Resonite renderer install**.
 > Other modloaders and unrelated renderer mods are not supported right now. This will be fixed soon.
-
-
-
-**USERS WITH EXISTING INSTALLATIONS**
-If you have a existing installation SPECIFICALLY before THIS update, remove old DesktopBuddy files if they exist.
-
-Delete these old renderer plugin files from your Resonite install:
-- Do **not** delete `DesktopBuddySharedTextureBridge.dll`; that is the new renderer-side bridge used by this release.
-- `<Resonite root>\Renderer\BepInEx\plugins\DesktopBuddyRenderer.dll`
-- `<Resonite root>\Renderer\BepInEx\plugins\DesktopBuddyRendererNative.dll`
-
-Delete these old native dependency files from `rml_libs` if they exist:
-
-- `<Resonite root>\rml_libs\avcodec-62.dll`
-- `<Resonite root>\rml_libs\avformat-62.dll`
-- `<Resonite root>\rml_libs\avutil-60.dll`
-- `<Resonite root>\rml_libs\swresample-6.dll`
-- `<Resonite root>\rml_libs\softcam.dll`
-- `<Resonite root>\rml_libs\softcam64.dll`

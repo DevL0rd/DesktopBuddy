@@ -55,3 +55,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             ${{ steps.buildinfo.outputs.name }}.zip
+            CHANGELOG.txt

@@ -51,21 +51,24 @@ if not exist "%SETUP_PS1%" (
     echo ERROR: Setup-DesktopBuddy.ps1 not found.
     exit /b 1
 )
-if not exist "%ROOT_DIR%\DesktopBuddyNative\cloudflared.exe" (
-    echo ERROR: DesktopBuddyNative\cloudflared.exe not found. Cloudflare HTTP streaming packages require the bundled tunnel client.
-    exit /b 1
-)
-if not exist "%ROOT_DIR%\DesktopBuddyNative\avcodec-62.dll" (
-    echo ERROR: DesktopBuddyNative\avcodec-62.dll not found. FFmpeg native dependencies are missing.
-    exit /b 1
-)
-if not exist "%ROOT_DIR%\DesktopBuddyNative\avformat-62.dll" (
-    echo ERROR: DesktopBuddyNative\avformat-62.dll not found. FFmpeg native dependencies are missing.
-    exit /b 1
-)
-if not exist "%ROOT_DIR%\DesktopBuddyNative\avutil-60.dll" (
-    echo ERROR: DesktopBuddyNative\avutil-60.dll not found. FFmpeg native dependencies are missing.
-    exit /b 1
+for %%F in (
+    cloudflared.exe
+    avcodec-62.dll
+    avformat-62.dll
+    avutil-60.dll
+    swresample-6.dll
+    softcam.dll
+    softcam64.dll
+    VBCABLE_Setup_x64.exe
+    vbMmeCable64_win10.inf
+    vbaudio_cable64_win10.cat
+    vbaudio_cable64_win10.sys
+    vbaudio_cable64arm_win10.sys
+) do (
+    if not exist "%ROOT_DIR%\DesktopBuddyNative\%%F" (
+        echo ERROR: DesktopBuddyNative\%%F not found. Required repo-owned native dependency is missing.
+        exit /b 1
+    )
 )
 
 echo Building zip layout in: %STAGE%

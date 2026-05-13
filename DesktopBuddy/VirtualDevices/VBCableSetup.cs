@@ -63,7 +63,6 @@ internal static class VBCableSetup
 
                             if (friendlyName != null && friendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))
                             {
-                                Log.Msg($"[VBCable] Found CABLE Input: {deviceId}");
                                 return deviceId;
                             }
                         }

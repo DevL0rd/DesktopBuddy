@@ -324,9 +324,23 @@ function Download-File {
 
 function Install-RenderiteHook {
     param([string]$Path)
-    $renderiteHookPath = Join-Path $Path "rml_mods\RenderiteHook.dll"
+    $wrongRmlPath = Join-Path $Path "rml_mods\RenderiteHook.dll"
+    if (Test-Path -LiteralPath $wrongRmlPath) {
+        $disabledPath = "$wrongRmlPath.disabled-by-DesktopBuddy"
+        Move-Item -LiteralPath $wrongRmlPath -Destination $disabledPath -Force
+        Write-Log "RenderiteHook: disabled wrong-side RML copy ($wrongRmlPath)"
+    }
+
+    $bepInExPluginsPath = Join-Path $Path "BepInEx\plugins"
+    $renderiteHookPath = Join-Path $bepInExPluginsPath "RenderiteHook\RenderiteHook.dll"
     if (Test-Path -LiteralPath $renderiteHookPath) {
         Write-Log "RenderiteHook: already installed ($renderiteHookPath)"
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $bepInExPluginsPath)) {
+        Write-Log "RenderiteHook: skipped; game-side BepInEx/BepisLoader plugins folder was not found"
+        Write-Log "RenderiteHook: DesktopBuddy renderer bridge only requires BepInEx.Renderer"
         return
     }
 
@@ -354,16 +368,17 @@ function Install-RenderiteHook {
                 }
 
                 $parts = $entry.FullName.Replace("\", "/").Split("/")
-                if ($parts.Length -lt 3 -or $parts[0] -ne "plugins") {
-                    continue
-                }
+            if ($parts.Length -lt 3 -or $parts[0] -ne "plugins") {
+                continue
+            }
 
-                $destPath = $null
-                if ($parts.Length -ge 4 -and [string]::Equals($parts[2], "Doorstop", [StringComparison]::OrdinalIgnoreCase)) {
-                    $destPath = Join-Path (Join-Path $Path "Renderer") $entry.Name
-                } elseif ($parts.Length -eq 3) {
-                    $destPath = Join-Path (Join-Path $Path "rml_mods") $entry.Name
-                }
+            $destPath = $null
+            if ($parts.Length -ge 4 -and [string]::Equals($parts[2], "Doorstop", [StringComparison]::OrdinalIgnoreCase)) {
+                $destPath = Join-Path (Join-Path $Path "Renderer") $entry.Name
+            } elseif ($parts.Length -ge 3 -and [string]::Equals($parts[1], "RenderiteHook", [StringComparison]::OrdinalIgnoreCase)) {
+                $relativePath = ($parts[1..($parts.Length - 1)] -join [IO.Path]::DirectorySeparatorChar)
+                $destPath = Join-Path $bepInExPluginsPath $relativePath
+            }
 
                 if ($null -eq $destPath) {
                     continue
