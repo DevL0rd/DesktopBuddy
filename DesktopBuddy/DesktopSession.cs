@@ -69,6 +69,8 @@ public class DesktopSession
 
     public FfmpegEncoder Encoder;
     public VideoTextureProvider VideoTexture;
+    public AudioOutput StreamAudioOutput;
+    public Slider<float> StreamVolumeSlider;
     public bool FeedsVirtualCamera;
     public Slot VCamSlot;
     public Camera VCamCamera;
@@ -125,6 +127,7 @@ public sealed class SettingsPanelState
     public string DebugLogContent;
     public int ViewerListRefreshGeneration;
     public string ViewerListSignature;
+    public int StickScrollGeneration;
 }
 
 public sealed class SettingsScrollbarState
@@ -142,6 +145,7 @@ public enum SettingsPanelTab
 {
     Viewers,
     Stream,
+    Audio,
     Network,
     Devices,
     Debug,

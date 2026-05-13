@@ -19,7 +19,6 @@ public partial class DesktopBuddyMod
 {
     private const float DesktopPanelCurvature = 0.18f;
     private const int DesktopPanelCurveSegments = 48;
-    private const int DesktopSurfaceRenderQueue = 2500;
     private const int SettingsBackdropBlurRenderQueue = 2990;
     private const int SettingsUiRenderQueue = 3004;
     private const float TopBarSurfaceZOffset = -0.006f;
@@ -36,8 +35,7 @@ public partial class DesktopBuddyMod
         IAssetProvider<ITexture2D> texture,
         float zOffset,
         bool flipY,
-        float offsetUnits,
-        int renderQueue = DesktopSurfaceRenderQueue)
+        float offsetUnits)
     {
         var slot = parent.AddSlot(name);
         slot.LocalPosition = new float3(0f, 0f, zOffset);
@@ -61,7 +59,6 @@ public partial class DesktopBuddyMod
         material.Sidedness.Value = Sidedness.Double;
         material.ZWrite.Value = ZWrite.On;
         material.OffsetUnits.Value = offsetUnits;
-        material.RenderQueue.Value = renderQueue;
         if (flipY)
         {
             material.TextureScale.Value = new float2(1f, -1f);
@@ -893,7 +890,7 @@ public partial class DesktopBuddyMod
         displayRayExitRef = displayCameraSlot.AttachComponent<DesktopUVRayExit>();
         displayRayExitRef.Size = new float2(w, h);
 
-        frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f, renderQueue: DesktopSurfaceRenderQueue);
+        frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f);
         ApplyPanelCurvature(currentPanelCurvature);
 
         WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
@@ -1545,11 +1542,13 @@ public partial class DesktopBuddyMod
         var streamVolUi = new UIBuilder(streamVolRow);
         streamVolUi.Style.FlexibleWidth = 1f;
         streamVolUi.Style.FlexibleHeight = 1f;
-        var volSlider = streamVolUi.Slider<float>(20f, 1f, 0f, 1f, false,
+        float streamOutputVolume = NormalizeStreamAudioOutputVolume(Config?.GetValue(StreamAudioOutputVolume) ?? 1f);
+        var volSlider = streamVolUi.Slider<float>(20f, streamOutputVolume, 0f, 1f, false,
             out var volLine, out var volFillLine, out var volHandle);
+        session.StreamVolumeSlider = volSlider;
         var volSliderOverride = streamVolRow.AttachComponent<ValueUserOverride<float>>();
         volSliderOverride.Target.Target = volSlider.Value;
-        volSliderOverride.Default.Value = 1f;
+        volSliderOverride.Default.Value = streamOutputVolume;
         volSliderOverride.CreateOverrideOnWrite.Value = true;
         volSliderOverride.PersistentOverrides.Value = false;
         volSliderOverride.ClearOnUserLeave.Value = true;
@@ -1712,6 +1711,7 @@ public partial class DesktopBuddyMod
         }
 
         int hoverCollapseGeneration = 0;
+        bool hoverCollapseScheduled = false;
 
         void SetBarExpanded(bool expanded)
         {
@@ -1744,7 +1744,10 @@ public partial class DesktopBuddyMod
         void ScheduleCollapseWhenHoverLeaves()
         {
             if (root == null || root.IsDestroyed) return;
+            if (hoverCollapseScheduled)
+                return;
 
+            hoverCollapseScheduled = true;
             int generation = ++hoverCollapseGeneration;
             root.World.RunInSeconds(TopBarHoverCollapseDelaySeconds, () =>
             {
@@ -1755,8 +1758,12 @@ public partial class DesktopBuddyMod
                     return;
 
                 if (AnyBarControlHovered())
+                {
+                    hoverCollapseScheduled = false;
                     return;
+                }
 
+                hoverCollapseScheduled = false;
                 SetBarExpanded(false);
             });
         }
@@ -1768,10 +1775,33 @@ public partial class DesktopBuddyMod
             button.LocalHoverEnter += (_, _) =>
             {
                 hoverCollapseGeneration++;
+                hoverCollapseScheduled = false;
                 SetBarExpanded(true);
             };
             button.LocalHoverStay += (_, _) => SetBarExpanded(true);
             button.LocalHoverLeave += (_, _) => ScheduleCollapseWhenHoverLeaves();
+        }
+
+        void PollSharedBarHover()
+        {
+            if (root == null || root.IsDestroyed)
+                return;
+
+            if (AnyBarControlHovered())
+            {
+                if (hoverCollapseScheduled)
+                {
+                    hoverCollapseGeneration++;
+                    hoverCollapseScheduled = false;
+                }
+                SetBarExpanded(true);
+            }
+            else if (barExpanded)
+            {
+                ScheduleCollapseWhenHoverLeaves();
+            }
+
+            root.World.RunInUpdates(4, PollSharedBarHover);
         }
 
         TrackHover(barHoverButton);
@@ -1781,6 +1811,7 @@ public partial class DesktopBuddyMod
         TrackHover(anchorBtn);
         TrackHover(privateBtn);
         TrackHover(resyncBtn);
+        root.World.RunInUpdates(4, PollSharedBarHover);
         topBarStripRef = AddCurvedRenderPlane(
             root,
             "TopBarCurvedMesh",
@@ -1799,7 +1830,7 @@ public partial class DesktopBuddyMod
             renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f);
         topBarBlurMeshRef = topBarStripRef;
-        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 24, 0.0044f, SettingsBackdropBlurRenderQueue);
+        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 64, 0.012f, SettingsBackdropBlurRenderQueue);
         topBarBlurMask = TextureProviderSettings.ClampWrap(topBarStripRef.Slot.AttachComponent<StaticTexture2D>());
         RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
         topBarBackStripRef = AddCurvedRenderPlane(
@@ -2182,11 +2213,17 @@ public partial class DesktopBuddyMod
 
                 var audioOutput = videoSlot.AttachComponent<AudioOutput>();
                 audioOutput.Source.Target = videoTex;
-                audioOutput.Volume.Value = 1f;
+                audioOutput.Volume.Value = streamOutputVolume;
+                audioOutput.Global.Value = true;
                 audioOutput.Spatialize.Value = false;
                 audioOutput.SpatialBlend.Value = 0f;
+                audioOutput.DistanceSpace.Value = AudioDistanceSpace.Global;
+                audioOutput.DopplerLevel.Value = 0f;
+                audioOutput.Pitch.Value = 1f;
                 audioOutput.IgnoreAudioEffects.Value = true;
                 audioOutput.AudioTypeGroup.Value = AudioTypeGroup.Multimedia;
+                session.StreamAudioOutput = audioOutput;
+                ApplyStreamAudioSettings(session);
 
                 var volDriver = videoSlot.AttachComponent<ValueDriver<float>>();
                 volDriver.DriveTarget.Target = audioOutput.Volume;
@@ -2216,7 +2253,7 @@ public partial class DesktopBuddyMod
 
                 SetupViewerCullingGate(session, streamSlot, videoTex, root.World.LocalUser);
 
-                streamPlaneRef = AddCurvedTexturePlane(streamSlot, "VideoTextureCurvedPlane", w, h, 1f, videoTex, 0f, flipY: false, offsetUnits: -100f, renderQueue: DesktopSurfaceRenderQueue);
+                streamPlaneRef = AddCurvedTexturePlane(streamSlot, "VideoTextureCurvedPlane", w, h, 1f, videoTex, 0f, flipY: false, offsetUnits: -100f);
                 ApplyPanelCurvature(currentPanelCurvature);
 
                 var streamCanvas = streamSlot.AttachComponent<Canvas>();
