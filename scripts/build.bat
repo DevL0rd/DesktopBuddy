@@ -9,6 +9,11 @@ REM Supports any combination: -r, -d, -r -d, -d -r, etc.
 set RESTART=0
 set DESKTOP=0
 set CONFIGURATION=Release
+set "DOTNET_BUILD_ARGS="
+
+REM GitHub-hosted builds should use the checked-in reference DLLs and pinned
+REM NuGet packages, not any Resonite install that might exist on the runner.
+if /i "%GITHUB_ACTIONS%"=="true" set "DOTNET_BUILD_ARGS=/p:ResonitePath=C:\__DesktopBuddyNoDeploy__"
 
 REM Check all arguments
 for %%A in (%*) do (
@@ -35,14 +40,14 @@ if !RESTART! equ 1 (
 )
 
 REM Build the mod (game-side)
-dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj" -c %CONFIGURATION%
+dotnet build "%SCRIPT_DIR%..\DesktopBuddy\DesktopBuddy.csproj" -c %CONFIGURATION% %DOTNET_BUILD_ARGS%
 if !ERRORLEVEL! neq 0 (
     echo MOD BUILD FAILED - not launching Resonite
     exit /b !ERRORLEVEL!
 )
 
 REM Build the renderer-side shared texture bridge
-dotnet build "%SCRIPT_DIR%..\DesktopBuddySharedTextureBridge\DesktopBuddySharedTextureBridge.csproj" -c %CONFIGURATION%
+dotnet build "%SCRIPT_DIR%..\DesktopBuddySharedTextureBridge\DesktopBuddySharedTextureBridge.csproj" -c %CONFIGURATION% %DOTNET_BUILD_ARGS%
 if !ERRORLEVEL! neq 0 (
     echo SHARED TEXTURE BRIDGE BUILD FAILED - not launching Resonite
     exit /b !ERRORLEVEL!

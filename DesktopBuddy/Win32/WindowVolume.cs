@@ -51,7 +51,7 @@ internal static class WindowVolume
                     if (hr < 0 || sessionCtl == IntPtr.Zero) continue;
 
                     var iidCtl2 = IID_IAudioSessionControl2;
-                    hr = Marshal.QueryInterface(sessionCtl, ref iidCtl2, out sessionCtl2);
+                    hr = Marshal.QueryInterface(sessionCtl, in iidCtl2, out sessionCtl2);
                     if (hr < 0 || sessionCtl2 == IntPtr.Zero) continue;
 
                     hr = VTable<GetProcessIdDelegate>(sessionCtl2, 14)(sessionCtl2, out uint pid);
@@ -66,7 +66,7 @@ internal static class WindowVolume
                     if (match)
                     {
                         var iidVol = IID_ISimpleAudioVolume;
-                        hr = Marshal.QueryInterface(sessionCtl, ref iidVol, out simpleVol);
+                        hr = Marshal.QueryInterface(sessionCtl, in iidVol, out simpleVol);
                         if (hr < 0 || simpleVol == IntPtr.Zero) continue;
 
                         var guid = Guid.Empty;

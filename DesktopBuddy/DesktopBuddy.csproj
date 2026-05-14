@@ -8,7 +8,7 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
-  <!-- Embed git SHA as a compiled const that survives ILRepack -->
+  <!-- Embed git SHA as a compiled const for release diagnostics. -->
   <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
     <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" StandardOutputImportance="low" ContinueOnError="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitSha" />
@@ -33,7 +33,6 @@
 
   <ItemGroup>
     <PackageReference Include="Lib.Harmony" Version="2.3.3" />
-    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34" />
     <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0.1" />
   </ItemGroup>
 
@@ -148,14 +147,22 @@
     <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <DesktopBuddyManagedDependencyName Include="FFmpeg.AutoGen.dll" />
+    <DesktopBuddyManagedDependencyName Include="Microsoft.Windows.SDK.NET.dll" />
+    <DesktopBuddyManagedDependencyName Include="WinRT.Runtime.dll" />
+  </ItemGroup>
+
   <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
-  <Target Name="CopyToResonite" AfterTargets="ILRepackMerge" Condition="Exists('$(ResonitePath)')">
+  <Target Name="CopyToResonite" AfterTargets="Build" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
       <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\**\*" />
+      <DesktopBuddyManagedDependency Include="@(DesktopBuddyManagedDependencyName->'$(OutputPath)%(Identity)')" />
     </ItemGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

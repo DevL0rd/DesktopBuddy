@@ -8,7 +8,7 @@ namespace DesktopBuddy;
 
 public sealed class PerfTimer : IDisposable
 {
-    private const bool Enabled = false;
+    private static readonly bool Enabled = false;
     private readonly Stopwatch _reportSw = Enabled ? Stopwatch.StartNew() : null;
     private const int REPORT_INTERVAL_MS = 5_000;
 

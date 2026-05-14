@@ -299,46 +299,12 @@ public sealed class AudioCapture : IDisposable
 
     public int ReadSamples(float[] output, int maxSamples, ref long readPos)
     {
-        long writePos = Volatile.Read(ref _writePos);
-        long available = writePos - readPos;
-        if (available <= 0) return 0;
-        if (available > _audioBuffer.Length)
-        {
-            readPos = writePos - _audioBuffer.Length;
-            available = _audioBuffer.Length;
-        }
-
-        int toRead = (int)Math.Min(available, maxSamples);
-        int ringSize = _audioBuffer.Length;
-        int offset = (int)(readPos % ringSize);
-        int first = Math.Min(toRead, ringSize - offset);
-        Array.Copy(_audioBuffer, offset, output, 0, first);
-        if (first < toRead)
-            Array.Copy(_audioBuffer, 0, output, first, toRead - first);
-        readPos += toRead;
-        return toRead;
+        return AudioRingBuffer.Read(_audioBuffer, Volatile.Read(ref _writePos), ref readPos, output, maxSamples);
     }
 
     public int ReadSamples(Span<float> output, ref long readPos)
     {
-        long writePos = Volatile.Read(ref _writePos);
-        long available = writePos - readPos;
-        if (available <= 0) return 0;
-        if (available > _audioBuffer.Length)
-        {
-            readPos = writePos - _audioBuffer.Length;
-            available = _audioBuffer.Length;
-        }
-
-        int toRead = (int)Math.Min(available, output.Length);
-        int ringSize = _audioBuffer.Length;
-        int offset = (int)(readPos % ringSize);
-        int first = Math.Min(toRead, ringSize - offset);
-        _audioBuffer.AsSpan(offset, first).CopyTo(output);
-        if (first < toRead)
-            _audioBuffer.AsSpan(0, toRead - first).CopyTo(output.Slice(first));
-        readPos += toRead;
-        return toRead;
+        return AudioRingBuffer.Read(_audioBuffer, Volatile.Read(ref _writePos), ref readPos, output);
     }
 
     public void Dispose()

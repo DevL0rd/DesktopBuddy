@@ -67,7 +67,7 @@ internal sealed class VirtualCamera : IDisposable
 
             try
             {
-                ConsumerConnected = SoftCamInterop.scIsConnected(_camera);
+                ConsumerConnected = SoftCam.scIsConnected(_camera);
             }
             catch { ConsumerConnected = false; }
         }
@@ -86,7 +86,7 @@ internal sealed class VirtualCamera : IDisposable
         if (targetW != _width || targetH != _height || desiredFormat != _pixelFormat || desiredFlags != _frameFlags)
         {
             Log.Msg($"[VirtualCamera] Resize/reformat {_width}x{_height}/{_pixelFormat}/{_frameFlags} -> {targetW}x{targetH}/{desiredFormat}/{desiredFlags}");
-            SoftCamInterop.scDeleteCamera(_camera);
+            SoftCam.scDeleteCamera(_camera);
             _camera = CreateCamera(targetW, targetH, desiredFormat, desiredFlags);
             if (_camera == IntPtr.Zero) { Log.Msg("[VirtualCamera] Resize failed"); return; }
             _width = targetW;
@@ -107,7 +107,7 @@ internal sealed class VirtualCamera : IDisposable
 
         try
         {
-            SoftCamInterop.scSendFrame(_camera, _pinnedBgr.AddrOfPinnedObject());
+            SoftCam.scSendFrame(_camera, _pinnedBgr.AddrOfPinnedObject());
         }
         catch (Exception ex)
         {
@@ -125,7 +125,7 @@ internal sealed class VirtualCamera : IDisposable
         {
             try
             {
-                IntPtr camera = SoftCamInterop.scCreateCameraEx(width, height, 0f, pixelFormat, frameFlags);
+                IntPtr camera = SoftCam.scCreateCameraEx(width, height, 0f, pixelFormat, frameFlags);
                 if (camera != IntPtr.Zero)
                 {
                     _usingExtendedApi = true;
@@ -144,7 +144,7 @@ internal sealed class VirtualCamera : IDisposable
 
         _pixelFormat = SoftcamPixelFormatBgr24;
         _frameFlags = 0;
-        return SoftCamInterop.scCreateCamera(width, height, 0f);
+        return SoftCam.scCreateCamera(width, height, 0f);
     }
 
     private unsafe void ConvertToBgr24(byte* src, byte* dst, int w, int h, TextureFormat format)
@@ -227,7 +227,7 @@ internal sealed class VirtualCamera : IDisposable
         _disposed = true;
         if (_camera != IntPtr.Zero)
         {
-            try { SoftCamInterop.scDeleteCamera(_camera); }
+            try { SoftCam.scDeleteCamera(_camera); }
             catch (Exception ex) { Log.Msg($"[VirtualCamera] scDeleteCamera error: {ex.Message}"); }
             _camera = IntPtr.Zero;
         }

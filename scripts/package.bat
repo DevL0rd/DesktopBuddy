@@ -52,6 +52,16 @@ if not exist "%SETUP_PS1%" (
     exit /b 1
 )
 for %%F in (
+    FFmpeg.AutoGen.dll
+    Microsoft.Windows.SDK.NET.dll
+    WinRT.Runtime.dll
+) do (
+    if not exist "%MOD_OUT_DIR%\%%F" (
+        echo ERROR: DesktopBuddy build dependency %%F not found under %MOD_OUT_DIR%. Run scripts\build.bat first.
+        exit /b 1
+    )
+)
+for %%F in (
     cloudflared.exe
     avcodec-62.dll
     avformat-62.dll
@@ -82,11 +92,16 @@ copy "%MOD_DLL%" "%STAGE%\rml_mods\DesktopBuddy.dll" >nul
 if exist "%MOD_SHA%" copy "%MOD_SHA%" "%STAGE%\rml_mods\DesktopBuddy.sha" >nul
 
 REM Native dependencies: FFmpeg, Cloudflare Tunnel, SoftCam, and VB-Cable setup files.
-REM Keep these outside rml_libs so Resonite Mod Loader does not try to load
-REM native DLLs as managed assemblies.
+REM Managed DesktopBuddy dependencies live here too so rml_mods only contains
+REM the mod entry DLL and Resonite Mod Loader does not load support DLLs as mods.
 mkdir "%STAGE%\DesktopBuddyNative"
 robocopy "%ROOT_DIR%\DesktopBuddyNative" "%STAGE%\DesktopBuddyNative" /E /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 ( echo ERROR: Native dependency copy failed. & exit /b 1 )
+for %%F in (
+    FFmpeg.AutoGen.dll
+    Microsoft.Windows.SDK.NET.dll
+    WinRT.Runtime.dll
+) do copy "%MOD_OUT_DIR%\%%F" "%STAGE%\DesktopBuddyNative\%%F" >nul
 
 REM Renderer-side shared texture bridge
 mkdir "%STAGE%\Renderer\BepInEx\plugins"
