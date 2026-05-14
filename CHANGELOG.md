@@ -1,6 +1,6 @@
 DesktopBuddy Changelog
 
-This file is uploaded with each GitHub release so DesktopBuddy can show the latest changelog in-game.
+This file is packaged with each Thunderstore release and mirrored in the repository so DesktopBuddy can show the latest changelog in-game.
 
 DesktopBuddy gets a major in-world control upgrade in this release, with a new curved Settings panel, a redesigned quick menu, richer streaming controls, and cleaner release/install tooling.
 

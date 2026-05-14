@@ -9,13 +9,28 @@
     <RootNamespace>DesktopBuddySharedTextureBridge</RootNamespace>
   </PropertyGroup>
 
+  <Target Name="GenerateBridgeVersionInfo" BeforeTargets="CoreCompile">
+    <ReadLinesFromFile File="$(MSBuildThisFileDirectory)..\VERSION">
+      <Output TaskParameter="Lines" PropertyName="DesktopBuddyBridgeVersion" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <DesktopBuddyBridgeVersion Condition="'$(DesktopBuddyBridgeVersion)' == ''">0.0.0</DesktopBuddyBridgeVersion>
+      <BridgeVersionInfoContent>namespace DesktopBuddySharedTextureBridge { internal static class BridgeVersionInfo { internal const string Version = "$(DesktopBuddyBridgeVersion)"%3B } }</BridgeVersionInfoContent>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BridgeVersionInfo.g.cs" Overwrite="true" Lines="$(BridgeVersionInfoContent)" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BridgeVersionInfo.g.cs" />
+    </ItemGroup>
+  </Target>
+
   <PropertyGroup>
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
     <RendererManagedPath>$(MSBuildThisFileDirectory)..\lib\renderer</RendererManagedPath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
     <ResoniteRendererManagedPath>$(ResonitePath)\Renderer\Renderite.Renderer_Data\Managed</ResoniteRendererManagedPath>
-    <BepInExCorePath>$(ResonitePath)\Renderer\BepInEx\core</BepInExCorePath>
-    <ResoniteRmlLibsPath>$(ResonitePath)\rml_libs</ResoniteRmlLibsPath>
+    <ThunderstoreRefsPath>$(MSBuildThisFileDirectory)..\obj\ThunderstoreRefs</ThunderstoreRefsPath>
+    <InterprocessLibPackagePath>$(ThunderstoreRefsPath)\Nytra-InterprocessLib-3.0.0</InterprocessLibPackagePath>
+    <BepInExRendererPackagePath>$(ThunderstoreRefsPath)\ResoniteModding-BepInExRenderer-5.4.233001</BepInExRendererPackagePath>
   </PropertyGroup>
 
   <!-- BepInEx 5.x + Harmony (reference-only) -->
@@ -23,10 +38,42 @@
     <PackageReference Include="System.Memory" Version="4.6.3" />
     <PackageReference Include="Lib.Harmony" Version="2.3.3" PrivateAssets="all" ExcludeAssets="runtime" />
     <Reference Include="BepInEx">
-      <HintPath>$(LibPath)\BepInEx.dll</HintPath>
+      <HintPath>$(BepInExRendererPackagePath)\BepInExPack\Renderer\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="InterprocessLib.Unity">
+      <HintPath>$(InterprocessLibPackagePath)\Renderer\BepInEx\plugins\InterprocessLib.BepInEx\InterprocessLib.Unity.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="InterprocessLib.BepInEx_Extensions">
+      <HintPath>$(InterprocessLibPackagePath)\Renderer\BepInEx\plugins\InterprocessLib.BepInEx\InterprocessLib.BepInEx_Extensions.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <Target Name="RestoreThunderstoreRefs" BeforeTargets="ResolveAssemblyReferences">
+    <MakeDir Directories="$(ThunderstoreRefsPath)" />
+    <DownloadFile
+      SourceUrl="https://thunderstore.io/package/download/Nytra/InterprocessLib/3.0.0/"
+      DestinationFolder="$(ThunderstoreRefsPath)"
+      DestinationFileName="Nytra-InterprocessLib-3.0.0.zip"
+      Condition="!Exists('$(InterprocessLibPackagePath)\Renderer\BepInEx\plugins\InterprocessLib.BepInEx\InterprocessLib.Unity.dll')" />
+    <Unzip
+      SourceFiles="$(ThunderstoreRefsPath)\Nytra-InterprocessLib-3.0.0.zip"
+      DestinationFolder="$(InterprocessLibPackagePath)"
+      OverwriteReadOnlyFiles="true"
+      Condition="!Exists('$(InterprocessLibPackagePath)\Renderer\BepInEx\plugins\InterprocessLib.BepInEx\InterprocessLib.Unity.dll')" />
+    <DownloadFile
+      SourceUrl="https://thunderstore.io/package/download/ResoniteModding/BepInExRenderer/5.4.233001/"
+      DestinationFolder="$(ThunderstoreRefsPath)"
+      DestinationFileName="ResoniteModding-BepInExRenderer-5.4.233001.zip"
+      Condition="!Exists('$(BepInExRendererPackagePath)\BepInExPack\Renderer\BepInEx\core\BepInEx.dll')" />
+    <Unzip
+      SourceFiles="$(ThunderstoreRefsPath)\ResoniteModding-BepInExRenderer-5.4.233001.zip"
+      DestinationFolder="$(BepInExRendererPackagePath)"
+      OverwriteReadOnlyFiles="true"
+      Condition="!Exists('$(BepInExRendererPackagePath)\BepInExPack\Renderer\BepInEx\core\BepInEx.dll')" />
+  </Target>
 
   <!-- Unity + Renderite DLLs (reference-only, not redistributed) -->
   <ItemGroup>
@@ -53,24 +100,18 @@
   </ItemGroup>
 
   <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
-  <Target Name="RefreshRendererLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
+  <Target Name="RefreshRendererLibFromResonite" BeforeTargets="ResolveAssemblyReferences" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
-      <RendererLoaderReferenceLibs Include="$(ResoniteRmlLibsPath)\0Harmony.dll">
-        <DestinationPath>$(LibPath)\0Harmony.dll</DestinationPath>
-      </RendererLoaderReferenceLibs>
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\UnityEngine.CoreModule.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Unity.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Renderite.Shared.dll" />
       <RendererReferenceLibs Include="$(ResoniteRendererManagedPath)\Assembly-CSharp.dll" />
-      <MissingRendererLoaderReferenceLibs Include="@(RendererLoaderReferenceLibs)" Condition="!Exists('%(RendererLoaderReferenceLibs.Identity)')" />
       <MissingRendererReferenceLibs Include="@(RendererReferenceLibs)" Condition="!Exists('%(RendererReferenceLibs.Identity)')" />
     </ItemGroup>
-    <Error Condition="'@(MissingRendererLoaderReferenceLibs)' != ''" Text="[lib] Missing renderer loader reference DLL(s): @(MissingRendererLoaderReferenceLibs)" />
     <Error Condition="'@(MissingRendererReferenceLibs)' != ''" Text="[lib] Missing renderer reference DLL(s): @(MissingRendererReferenceLibs)" />
     <MakeDir Directories="$(LibPath)" />
     <MakeDir Directories="$(RendererManagedPath)" />
-    <Copy SourceFiles="@(RendererLoaderReferenceLibs)" DestinationFiles="@(RendererLoaderReferenceLibs->'%(DestinationPath)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(RendererReferenceLibs)" DestinationFolder="$(RendererManagedPath)" SkipUnchangedFiles="true" />
     <Message Text="[lib] Refreshed renderer reference DLLs from $(ResonitePath)" Importance="high" />
   </Target>
@@ -78,13 +119,12 @@
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
     <Compile Include="..\Shared\SharedTextureBridgeProtocol.cs" />
-    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
-    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
 
   <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->
-  <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins')">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins" Retries="0" />
+  <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins') and '$(DesktopBuddySkipDeploy)' != 'true'">
+    <MakeDir Directories="$(ResonitePath)\Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge" Retries="0" />
   </Target>
 
 </Project>

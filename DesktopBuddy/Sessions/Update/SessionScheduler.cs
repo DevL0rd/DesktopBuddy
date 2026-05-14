@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using FrooxEngine;
@@ -13,7 +13,7 @@ public partial class DesktopBuddyMod
     private static readonly HashSet<World> _scheduledWorlds = new();
     private const int VirtualCameraTargetFps = 60;
 
-    private static void CleanupTrace(string message) => Log.MsgImmediate($"[CleanupTrace] {message}");
+    private static void CleanupTrace(string message) => DesktopBuddy.Log.MsgImmediate($"[CleanupTrace] {message}");
 
     private static long TraceStart(string label)
     {

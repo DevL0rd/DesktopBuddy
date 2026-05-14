@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using BepInEx.Logging;
 
 namespace DesktopBuddy;
 
@@ -15,6 +16,7 @@ internal static class Log
     private static readonly BlockingCollection<LogEntry> _queue = new(4096);
     private static readonly Thread _writerThread;
     private static readonly object _fileWriteLock = new();
+    private static ManualLogSource _logger;
 
     private struct LogEntry
     {
@@ -25,7 +27,7 @@ internal static class Log
 
     static Log()
     {
-        var resoniteDir = Path.GetDirectoryName(Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".") ?? ".";
+        var resoniteDir = ResolveResoniteRoot();
         var logsDir = Path.Combine(resoniteDir, "Logs");
         if (!Directory.Exists(logsDir))
             logsDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
@@ -55,8 +57,13 @@ internal static class Log
             return;
 
         var ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-        try { ResoniteModLoader.ResoniteMod.Msg(msg); } catch { }
+        try { _logger?.LogInfo(msg); } catch { }
         WriteLine(ts, msg, false);
+    }
+
+    internal static void SetLogger(ManualLogSource logger)
+    {
+        _logger = logger;
     }
 
     internal static void StartSession()
@@ -97,7 +104,7 @@ internal static class Log
 
     internal static string ExportCombinedLog()
     {
-        string resoniteDir = Path.GetDirectoryName(Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".") ?? ".";
+        string resoniteDir = ResolveResoniteRoot();
         string logsDir = Path.Combine(resoniteDir, "Logs");
         if (!Directory.Exists(logsDir))
             logsDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
@@ -111,6 +118,20 @@ internal static class Log
         File.WriteAllText(exportPath, builder.ToString());
         Msg($"[Log] Exported combined log: {exportPath}");
         return exportPath;
+    }
+
+    private static string ResolveResoniteRoot()
+    {
+        string assemblyDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
+        var dir = new DirectoryInfo(assemblyDir);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "Resonite.exe")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+
+        return assemblyDir;
     }
 
     private static void AppendLogSection(StringBuilder builder, string title, string path)
@@ -140,9 +161,9 @@ internal static class Log
             try
             {
                 if (entry.IsError)
-                    ResoniteModLoader.ResoniteMod.Error(entry.Message);
+                    _logger?.LogError(entry.Message);
                 else
-                    ResoniteModLoader.ResoniteMod.Msg(entry.Message);
+                    _logger?.LogInfo(entry.Message);
             }
             catch { }
 

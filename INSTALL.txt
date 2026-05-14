@@ -2,19 +2,20 @@
 
 ## How To Install
 
-1. Install [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader).
-2. Download `{{ZIP_NAME}}.zip` from the release.
-3. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
-4. Run `setup\Setup-DesktopBuddy.bat` as administrator from the Resonite root. You may need to run this for future updates also even though already installed. I'll be sure to note it above if neccisary.
-5. Launch Resonite and open the context menu, then **Desktop**.
+Install through Thunderstore or a Thunderstore-compatible mod manager when possible. DesktopBuddy declares BepisLoader, BepisResoniteWrapper, InterprocessLib, BepInExRenderer, and RenderiteHook as package dependencies.
 
-Remote streams use the bundled Cloudflare Tunnel client at `DesktopBuddyNative\cloudflared.exe`. The setup script checks for it and configures the local HTTP listener on port `48080`.
+For a manual package install:
+
+1. Download `{{ZIP_NAME}}.zip` from the release.
+2. Extract the zip directly into your Resonite root folder, for example `C:\Program Files (x86)\Steam\steamapps\common\Resonite\`.
+3. Enable BepisLoader by setting `enable=true` in `hookfxr.ini`, or add `--hookfxr-enable` to Resonite's Steam launch options.
+4. Launch Resonite. DesktopBuddy checks SoftCam, VB-Cable, and the HTTP URL ACL on startup and asks for administrator permission only if setup work is needed.
+5. Open the context menu, then **Desktop**.
+
+If Windows setup is incomplete and you cancel the UAC prompt, relaunch Resonite and allow the one-time setup prompt, or run Resonite as administrator once so DesktopBuddy can finish the missing local setup work.
+
+Remote streams use the bundled Cloudflare Tunnel client at `plugins\DesktopBuddy\DesktopBuddyNative\cloudflared.exe`. DesktopBuddy checks for it and configures the local HTTP listener on port `48080` during first-run setup.
 
 The virtual camera appears as **DesktopBuddy - Camera** and the virtual microphone as **CABLE Output** in Discord, Zoom, Chrome, OBS, and similar apps.
 
 See the [README](https://github.com/DevL0rd/DesktopBuddy#readme) for troubleshooting.
-
-
-> **WARNING**
-> DesktopBuddy currently supports **Resonite Mod Loader only** on a **vanilla Resonite renderer install**.
-> Other modloaders and unrelated renderer mods are not supported right now. This will be fixed soon.

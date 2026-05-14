@@ -13,9 +13,13 @@
     <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" StandardOutputImportance="low" ContinueOnError="true">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitSha" />
     </Exec>
+    <ReadLinesFromFile File="$(MSBuildThisFileDirectory)..\VERSION">
+      <Output TaskParameter="Lines" PropertyName="DesktopBuddyVersion" />
+    </ReadLinesFromFile>
     <PropertyGroup>
       <GitSha Condition="'$(GitSha)' == ''">unknown</GitSha>
-      <BuildInfoContent>namespace DesktopBuddy { internal static class BuildInfo { internal const string GitSha = "$(GitSha)"%3B } }</BuildInfoContent>
+      <DesktopBuddyVersion Condition="'$(DesktopBuddyVersion)' == ''">0.0.0</DesktopBuddyVersion>
+      <BuildInfoContent>namespace DesktopBuddy { internal static class BuildInfo { internal const string GitSha = "$(GitSha)"%3B } internal static class DesktopBuddyVersionInfo { internal const string Version = "$(DesktopBuddyVersion)"%3B } }</BuildInfoContent>
     </PropertyGroup>
     <WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.g.cs" Overwrite="true" Lines="$(BuildInfoContent)" />
     <WriteLinesToFile File="$(OutputPath)DesktopBuddy.sha" Overwrite="true" Lines="$(GitSha)" />
@@ -28,10 +32,14 @@
     <ResonitePath>C:\Program Files (x86)\Steam\steamapps\common\Resonite</ResonitePath>
     <LibPath>$(MSBuildThisFileDirectory)..\lib</LibPath>
     <ResoniteLibrariesPath>$(ResonitePath)\Libraries</ResoniteLibrariesPath>
-    <ResoniteRmlLibsPath>$(ResonitePath)\rml_libs</ResoniteRmlLibsPath>
+    <ThunderstoreRefsPath>$(MSBuildThisFileDirectory)..\obj\ThunderstoreRefs</ThunderstoreRefsPath>
+    <InterprocessLibPackagePath>$(ThunderstoreRefsPath)\Nytra-InterprocessLib-3.0.0</InterprocessLibPackagePath>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="BepInEx.AutoPlugin" Version="2.1.0" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.ResonitePluginInfoProps" Version="3.0.0" PrivateAssets="all" />
+    <PackageReference Include="ResoniteModding.BepisResoniteWrapper" Version="1.0.2" />
     <PackageReference Include="Lib.Harmony" Version="2.3.3" />
     <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0.1" />
   </ItemGroup>
@@ -74,15 +82,6 @@
       <SourcePath>$(ResonitePath)\FrooxEngine.Store.dll</SourcePath>
       <HintPath>$(LibPath)\FrooxEngine.Store.dll</HintPath>
     </ResoniteGameReference>
-    <ResoniteGameReference Include="ResoniteModLoader">
-      <SourcePath>$(ResoniteLibrariesPath)\ResoniteModLoader.dll</SourcePath>
-      <HintPath>$(LibPath)\ResoniteModLoader.dll</HintPath>
-    </ResoniteGameReference>
-    <ResoniteGameReference Include="0Harmony">
-      <SourcePath>$(ResoniteRmlLibsPath)\0Harmony.dll</SourcePath>
-      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
-    </ResoniteGameReference>
-
     <Reference Include="FrooxEngine">
       <HintPath>$(LibPath)\FrooxEngine.dll</HintPath>
       <Private>false</Private>
@@ -119,18 +118,32 @@
       <HintPath>$(LibPath)\FrooxEngine.Store.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="ResoniteModLoader">
-      <HintPath>$(LibPath)\ResoniteModLoader.dll</HintPath>
+    <Reference Include="InterprocessLib.FrooxEngine">
+      <HintPath>$(InterprocessLibPackagePath)\plugins\InterprocessLib.BepisLoader\InterprocessLib.FrooxEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
+    <Reference Include="InterprocessLib.BepisLoader_Extensions">
+      <HintPath>$(InterprocessLibPackagePath)\plugins\InterprocessLib.BepisLoader\InterprocessLib.BepisLoader_Extensions.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
 
+  <Target Name="RestoreThunderstoreRefs" BeforeTargets="ResolveAssemblyReferences">
+    <MakeDir Directories="$(ThunderstoreRefsPath)" />
+    <DownloadFile
+      SourceUrl="https://thunderstore.io/package/download/Nytra/InterprocessLib/3.0.0/"
+      DestinationFolder="$(ThunderstoreRefsPath)"
+      DestinationFileName="Nytra-InterprocessLib-3.0.0.zip"
+      Condition="!Exists('$(InterprocessLibPackagePath)\plugins\InterprocessLib.BepisLoader\InterprocessLib.FrooxEngine.dll')" />
+    <Unzip
+      SourceFiles="$(ThunderstoreRefsPath)\Nytra-InterprocessLib-3.0.0.zip"
+      DestinationFolder="$(InterprocessLibPackagePath)"
+      OverwriteReadOnlyFiles="true"
+      Condition="!Exists('$(InterprocessLibPackagePath)\plugins\InterprocessLib.BepisLoader\InterprocessLib.FrooxEngine.dll')" />
+  </Target>
+
   <!-- Refresh repo-local reference DLLs from an installed Resonite before resolving references. -->
-  <Target Name="RefreshLibFromResonite" BeforeTargets="ResolveReferences" Condition="Exists('$(ResonitePath)')">
+  <Target Name="RefreshLibFromResonite" BeforeTargets="ResolveAssemblyReferences" Condition="Exists('$(ResonitePath)')">
     <ItemGroup>
       <MissingResoniteGameReference Include="@(ResoniteGameReference)" Condition="!Exists('%(ResoniteGameReference.SourcePath)')" />
     </ItemGroup>
@@ -143,8 +156,6 @@
   <!-- Shared protocol file (single source of truth for both game-side and renderer) -->
   <ItemGroup>
     <Compile Include="..\Shared\SharedTextureBridgeProtocol.cs" />
-    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared\*.cs" LinkBase="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Shared" />
-    <Compile Include="..\Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" Link="Shared\ThirdParty\ResoniteInterprocessLib\InterprocessLib.Standalone\StandaloneInit.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -153,16 +164,17 @@
     <DesktopBuddyManagedDependencyName Include="WinRT.Runtime.dll" />
   </ItemGroup>
 
-  <!-- Deploy to local Resonite install (skipped on CI / when Resonite not installed) -->
-  <Target Name="CopyToResonite" AfterTargets="Build" Condition="Exists('$(ResonitePath)')">
+  <!-- Deploy to local Resonite BepisLoader plugin layout (skipped on CI / when Resonite not installed) -->
+  <Target Name="CopyToResonite" AfterTargets="Build" Condition="Exists('$(ResonitePath)') and '$(DesktopBuddySkipDeploy)' != 'true'">
     <ItemGroup>
       <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\**\*" />
       <DesktopBuddyManagedDependency Include="@(DesktopBuddyManagedDependencyName->'$(OutputPath)%(Identity)')" />
     </ItemGroup>
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\rml_mods" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <MakeDir Directories="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

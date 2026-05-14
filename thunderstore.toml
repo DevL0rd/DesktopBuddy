@@ -1,0 +1,65 @@
+[config]
+schemaVersion = "0.0.1"
+
+[package]
+namespace = "DesktopBuddy"
+name = "DesktopBuddy"
+versionNumber = "1.0.12"
+description = "Desktop and window viewer with input, GPU capture, shared texture rendering, hardware encoding, and remote streaming for Resonite."
+websiteUrl = "https://github.com/DevL0rd/DesktopBuddy"
+containsNsfwContent = false
+
+[package.dependencies]
+ResoniteModding-BepisLoader = "1.6.0"
+ResoniteModding-BepisResoniteWrapper = "1.0.2"
+Nytra-InterprocessLib = "3.0.0"
+ResoniteModding-BepInExRenderer = "5.4.233001"
+ResoniteModding-RenderiteHook = "1.1.1"
+
+[build]
+icon = "./icon.png"
+readme = "./README.md"
+outdir = "./build"
+
+[[build.copy]]
+source = "./DesktopBuddy/bin/Release/net10.0-windows10.0.26100.0/DesktopBuddy.dll"
+target = "plugins/DesktopBuddy/"
+
+[[build.copy]]
+source = "./DesktopBuddy/bin/Release/net10.0-windows10.0.26100.0/DesktopBuddy.sha"
+target = "plugins/DesktopBuddy/"
+
+[[build.copy]]
+source = "./DesktopBuddy/bin/Release/net10.0-windows10.0.26100.0/FFmpeg.AutoGen.dll"
+target = "plugins/DesktopBuddy/DesktopBuddyNative/"
+
+[[build.copy]]
+source = "./DesktopBuddy/bin/Release/net10.0-windows10.0.26100.0/Microsoft.Windows.SDK.NET.dll"
+target = "plugins/DesktopBuddy/DesktopBuddyNative/"
+
+[[build.copy]]
+source = "./DesktopBuddy/bin/Release/net10.0-windows10.0.26100.0/WinRT.Runtime.dll"
+target = "plugins/DesktopBuddy/DesktopBuddyNative/"
+
+[[build.copy]]
+source = "./DesktopBuddyNative"
+target = "plugins/DesktopBuddy/DesktopBuddyNative/"
+
+[[build.copy]]
+source = "./DesktopBuddySharedTextureBridge/bin/Release/net472/DesktopBuddySharedTextureBridge.dll"
+target = "Renderer/BepInEx/plugins/DesktopBuddySharedTextureBridge/"
+
+[[build.copy]]
+source = "./INSTALL.txt"
+target = "/"
+
+[[build.copy]]
+source = "./CHANGELOG.md"
+target = "/"
+
+[publish]
+repository = "https://thunderstore.io"
+communities = ["resonite"]
+
+[publish.categories]
+resonite = ["mods"]

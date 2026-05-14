@@ -51,7 +51,7 @@ public partial class DesktopBuddyMod
                             if (vcamRef._logNextFrame)
                             {
                                 vcamRef._logNextFrame = false;
-                                Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
+                                DesktopBuddy.Log.Msg($"[VirtualCamera] Bitmap: {bmp.Size.x}x{bmp.Size.y} format={bmp.Format} bpp={bmp.BitsPerPixel} profile={bmp.Profile}");
                             }
                             vcamRef.SendFrame(bmp.RawData, bmp.Size.x, bmp.Size.y, bmp.Format);
                         }

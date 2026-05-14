@@ -1,0 +1,37 @@
+name: Publish Thunderstore
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      TCLI_AUTH_TOKEN: ${{ secrets.TCLI_AUTH_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Publish to Thunderstore
+        shell: pwsh
+        run: |
+          $expected = ""
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $expected = $env:GITHUB_REF_NAME
+          }
+
+          if ([string]::IsNullOrWhiteSpace($expected)) {
+            ./scripts/deploy-thunderstore.ps1 -Publish
+          } else {
+            ./scripts/deploy-thunderstore.ps1 -Publish -ExpectedVersion $expected
+          }

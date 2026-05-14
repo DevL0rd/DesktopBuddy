@@ -19,8 +19,8 @@ jobs:
           dotnet-quality: 'preview'
 
       - name: Build release DLLs
-        shell: cmd
-        run: scripts\build.bat
+        shell: pwsh
+        run: ./scripts/build.ps1
 
       - name: Get build info
         id: buildinfo
@@ -33,10 +33,10 @@ jobs:
           echo "name=$name" >> $env:GITHUB_OUTPUT
 
       - name: Package zip
-        shell: cmd
+        shell: pwsh
         env:
           ZIP_NAME: ${{ steps.buildinfo.outputs.name }}
-        run: scripts\package.bat
+        run: ./scripts/package.ps1
 
       - name: Render release notes
         id: notes
@@ -55,4 +55,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             ${{ steps.buildinfo.outputs.name }}.zip
-            CHANGELOG.txt
+            CHANGELOG.md

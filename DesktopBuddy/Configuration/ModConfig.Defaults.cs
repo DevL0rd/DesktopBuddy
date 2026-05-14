@@ -1,36 +1,21 @@
-﻿using System;
-using System.IO;
-using System.Text.RegularExpressions;
+using System;
 using System.Threading;
-using ResoniteModLoader;
 
 namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-
-
     private static void SaveCurrentConfigDefaults()
     {
         try
         {
             if (Config == null) return;
 
-            if (_configResetForNewDefaults)
-            {
-                ApplyFreshConfigDefaults();
-                Msg("[Config] Applied fresh defaults: spatialAudio=false bitrate=10 streamFps=60 maxStreamResolution=2560 network=cloudflare");
-            }
-            else
-            {
-                Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
-                Config.Set(Bitrate, Config.GetValue(Bitrate));
-                Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
-                Config.Set(MaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
-            }
-
-            Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
+            Config.Set(SpatialAudioEnabled, Config.GetValue(SpatialAudioEnabled));
+            Config.Set(Bitrate, Config.GetValue(Bitrate));
             Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
+            Config.Set(MaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
+            Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -67,7 +52,6 @@ public partial class DesktopBuddyMod
             Config.Set(StreamAudioMinScale, Math.Clamp(Config.GetValue(StreamAudioMinScale), 0f, 1000f));
             Config.Set(StreamAudioMaxScale, Math.Clamp(Config.GetValue(StreamAudioMaxScale), 0f, 1000f));
             Config.Save();
-            _configResetForNewDefaults = false;
             RefreshRuntimeStreamSettingsFromConfig();
         }
         catch (Exception ex)
@@ -75,50 +59,6 @@ public partial class DesktopBuddyMod
             Msg($"[Config] Failed to save current defaults: {ex.Message}");
         }
     }
-
-    private static void ApplyFreshConfigDefaults()
-    {
-        Config.Set(SpatialAudioEnabled, false);
-        Config.Set(CheckForUpdates, true);
-        Config.Set(Bitrate, 10);
-        Config.Set(StreamFps, 60);
-        Config.Set(MaxStreamResolution, 2560);
-        Config.Set(UseMediaMtx, false);
-        Config.Set(MediaMtxHost, "");
-        Config.Set(MediaMtxPort, 8554);
-        Config.Set(MediaMtxStreamName, "");
-        Config.Set(StreamNetworkMode, "cloudflare");
-        Config.Set(PortForwardHostMode, "auto");
-        Config.Set(PortForwardAutoIpMode, "external");
-        Config.Set(PortForwardHost, "");
-        Config.Set(PortForwardUseNat, false);
-        Config.Set(PanelCurvePreferences, "");
-        Config.Set(ViewerCullingMode, "frustum");
-        Config.Set(ViewerCullingPreview, false);
-        Config.Set(ViewerFrustumWidth, 120.0f);
-        Config.Set(ViewerFrustumDepth, 3.0f);
-        Config.Set(ViewerDistance, 3.0f);
-        Config.Set(EncoderPreference, "auto");
-        Config.Set(PreferredGpuLuid, "");
-        Config.Set(StreamAudioOutputVolume, 1.0f);
-        Config.Set(StreamAudioGlobalMode, "positional");
-        Config.Set(StreamAudioSpatialize, true);
-        Config.Set(StreamAudioSpatialBlend, 1.0f);
-        Config.Set(StreamAudioDistanceSpace, "global");
-        Config.Set(StreamAudioDopplerLevel, 0.0f);
-        Config.Set(StreamAudioPitch, 1.0f);
-        Config.Set(StreamAudioIgnoreAudioEffects, true);
-        Config.Set(StreamAudioTypeGroup, "multimedia");
-        Config.Set(StreamAudioRolloffMode, "linear");
-        Config.Set(StreamAudioMinDistance, 1.0f);
-        Config.Set(StreamAudioMaxDistance, 30.0f);
-        Config.Set(StreamAudioSpatializationStartDistance, 0.01f);
-        Config.Set(StreamAudioSpatializationTransitionRange, 0.01f);
-        Config.Set(StreamAudioPriority, 128);
-        Config.Set(StreamAudioMinScale, 0.0f);
-        Config.Set(StreamAudioMaxScale, 1000.0f);
-    }
-
 
     private static void RefreshRuntimeStreamSettingsFromConfig()
     {
@@ -136,7 +76,50 @@ public partial class DesktopBuddyMod
         }
     }
 
-    private static void ApplyRuntimeSetting<T>(ModConfigurationKey<T> key, T value)
+    private static void ApplyFreshConfigDefaults()
+    {
+        Config.Set(SpatialAudioEnabled, SpatialAudioEnabled.DefaultValue);
+        Config.Set(CheckForUpdates, CheckForUpdates.DefaultValue);
+        Config.Set(Bitrate, Bitrate.DefaultValue);
+        Config.Set(StreamFps, StreamFps.DefaultValue);
+        Config.Set(MaxStreamResolution, MaxStreamResolution.DefaultValue);
+        Config.Set(UseMediaMtx, UseMediaMtx.DefaultValue);
+        Config.Set(MediaMtxHost, MediaMtxHost.DefaultValue);
+        Config.Set(MediaMtxPort, MediaMtxPort.DefaultValue);
+        Config.Set(MediaMtxStreamName, MediaMtxStreamName.DefaultValue);
+        Config.Set(StreamNetworkMode, StreamNetworkMode.DefaultValue);
+        Config.Set(PortForwardHostMode, PortForwardHostMode.DefaultValue);
+        Config.Set(PortForwardAutoIpMode, PortForwardAutoIpMode.DefaultValue);
+        Config.Set(PortForwardHost, PortForwardHost.DefaultValue);
+        Config.Set(PortForwardUseNat, PortForwardUseNat.DefaultValue);
+        Config.Set(PanelCurvePreferences, PanelCurvePreferences.DefaultValue);
+        Config.Set(ViewerCullingMode, ViewerCullingMode.DefaultValue);
+        Config.Set(ViewerCullingPreview, ViewerCullingPreview.DefaultValue);
+        Config.Set(ViewerFrustumWidth, ViewerFrustumWidth.DefaultValue);
+        Config.Set(ViewerFrustumDepth, ViewerFrustumDepth.DefaultValue);
+        Config.Set(ViewerDistance, ViewerDistance.DefaultValue);
+        Config.Set(EncoderPreference, EncoderPreference.DefaultValue);
+        Config.Set(PreferredGpuLuid, PreferredGpuLuid.DefaultValue);
+        Config.Set(StreamAudioOutputVolume, StreamAudioOutputVolume.DefaultValue);
+        Config.Set(StreamAudioGlobalMode, StreamAudioGlobalMode.DefaultValue);
+        Config.Set(StreamAudioSpatialize, StreamAudioSpatialize.DefaultValue);
+        Config.Set(StreamAudioSpatialBlend, StreamAudioSpatialBlend.DefaultValue);
+        Config.Set(StreamAudioDistanceSpace, StreamAudioDistanceSpace.DefaultValue);
+        Config.Set(StreamAudioDopplerLevel, StreamAudioDopplerLevel.DefaultValue);
+        Config.Set(StreamAudioPitch, StreamAudioPitch.DefaultValue);
+        Config.Set(StreamAudioIgnoreAudioEffects, StreamAudioIgnoreAudioEffects.DefaultValue);
+        Config.Set(StreamAudioTypeGroup, StreamAudioTypeGroup.DefaultValue);
+        Config.Set(StreamAudioRolloffMode, StreamAudioRolloffMode.DefaultValue);
+        Config.Set(StreamAudioMinDistance, StreamAudioMinDistance.DefaultValue);
+        Config.Set(StreamAudioMaxDistance, StreamAudioMaxDistance.DefaultValue);
+        Config.Set(StreamAudioSpatializationStartDistance, StreamAudioSpatializationStartDistance.DefaultValue);
+        Config.Set(StreamAudioSpatializationTransitionRange, StreamAudioSpatializationTransitionRange.DefaultValue);
+        Config.Set(StreamAudioPriority, StreamAudioPriority.DefaultValue);
+        Config.Set(StreamAudioMinScale, StreamAudioMinScale.DefaultValue);
+        Config.Set(StreamAudioMaxScale, StreamAudioMaxScale.DefaultValue);
+    }
+
+    private static void ApplyRuntimeSetting<T>(DesktopBuddyConfigKey<T> key, T value)
     {
         if (ReferenceEquals(key, Bitrate) && value is int bitrate)
             Volatile.Write(ref _runtimeBitrateMbps, Math.Clamp(bitrate, 1, 200));
@@ -148,7 +131,7 @@ public partial class DesktopBuddyMod
             _runtimeEncoderPreference = NormalizeEncoderPreference(encoder);
     }
 
-    internal static void SaveConfigValue<T>(ModConfigurationKey<T> key, T value)
+    internal static void SaveConfigValue<T>(DesktopBuddyConfigKey<T> key, T value)
     {
         try
         {
@@ -177,61 +160,4 @@ public partial class DesktopBuddyMod
             _settingsConfigDirty = true;
         }
     }
-
-    private static void DetectStoredConfigVersionMismatch()
-    {
-        try
-        {
-            string path = FindRmlConfigPath();
-            if (path == null || !File.Exists(path)) return;
-
-            string json = File.ReadAllText(path);
-            var match = Regex.Match(json, "\"version\"\\s*:\\s*\"([^\"]+)\"");
-            if (!match.Success || !System.Version.TryParse(match.Groups[1].Value, out var storedVersion))
-            {
-                Msg($"[Config] Existing config has no readable version; applying fresh defaults for schema {CurrentConfigSchemaVersion}");
-                _configResetForNewDefaults = true;
-                return;
-            }
-
-            if (storedVersion != CurrentConfigSchemaVersion)
-            {
-                Msg($"[Config] Existing config version {storedVersion} differs from schema {CurrentConfigSchemaVersion}; applying fresh defaults");
-                _configResetForNewDefaults = true;
-            }
-        }
-        catch (Exception ex)
-        {
-            Msg($"[Config] Could not inspect existing config version: {ex.Message}");
-        }
-    }
-
-    private static string FindRmlConfigPath()
-    {
-        string assemblyDir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        string baseDir = AppDomain.CurrentDomain.BaseDirectory ?? "";
-        string current = Directory.GetCurrentDirectory() ?? "";
-
-        string[] candidates =
-        {
-            Path.Combine(assemblyDir, "..", "rml_config", "DesktopBuddy.json"),
-            Path.Combine(assemblyDir, "..", "..", "rml_config", "DesktopBuddy.json"),
-            Path.Combine(baseDir, "rml_config", "DesktopBuddy.json"),
-            Path.Combine(baseDir, "..", "rml_config", "DesktopBuddy.json"),
-            Path.Combine(current, "rml_config", "DesktopBuddy.json"),
-        };
-
-        foreach (string candidate in candidates)
-        {
-            try
-            {
-                string full = Path.GetFullPath(candidate);
-                if (File.Exists(full)) return full;
-            }
-            catch { }
-        }
-
-        return null;
-    }
-
 }

@@ -5,6 +5,8 @@ obj/
 *.suo
 *.cache
 *.log
+.env
+build/
 packages/
 *.ts
 DesktopBuddy*.zip

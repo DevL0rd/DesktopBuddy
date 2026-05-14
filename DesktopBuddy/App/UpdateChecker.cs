@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Elements.Core;
 using FrooxEngine;
 using FrooxEngine.UIX;
@@ -10,41 +11,47 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
+    private const string ThunderstoreNamespace = "DesktopBuddy";
+    private const string ThunderstorePackage = "DesktopBuddy";
+    private const string ThunderstorePackageUrl = "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/";
+    private const string ThunderstorePackageApiUrl = "https://thunderstore.io/api/experimental/package/DesktopBuddy/DesktopBuddy/";
+    private const string ChangelogUrl = "https://raw.githubusercontent.com/DevL0rd/DesktopBuddy/main/CHANGELOG.md";
+
     private static void CheckForUpdate()
     {
         try
         {
             _updateCheckError = null;
             var buildSha = BuildInfo.GitSha;
-            Msg($"[Update] Current build: {buildSha}");
+            var currentVersion = DesktopBuddyVersion;
+            Msg($"[Update] Current version: {currentVersion} ({buildSha})");
 
             using var http = new System.Net.Http.HttpClient();
             http.Timeout = TimeSpan.FromSeconds(8);
             http.DefaultRequestHeaders.Add("User-Agent", "DesktopBuddy");
-            var json = http.GetStringAsync("https://api.github.com/repos/DevL0rd/DesktopBuddy/releases/latest").Result;
+            var json = http.GetStringAsync(ThunderstorePackageApiUrl).Result;
             using var doc = JsonDocument.Parse(json);
-            var release = doc.RootElement;
-            if (!release.TryGetProperty("tag_name", out var tagElement))
+            var package = doc.RootElement;
+            if (!package.TryGetProperty("latest", out var latest))
+                return;
+            if (!latest.TryGetProperty("version_number", out var versionElement))
                 return;
 
-            var tag = tagElement.GetString() ?? "";
-            string remoteSha;
-            if (tag.StartsWith("build-", StringComparison.OrdinalIgnoreCase))
-            {
-                remoteSha = tag.Substring(6);
-            }
-            else
-            {
-                var shaMatch = System.Text.RegularExpressions.Regex.Match(tag, @"_([0-9a-fA-F]{7,40})$");
-                remoteSha = shaMatch.Success ? shaMatch.Groups[1].Value : tag;
-            }
-
-            _remoteVersion = tag;
-            _remoteSha = remoteSha;
-            _remoteChangelog = ExtractReleaseChangelog(release, http);
+            var latestVersion = versionElement.GetString() ?? "";
+            _remoteVersion = latestVersion;
+            _remoteSha = latest.TryGetProperty("full_name", out var fullNameElement)
+                ? fullNameElement.GetString() ?? $"{ThunderstoreNamespace}-{ThunderstorePackage}-{latestVersion}"
+                : $"{ThunderstoreNamespace}-{ThunderstorePackage}-{latestVersion}";
+            _remoteChangelog = FetchChangelog(http);
             _lastUpdateCheckUtc = DateTime.UtcNow;
-            Msg($"[Update] Latest release: {tag} (sha: {remoteSha})");
-            _latestVersion = buildSha != "unknown" && remoteSha != buildSha ? tag : null;
+            Msg($"[Update] Latest Thunderstore version: {latestVersion}");
+            _latestVersion = IsRemoteVersionNewer(latestVersion, currentVersion) ? latestVersion : null;
+        }
+        catch (Exception ex) when (IsThunderstoreNotFound(ex))
+        {
+            _updateCheckError = "Thunderstore package is not published yet.";
+            _lastUpdateCheckUtc = DateTime.UtcNow;
+            Msg("[Update] Thunderstore package is not published yet");
         }
         catch (Exception ex)
         {
@@ -54,27 +61,25 @@ public partial class DesktopBuddyMod
         }
     }
 
-    private static string ExtractReleaseChangelog(JsonElement release, System.Net.Http.HttpClient http)
+    private static bool IsThunderstoreNotFound(Exception ex)
+    {
+        if (ex is System.Net.Http.HttpRequestException httpEx &&
+            httpEx.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return true;
+
+        if (ex is AggregateException aggregate)
+            return aggregate.Flatten().InnerExceptions.Any(IsThunderstoreNotFound);
+
+        return ex.InnerException != null && IsThunderstoreNotFound(ex.InnerException);
+    }
+
+    private static string FetchChangelog(System.Net.Http.HttpClient http)
     {
         try
         {
-            if (release.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var asset in assets.EnumerateArray())
-                {
-                    string name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() ?? "" : "";
-                    if (!string.Equals(name, "CHANGELOG.txt", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    string url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() ?? "" : "";
-                    if (string.IsNullOrWhiteSpace(url))
-                        continue;
-
-                    string artifact = http.GetStringAsync(url).Result;
-                    if (!string.IsNullOrWhiteSpace(artifact))
-                        return TrimChangelog(artifact);
-                }
-            }
+            string changelog = http.GetStringAsync(ChangelogUrl).Result;
+            if (!string.IsNullOrWhiteSpace(changelog))
+                return TrimChangelog(changelog);
         }
         catch (Exception ex)
         {
@@ -82,6 +87,34 @@ public partial class DesktopBuddyMod
         }
 
         return "";
+    }
+
+    private static bool IsRemoteVersionNewer(string remoteVersion, string currentVersion)
+    {
+        if (TryParseSemanticVersion(remoteVersion, out var remote) &&
+            TryParseSemanticVersion(currentVersion, out var current))
+        {
+            return remote.CompareTo(current) > 0;
+        }
+
+        return !string.Equals(remoteVersion, currentVersion, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParseSemanticVersion(string version, out Version parsed)
+    {
+        parsed = null;
+        if (string.IsNullOrWhiteSpace(version))
+            return false;
+
+        var match = Regex.Match(version.Trim(), @"^v?(\d+)\.(\d+)\.(\d+)$", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return false;
+
+        parsed = new Version(
+            int.Parse(match.Groups[1].Value),
+            int.Parse(match.Groups[2].Value),
+            int.Parse(match.Groups[3].Value));
+        return true;
     }
 
     private static string TrimChangelog(string text)
@@ -166,7 +199,7 @@ public partial class DesktopBuddyMod
             try
             {
                 Msg("[Update] Opening releases page");
-                try { Process.Start(new ProcessStartInfo("https://github.com/DevL0rd/DesktopBuddy/releases") { UseShellExecute = true }); }
+                try { Process.Start(new ProcessStartInfo(ThunderstorePackageUrl) { UseShellExecute = true }); }
                 catch (Exception ex) { Msg($"[Update] Failed: {ex.Message}"); }
                 if (!updateSlot.IsDestroyed) updateSlot.Destroy();
             }
