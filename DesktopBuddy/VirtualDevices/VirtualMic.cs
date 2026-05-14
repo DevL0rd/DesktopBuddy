@@ -62,7 +62,7 @@ internal sealed class VirtualMic : IDisposable
         {
         CoInitializeEx(IntPtr.Zero, 0);
 
-        string deviceId = VBCableSetup.FindCableInputDeviceId();
+        string deviceId = VBCable.FindCableInputDeviceId();
         if (deviceId == null)
         {
             Log.Msg("[VirtualMic] CABLE Input device not found");
@@ -163,39 +163,12 @@ internal sealed class VirtualMic : IDisposable
     {
         if (_disposed || Muted || samples.Length == 0) return;
 
-        int ringSize = _gameAudioRing.Length;
-        long wp = Volatile.Read(ref _gameAudioWritePos);
-        int toWrite = Math.Min(samples.Length, ringSize);
-        int offset = (int)(wp % ringSize);
-        int first = Math.Min(toWrite, ringSize - offset);
-
-        samples.Slice(0, first).CopyTo(_gameAudioRing.AsSpan(offset, first));
-        if (first < toWrite)
-            samples.Slice(first, toWrite - first).CopyTo(_gameAudioRing.AsSpan(0, toWrite - first));
-
-        Volatile.Write(ref _gameAudioWritePos, wp + toWrite);
+        AudioRingBuffer.WriteLatest(samples, _gameAudioRing, ref _gameAudioWritePos);
     }
 
     private int ReadGameAudio(float[] output, int maxSamples)
     {
-        long writePos = Volatile.Read(ref _gameAudioWritePos);
-        long available = writePos - _gameAudioReadPos;
-        if (available <= 0) return 0;
-        if (available > _gameAudioRing.Length)
-        {
-            _gameAudioReadPos = writePos - _gameAudioRing.Length;
-            available = _gameAudioRing.Length;
-        }
-
-        int toRead = (int)Math.Min(available, maxSamples);
-        int ringSize = _gameAudioRing.Length;
-        int offset = (int)(_gameAudioReadPos % ringSize);
-        int first = Math.Min(toRead, ringSize - offset);
-        Array.Copy(_gameAudioRing, offset, output, 0, first);
-        if (first < toRead)
-            Array.Copy(_gameAudioRing, 0, output, first, toRead - first);
-        _gameAudioReadPos += toRead;
-        return toRead;
+        return AudioRingBuffer.Read(_gameAudioRing, Volatile.Read(ref _gameAudioWritePos), ref _gameAudioReadPos, output, maxSamples);
     }
 
     private unsafe void RenderLoop()

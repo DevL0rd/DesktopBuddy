@@ -21,12 +21,9 @@
   <!-- BepInEx 5.x + Harmony (reference-only) -->
   <ItemGroup>
     <PackageReference Include="System.Memory" Version="4.6.3" />
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" PrivateAssets="all" ExcludeAssets="runtime" />
     <Reference Include="BepInEx">
       <HintPath>$(LibPath)\BepInEx.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(LibPath)\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

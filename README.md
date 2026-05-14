@@ -173,6 +173,9 @@ DesktopBuddy-Alpha-*.zip
     DesktopBuddy.dll
     DesktopBuddy.sha
   DesktopBuddyNative/
+    FFmpeg.AutoGen.dll
+    Microsoft.Windows.SDK.NET.dll
+    WinRT.Runtime.dll
     avcodec-62.dll
     avformat-62.dll
     avutil-60.dll
@@ -195,7 +198,7 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 | --- | --- |
 | [ResoniteInterprocessLib](https://github.com/Nytra/ResoniteInterprocessLib) | Shared-source control messages between the Resonite mod and renderer-side shared texture bridge |
 | [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `DesktopBuddyNative` |
-| [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg |
+| [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg, packaged in `DesktopBuddyNative` |
 | [cloudflared](https://github.com/cloudflare/cloudflared) | Bundled Cloudflare Tunnel client for public HTTPS stream URLs |
 | [SoftCam](https://github.com/tshino/softcam) | DirectShow virtual camera filter |
 
@@ -214,8 +217,7 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 | [Resonite Mod Loader](https://github.com/resonite-modding-group/ResoniteModLoader) | Game-side mod loading |
 | [Harmony](https://github.com/pardeike/Harmony) | Runtime patching |
 | [BepInEx](https://github.com/BepInEx/BepInEx) | Renderer plugin runtime |
-| [ILRepack](https://github.com/gluck/il-repack) | Merging packaged game-side dependencies |
-| [CsWinRT](https://github.com/microsoft/CsWinRT) | Windows Runtime interop support used by Windows.Graphics.Capture |
+| [CsWinRT](https://github.com/microsoft/CsWinRT) | Windows Runtime interop support used by Windows.Graphics.Capture, packaged in `DesktopBuddyNative` |
 
 ## Contributing
 
