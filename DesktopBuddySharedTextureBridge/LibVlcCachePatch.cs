@@ -47,7 +47,7 @@ namespace DesktopBuddySharedTextureBridge
                 if (!_loggedConfigPath)
                 {
                     _loggedConfigPath = true;
-                    SharedTextureBridgePlugin.LogWarning("[LibVLC] DesktopBuddy RML config not found; using low-latency cache defaults");
+                    SharedTextureBridgePlugin.LogWarning("[LibVLC] DesktopBuddy BepInEx config not found; using low-latency cache defaults");
                 }
                 _settings = CacheSettings.Default;
                 return _settings;
@@ -61,12 +61,12 @@ namespace DesktopBuddySharedTextureBridge
 
             try
             {
-                string json = File.ReadAllText(path);
+                string configText = File.ReadAllText(path);
                 _settings = new CacheSettings
                 {
-                    NetworkCachingMs = ReadCacheMs(json, "libVlcNetworkCachingMs", CacheSettings.Default.NetworkCachingMs),
-                    LiveCachingMs = ReadCacheMs(json, "libVlcLiveCachingMs", CacheSettings.Default.LiveCachingMs),
-                    FileCachingMs = ReadCacheMs(json, "libVlcFileCachingMs", CacheSettings.Default.FileCachingMs),
+                    NetworkCachingMs = ReadCacheMs(configText, "libVlcNetworkCachingMs", CacheSettings.Default.NetworkCachingMs),
+                    LiveCachingMs = ReadCacheMs(configText, "libVlcLiveCachingMs", CacheSettings.Default.LiveCachingMs),
+                    FileCachingMs = ReadCacheMs(configText, "libVlcFileCachingMs", CacheSettings.Default.FileCachingMs),
                 };
             }
             catch (Exception ex)
@@ -84,13 +84,17 @@ namespace DesktopBuddySharedTextureBridge
             string rendererParent = Directory.GetParent(gameRoot)?.FullName;
             string current = Directory.GetCurrentDirectory();
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string assemblyDir = Path.GetDirectoryName(typeof(SharedTextureBridgePlugin).Assembly.Location);
+            const string configFile = "com.devl0rd.DesktopBuddy.cfg";
 
             string[] candidates =
             {
-                Path.Combine(gameRoot ?? "", "rml_config", "DesktopBuddy.json"),
-                Path.Combine(rendererParent ?? "", "rml_config", "DesktopBuddy.json"),
-                Path.Combine(current ?? "", "rml_config", "DesktopBuddy.json"),
-                Path.Combine(baseDir ?? "", "..", "..", "..", "rml_config", "DesktopBuddy.json"),
+                Path.Combine(assemblyDir ?? "", "..", "..", "..", "..", "BepInEx", "config", configFile),
+                Path.Combine(gameRoot ?? "", "BepInEx", "config", configFile),
+                Path.Combine(rendererParent ?? "", "BepInEx", "config", configFile),
+                Path.Combine(current ?? "", "BepInEx", "config", configFile),
+                Path.Combine(baseDir ?? "", "..", "..", "..", "BepInEx", "config", configFile),
+                Path.Combine(baseDir ?? "", "..", "..", "..", "..", "BepInEx", "config", configFile),
             };
 
             foreach (string candidate in candidates)
@@ -106,9 +110,12 @@ namespace DesktopBuddySharedTextureBridge
             return null;
         }
 
-        private static int ReadInt(string json, string key, int fallback)
+        private static int ReadInt(string configText, string key, int fallback)
         {
-            var match = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?\\d+)");
+            string escapedKey = Regex.Escape(key);
+            var match = Regex.Match(configText, "\"" + escapedKey + "\"\\s*:\\s*(-?\\d+)");
+            if (!match.Success)
+                match = Regex.Match(configText, "(?m)^\\s*" + escapedKey + "\\s*=\\s*(-?\\d+)\\s*$");
             if (!match.Success || !int.TryParse(match.Groups[1].Value, out int value))
                 return fallback;
 

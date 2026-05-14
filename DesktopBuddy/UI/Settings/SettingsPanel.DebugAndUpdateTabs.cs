@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -19,7 +19,7 @@ public partial class DesktopBuddyMod
         AddSectionHeader(ui, "Debug");
         AddButtonRow(ui, state, "Export combined log", () =>
         {
-            try { Log.ExportCombinedLog(); }
+            try { DesktopBuddy.Log.ExportCombinedLog(); }
             catch (Exception ex) { Msg($"[Log] Combined export failed: {ex.Message}"); }
             RebuildSettingsPanel(state, session);
         }, buttonLabel: "Export");
@@ -90,6 +90,7 @@ public partial class DesktopBuddyMod
 
         AddStatusRow(ui, state, "Update", updateStatus, updateColor);
         AddInfoRow(ui, state, "Current version", $"{DesktopBuddyVersion} ({BuildInfo.GitSha})");
+        AddLinkButtonRow(ui, state, "Thunderstore", "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/", buttonLabel: "Open");
         AddLinkButtonRow(ui, state, "Repository", "https://github.com/DevL0rd/DesktopBuddy", buttonLabel: "GitHub");
 
         AddSectionHeader(ui, "Settings");
@@ -99,7 +100,7 @@ public partial class DesktopBuddyMod
         float changelogHeight = Math.Clamp((state.ModalHeight - 540f) * 3f, 360f, 720f);
         var changelogUi = BeginRoundedScroll(ui, state, "UpdateChangelogScroll", changelogHeight, Alignment.TopLeft, out _);
         string changelog = string.IsNullOrWhiteSpace(_remoteChangelog)
-            ? (_updateCheckInProgress ? "Checking CHANGELOG.txt..." : "No CHANGELOG.txt release asset found.")
+            ? (_updateCheckInProgress ? "Checking CHANGELOG.md..." : "No changelog found.")
             : _remoteChangelog;
         changelogUi.Style.MinHeight = Math.Max(140f, changelogHeight - 24f);
         changelogUi.Style.PreferredHeight = Math.Max(140f, changelogHeight - 24f);
@@ -153,7 +154,7 @@ public partial class DesktopBuddyMod
         if (state?.DebugLogText == null || state.DebugLogText.IsDestroyed)
             return;
 
-        string content = string.Join("\n", Log.GetRecentLines(100));
+        string content = string.Join("\n", DesktopBuddy.Log.GetRecentLines(100));
         if (content == state.DebugLogContent)
             return;
 

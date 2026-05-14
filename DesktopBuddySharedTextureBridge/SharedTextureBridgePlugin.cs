@@ -5,7 +5,7 @@ using System;
 
 namespace DesktopBuddySharedTextureBridge
 {
-    [BepInPlugin("net.desktopbuddy.sharedtexturebridge", "DesktopBuddySharedTextureBridge", "1.0.0")]
+    [BepInPlugin("net.desktopbuddy.sharedtexturebridge", "DesktopBuddySharedTextureBridge", BridgeVersionInfo.Version)]
     public class SharedTextureBridgePlugin : BaseUnityPlugin
     {
         internal static ManualLogSource Log;

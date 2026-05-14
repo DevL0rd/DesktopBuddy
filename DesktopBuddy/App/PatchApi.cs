@@ -5,8 +5,8 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-    internal static void Msg(string msg) => Log.Msg(msg);
-    internal static void Error(string msg) => Log.Error(msg);
+    internal static void Msg(string msg) => DesktopBuddy.Log.Msg(msg);
+    internal static void Error(string msg) => DesktopBuddy.Log.Error(msg);
 
     internal static void RegisterTopBarRaycastPortal(Slot portalSlot, Slot targetRoot)
     {

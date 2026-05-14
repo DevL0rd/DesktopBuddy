@@ -64,27 +64,24 @@ public partial class DesktopBuddyMod
     private static string FindCloudflared()
     {
         var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        string[] candidates = {
-            System.IO.Path.Combine(modDir, "..", "DesktopBuddyNative", "cloudflared.exe"),
-            System.IO.Path.Combine(modDir, "DesktopBuddyNative", "cloudflared.exe"),
-            System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesktopBuddyNative", "cloudflared.exe"),
-            "cloudflared"
-        };
-        foreach (var c in candidates)
+        string path = System.IO.Path.Combine(modDir, "DesktopBuddyNative", "cloudflared.exe");
+        try
         {
-            try
+            if (System.IO.File.Exists(path))
             {
                 var p = Process.Start(new ProcessStartInfo
                 {
-                    FileName = c, Arguments = "version",
+                    FileName = path, Arguments = "version",
                     RedirectStandardOutput = true, RedirectStandardError = true,
                     UseShellExecute = false, CreateNoWindow = true
                 });
                 p?.WaitForExit(3000);
-                if (p?.ExitCode == 0) { Msg($"[Tunnel] Found cloudflared: {c}"); return c; }
+                if (p?.ExitCode == 0) { Msg($"[Tunnel] Found cloudflared: {path}"); return path; }
             }
-            catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {c}: {ex.Message}"); }
         }
+        catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {path}: {ex.Message}"); }
+
+        Msg($"[Tunnel] cloudflared missing at {path}");
         return null;
     }
 

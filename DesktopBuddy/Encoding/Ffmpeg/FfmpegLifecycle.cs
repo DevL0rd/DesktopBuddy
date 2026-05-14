@@ -1,10 +1,9 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using FFmpeg.AutoGen;
-using ResoniteModLoader;
 
 namespace DesktopBuddy;
 

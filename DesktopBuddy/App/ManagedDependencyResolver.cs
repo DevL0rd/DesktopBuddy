@@ -31,28 +31,25 @@ public partial class DesktopBuddyMod
         if (!DesktopBuddyManagedDependencies.Contains(assemblyName))
             return null;
 
-        foreach (string path in GetDesktopBuddyManagedDependencyPaths(assemblyName))
+        string path = GetDesktopBuddyManagedDependencyPath(assemblyName);
+        try
         {
-            try
-            {
-                if (File.Exists(path))
-                    return Assembly.LoadFrom(path);
-            }
-            catch (Exception ex)
-            {
-                Log.Msg($"[Dependencies] Failed to load {assemblyName} from {path}: {ex.Message}");
-            }
+            if (File.Exists(path))
+                return Assembly.LoadFrom(path);
+        }
+        catch (Exception ex)
+        {
+            DesktopBuddy.Log.Msg($"[Dependencies] Failed to load {assemblyName} from {path}: {ex.Message}");
         }
 
+        DesktopBuddy.Log.Msg($"[Dependencies] Missing {assemblyName} at {path}");
         return null;
     }
 
-    private static IEnumerable<string> GetDesktopBuddyManagedDependencyPaths(string assemblyName)
+    private static string GetDesktopBuddyManagedDependencyPath(string assemblyName)
     {
         string fileName = assemblyName + ".dll";
         string modDir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        yield return Path.Combine(modDir, "..", "DesktopBuddyNative", fileName);
-        yield return Path.Combine(modDir, "DesktopBuddyNative", fileName);
-        yield return Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? "", "DesktopBuddyNative", fileName);
+        return Path.Combine(modDir, "DesktopBuddyNative", fileName);
     }
 }

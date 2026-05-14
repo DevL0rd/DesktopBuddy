@@ -35,17 +35,11 @@ internal static class SoftCam
     internal static string FindDll()
     {
         var modDir = Path.GetDirectoryName(typeof(SoftCam).Assembly.Location) ?? "";
-        string[] candidates =
-        {
-            Path.Combine(modDir, "..", "DesktopBuddyNative", "softcam64.dll"),
-            Path.Combine(modDir, "DesktopBuddyNative", "softcam64.dll"),
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesktopBuddyNative", "softcam64.dll"),
-        };
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c))
-                return Path.GetFullPath(c);
-        }
+        string path = Path.Combine(modDir, "DesktopBuddyNative", "softcam64.dll");
+        if (File.Exists(path))
+            return Path.GetFullPath(path);
+
+        Log.Msg($"[SoftCam] Missing softcam64.dll at {path}");
         return null;
     }
 

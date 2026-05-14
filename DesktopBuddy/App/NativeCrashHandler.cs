@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -24,11 +24,11 @@ public partial class DesktopBuddyMod
             _nativeCrashDelegate = NativeCrashFilter;
             IntPtr fp = Marshal.GetFunctionPointerForDelegate(_nativeCrashDelegate);
             _previousFilter = SetUnhandledExceptionFilter(fp);
-            Log.Msg("[NativeCrash] Handler installed");
+            DesktopBuddy.Log.Msg("[NativeCrash] Handler installed");
         }
         catch (Exception ex)
         {
-            Log.Msg($"[NativeCrash] Failed to install handler: {ex.Message}");
+            DesktopBuddy.Log.Msg($"[NativeCrash] Failed to install handler: {ex.Message}");
         }
     }
 
@@ -65,11 +65,11 @@ public partial class DesktopBuddyMod
             }
             catch { }
 
-            Log.Msg(msg);
+            DesktopBuddy.Log.Msg(msg);
         }
         catch
         {
-            try { Log.Msg("[NativeCrash] FATAL: crash handler failed to log details"); } catch { }
+            try { DesktopBuddy.Log.Msg("[NativeCrash] FATAL: crash handler failed to log details"); } catch { }
         }
 
         return 0;

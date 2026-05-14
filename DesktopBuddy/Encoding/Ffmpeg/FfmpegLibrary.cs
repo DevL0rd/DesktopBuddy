@@ -1,10 +1,9 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using FFmpeg.AutoGen;
-using ResoniteModLoader;
 
 namespace DesktopBuddy;
 
@@ -40,17 +39,11 @@ public sealed unsafe partial class FfmpegEncoder
     public static string FindFfmpegDlls()
     {
         var modDir = Path.GetDirectoryName(typeof(FfmpegEncoder).Assembly.Location) ?? "";
-        string[] candidates =
-        {
-            Path.GetFullPath(Path.Combine(modDir, "..", "DesktopBuddyNative")),
-            Path.GetFullPath(Path.Combine(modDir, "DesktopBuddyNative")),
-            Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DesktopBuddyNative")),
-        };
-        foreach (var dir in candidates)
-        {
-            if (File.Exists(Path.Combine(dir, "avcodec-62.dll")))
-                return dir;
-        }
+        string dir = Path.GetFullPath(Path.Combine(modDir, "DesktopBuddyNative"));
+        if (File.Exists(Path.Combine(dir, "avcodec-62.dll")))
+            return dir;
+
+        Log.Msg($"[FFmpeg] Missing FFmpeg libraries at {dir}");
         return null;
     }
 

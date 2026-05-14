@@ -1,59 +1,53 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
+using BepInEx;
+using BepInEx.Logging;
+using BepInEx.NET.Common;
+using BepInExResoniteShim;
+using BepisResoniteWrapper;
 using HarmonyLib;
-using ResoniteModLoader;
 
 namespace DesktopBuddy;
 
-public partial class DesktopBuddyMod : ResoniteMod
+// ReSharper disable once ClassNeverInstantiated.Global - constructed by BepInEx.
+[ResonitePlugin(PluginGuid, PluginName, DesktopBuddyVersion, PluginAuthor, PluginUrl)]
+[BepInPlugin(PluginGuid, PluginName, DesktopBuddyVersion)]
+[BepInDependency(BepInExResoniteShim.PluginMetadata.GUID, BepInDependency.DependencyFlags.HardDependency)]
+public partial class DesktopBuddyMod : BasePlugin
 {
+    internal const string PluginGuid = "com.devl0rd.DesktopBuddy";
+    internal const string PluginName = "DesktopBuddy";
+    internal const string PluginAuthor = "DevL0rd";
+    internal const string PluginUrl = "https://github.com/DevL0rd/DesktopBuddy";
+    internal const string DesktopBuddyVersion = DesktopBuddyVersionInfo.Version;
 
-    public override string Name => "DesktopBuddy";
-    public override string Author => "DevL0rd";
-    internal const string DesktopBuddyVersion = "1.0.12";
-    public override string Version => DesktopBuddyVersion;
-    public override string Link => "https://github.com/DevL0rd/DesktopBuddy";
+    internal static ManualLogSource PluginLog { get; private set; }
 
-    public override void DefineConfiguration(ModConfigurationDefinitionBuilder builder)
+    public override void Load()
     {
-        builder.Version(CurrentConfigSchemaVersion);
-    }
-
-    public override IncompatibleConfigurationHandlingOption HandleIncompatibleConfigurationVersions(Version serializedVersion, Version definedVersion)
-    {
-        if (serializedVersion != definedVersion)
-        {
-            Msg($"[Config] Resetting config {serializedVersion} for config schema {definedVersion}");
-            _configResetForNewDefaults = true;
-            return IncompatibleConfigurationHandlingOption.CLOBBER;
-        }
-
-        return IncompatibleConfigurationHandlingOption.ERROR;
-    }
-
-    public override void OnEngineInit()
-    {
+        PluginLog = base.Log;
+        DesktopBuddy.Log.SetLogger(PluginLog);
         InstallManagedDependencyResolver();
-        Log.StartSession();
-        DetectStoredConfigVersionMismatch();
-        Config = GetConfiguration();
+        ResoniteHooks.OnEngineReady += OnEngineReady;
+        Msg($"Plugin {PluginGuid} loaded; waiting for Resonite engine");
+    }
+
+    private void OnEngineReady()
+    {
+        DesktopBuddy.Log.StartSession();
+        DesktopBuddyFirstRunSetup.Run();
+        Config = new DesktopBuddyConfig(base.Config);
+        BindConfigKeys();
         SaveCurrentConfigDefaults();
 
         AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
         {
-            Log.Msg($"UNHANDLED EXCEPTION (terminating={e.IsTerminating}):\n{e.ExceptionObject}");
+            DesktopBuddy.Log.Msg($"UNHANDLED EXCEPTION (terminating={e.IsTerminating}):\n{e.ExceptionObject}");
         };
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
         {
-            if (e.Exception.ToString().Contains("ResoniteModLoader.ModConfiguration.SaveInternal"))
-            {
-                Log.Msg($"[Config] RML config save task failed and was marked observed: {e.Exception.GetBaseException().GetType().Name}: {e.Exception.GetBaseException().Message}");
-                e.SetObserved();
-                return;
-            }
-
-            Log.Msg($"UNOBSERVED TASK EXCEPTION:\n{e.Exception}");
+            DesktopBuddy.Log.Msg($"UNOBSERVED TASK EXCEPTION:\n{e.Exception}");
             e.SetObserved();
         };
 
