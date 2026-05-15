@@ -18,7 +18,7 @@ ResoniteModding-RenderiteHook = "1.1.1"
 
 [build]
 icon = "./icon.png"
-readme = "./README.md"
+readme = "./README_THUNDERSTORE.md"
 outdir = "./build"
 
 [[build.copy]]
@@ -48,10 +48,6 @@ target = "plugins/DesktopBuddy/DesktopBuddyNative/"
 [[build.copy]]
 source = "./DesktopBuddySharedTextureBridge/bin/Release/net472/DesktopBuddySharedTextureBridge.dll"
 target = "Renderer/BepInEx/plugins/DesktopBuddySharedTextureBridge/"
-
-[[build.copy]]
-source = "./INSTALL.txt"
-target = "/"
 
 [[build.copy]]
 source = "./CHANGELOG.md"

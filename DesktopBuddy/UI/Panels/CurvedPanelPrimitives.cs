@@ -20,7 +20,6 @@ public partial class DesktopBuddyMod
 
     private const float DesktopPanelCurvature = 0.18f;
     private const int DesktopPanelCurveSegments = 48;
-    private const int SettingsBackdropBlurRenderQueue = 2990;
     private const int SettingsUiRenderQueue = 3004;
     private const float TopBarSurfaceZOffset = -0.006f;
     private const float TopBarBackZOffset = 0.004f;
@@ -201,7 +200,7 @@ public partial class DesktopBuddyMod
         return mesh;
     }
 
-    private static BlurMaterial AddCurvedMeshBackdropBlur(Slot slot, CurvedPlaneMesh mesh, int iterations, float spread, int renderQueue)
+    private static BlurMaterial AddCurvedMeshBackdropBlur(Slot slot, CurvedPlaneMesh mesh, int iterations, float spread)
     {
         var renderer = slot.AttachComponent<MeshRenderer>();
         renderer.Mesh.Target = mesh;
@@ -210,7 +209,6 @@ public partial class DesktopBuddyMod
         material.Iterations.Value = iterations;
         material.Spread.Value = float2.One * spread;
         material.PerObject.Value = true;
-        material.RenderQueue.Value = renderQueue;
         material.ZWrite.Value = ZWrite.Off;
         material.ZTest.Value = FrooxEngine.ZTest.LessOrEqual;
         material.Sidedness.Value = Sidedness.Front;

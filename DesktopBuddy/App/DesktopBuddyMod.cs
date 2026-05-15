@@ -23,6 +23,8 @@ public partial class DesktopBuddyMod : BasePlugin
     internal const string DesktopBuddyVersion = DesktopBuddyVersionInfo.Version;
 
     internal static ManualLogSource PluginLog { get; private set; }
+    private static int _initialized;
+    private static int _dependencyRuntimeStarted;
 
     public override void Load()
     {
@@ -36,7 +38,20 @@ public partial class DesktopBuddyMod : BasePlugin
     private void OnEngineReady()
     {
         DesktopBuddy.Log.StartSession();
-        DesktopBuddyFirstRunSetup.Run();
+        var setupState = DesktopBuddyFirstRunSetup.Check();
+        if (setupState.HasIssues)
+            Msg("[Setup] Local setup has missing or outdated items; dependency runtime deferred until setup notice is dismissed");
+
+        InitializeCore();
+        if (!setupState.HasIssues)
+            EnsureDependencyRuntimeStarted();
+    }
+
+    private void InitializeCore()
+    {
+        if (Interlocked.Exchange(ref _initialized, 1) == 1)
+            return;
+
         Config = new DesktopBuddyConfig(base.Config);
         BindConfigKeys();
         SaveCurrentConfigDefaults();
@@ -58,6 +73,17 @@ public partial class DesktopBuddyMod : BasePlugin
         TopBarRaycastPortalPatch.Install(harmony);
 
         AudioCapture.LogHandler = Msg;
+        RegisterShutdownCleanup();
+
+        Msg("DesktopBuddy core initialized!");
+    }
+
+    internal static void EnsureDependencyRuntimeStarted()
+    {
+        if (Interlocked.Exchange(ref _dependencyRuntimeStarted, 1) == 1)
+            return;
+
+        Msg("[Startup] Starting DesktopBuddy dependency runtime");
         PrewarmSharedResources();
 
         if (IsMediaMtxEnabled)
@@ -85,19 +111,6 @@ public partial class DesktopBuddyMod : BasePlugin
                 StreamServer = null;
             }
         }
-
-        AppDomain.CurrentDomain.ProcessExit += (s, e) =>
-        {
-            var resetPids = new HashSet<uint>();
-            foreach (var session in ActiveSessions)
-            {
-                if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
-                    AudioRouter.ResetProcessToDefault(session.ProcessId);
-            }
-            KillTunnel();
-            RemovePortForwardNatMapping();
-            try { StreamServer?.Dispose(); } catch { }
-        };
 
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -128,8 +141,24 @@ public partial class DesktopBuddyMod : BasePlugin
         { Name = "DesktopBuddy:WindowPoller", IsBackground = true };
         _windowPollerThread.Start();
 
-        Msg("DesktopBuddy initialized!");
+        Msg("DesktopBuddy dependency runtime initialized!");
 
         OpenSharedTextureBridge();
+    }
+
+    private static void RegisterShutdownCleanup()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+        {
+            var resetPids = new HashSet<uint>();
+            foreach (var session in ActiveSessions)
+            {
+                if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
+                    AudioRouter.ResetProcessToDefault(session.ProcessId);
+            }
+            KillTunnel();
+            RemovePortForwardNatMapping();
+            try { StreamServer?.Dispose(); } catch { }
+        };
     }
 }

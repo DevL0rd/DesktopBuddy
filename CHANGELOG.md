@@ -1,10 +1,52 @@
-DesktopBuddy Changelog
+## 1.0.12 - 2026-05-15
 
-This file is packaged with each Thunderstore release and mirrored in the repository so DesktopBuddy can show the latest changelog in-game.
+### Loader And Distribution
+- Converted DesktopBuddy from Resonite Mod Loader to BepisLoader/BepInEx.
+- Added Thunderstore-first package metadata with BepisLoader, BepisResoniteWrapper, InterprocessLib, BepInExRenderer, and RenderiteHook declared as dependencies.
+- Removed the legacy RML manifest, RML deployment paths, RML config handling, bundled RML/BepInEx reference DLLs, and manual InterprocessLib source copy.
+- Added GitHub Actions support for Thunderstore publishing and changed GitHub releases to point users to the Thunderstore package page instead of uploading a second install zip.
+- Added a separate Thunderstore README focused on what DesktopBuddy is and what it does.
 
-DesktopBuddy gets a major in-world control upgrade in this release, with a new curved Settings panel, a redesigned quick menu, richer streaming controls, and cleaner release/install tooling.
+### First-Run Setup
+- Added an in-world DesktopBuddy setup panel that appears from the Desktop context-menu item when local Windows setup is missing or outdated.
+- Setup now checks only the Windows pieces DesktopBuddy owns: SoftCam registration, VB-Cable installation, VB-Cable loopback, and the local streaming URL ACL.
+- Setup asks for administrator permission only after pressing Install, then refreshes the panel status and waits for Close before continuing startup.
+- The setup panel can be closed to continue loading DesktopBuddy even when optional setup is skipped.
+- Added packaged setup payload hashes so SoftCam and VB-Cable setup can be rerun when those bundled payloads change.
 
-Highlights
+### Organization And Maintenance
+- Reworked DesktopBuddy into a feature-sliced modular monolith with focused App, Configuration, Sessions, Streaming, Capture, Input, UI, Networking, VirtualDevices, Win32, and Utilities areas.
+- Split the old DesktopBuddyMod, SessionLoop, SessionSpawner, SettingsPanel, FfmpegEncoder, WgcCapture, and WindowInput monoliths into smaller responsibility-focused files.
+- Added shared UI primitives for curved panels, scrollbars, stick scrolling, and common styling.
+- Cleaned up naming around SoftCam, VB-Cable, Cloudflare tunnel handling, stream servers, and port forwarding.
+- Added `CODE_ORGANIZATION.md` guidance for keeping future changes dry and organized.
+
+### Streaming And Runtime
+- Moved shared stream ownership, release, refcount, and cleanup behavior into shared stream lifecycle/registry helpers.
+- Split session update behavior into resize, cleanup, virtual device ticking, window polling, and event processing services.
+- Improved built-in stream startup and delayed remote URL binding so stream URLs are attached when the encoder and public URL are actually ready.
+- Kept Cloudflare tunnel support as the built-in remote HTTPS path while leaving external MediaMTX mode available for users who configure it.
+
+### Settings And UI
+- Broke the settings panel into focused tab, layout, primitive, style, viewer row, culling preview, update, and debug modules.
+- Kept the current DesktopBuddy visual style while making settings controls reusable and less duplicated.
+- Updated README and package documentation for BepisLoader, Thunderstore, current build scripts, and the new release flow.
+
+### Build And Packaging
+- Replaced batch build/package scripts with PowerShell scripts.
+- Build and package scripts now generate `DesktopBuddySetupPayloads.md5` from the setup payloads.
+- Packaging now uses the Thunderstore layout directly and includes `CHANGELOG.md` plus the Thunderstore README.
+- Local build/deploy supports Gale profile selection while defaulting to the `Default` profile.
+- Removed old setup scripts and no longer packages `INSTALL.txt`.
+
+
+
+
+## 1.0.10 - Previous Release Notes
+
+DesktopBuddy got a major in-world control upgrade in this release, with a new curved Settings panel, a redesigned quick menu, richer streaming controls, and cleaner release/install tooling.
+
+### Highlights
 - Added a curved DesktopBuddy Settings panel that matches the main panel shape and opens directly in-world.
 - Redesigned the bottom quick menu as a compact hover pill with the new purple-to-blue visual theme.
 - Added tabbed settings for viewers, stream quality, networking, virtual devices, debug logs, and update info.
@@ -20,20 +62,20 @@ Highlights
 - Added a combined debug log export that includes DesktopBuddy and renderer-side logs.
 - Added an in-game debug log viewer that keeps the newest lines visible.
 
-Streaming And Audio
+### Streaming And Audio
 - Stream audio now plays at full source volume and is controlled locally by each user.
 - Owner stream preview uses the same stream playback path as remote viewers.
 - Stream playback now starts and stops per user instead of disabling shared panel visuals.
 - Stream quality changes are applied through the runtime stream pipeline instead of requiring broad manual resets.
 
-Visual Polish
+### Visual Polish
 - Settings and quick-menu surfaces now use rounded blurred backdrops that match the curved DesktopBuddy panel.
 - Controls, section headers, toggles, sliders, text fields, status badges, and scroll areas have been rethemed for a cleaner premium look.
 - Status badges have been standardized across network and virtual-device pages.
 - Viewer rows now use a cleaner list presentation with avatar-style icons.
 
-Build, Install, And Packaging
+### Build, Install, And Packaging
 - Build scripts now refresh game-side and renderer-side dependency DLLs from the installed game where appropriate.
 - Harmony and game/render-side references are refreshed from the local Resonite install.
-- Packaging and installer scripts were updated for the current dependency layout.
-- Release automation now includes the changelog artifact used by the in-game update page.
+- Packaging and installer scripts were updated for the dependency layout at the time.
+- Release automation includes the changelog artifact used by the in-game update page.

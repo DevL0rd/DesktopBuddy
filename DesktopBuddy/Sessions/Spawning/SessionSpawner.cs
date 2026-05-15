@@ -975,7 +975,7 @@ public partial class DesktopBuddyMod
             renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f);
         topBarBlurMeshRef = topBarStripRef;
-        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 64, 0.012f, SettingsBackdropBlurRenderQueue);
+        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 64, 0.012f);
         topBarBlurMask = TextureProviderSettings.ClampWrap(topBarStripRef.Slot.AttachComponent<StaticTexture2D>());
         RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
         topBarBackStripRef = AddCurvedRenderPlane(

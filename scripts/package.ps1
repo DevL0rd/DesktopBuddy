@@ -47,6 +47,28 @@ function Get-TomlDependencies {
     return $dependencies.ToArray()
 }
 
+function Update-SetupPayloadManifest {
+    param([Parameter(Mandatory)][string]$NativeSource)
+
+    $manifest = Join-Path $NativeSource "DesktopBuddySetupPayloads.md5"
+    $payloads = @(
+        "softcam64.dll",
+        "softcam.dll",
+        "VBCABLE_Setup_x64.exe"
+    )
+
+    $lines = foreach ($payload in $payloads) {
+        $path = Join-Path $NativeSource $payload
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Setup payload not found: DesktopBuddyNative\$payload"
+        }
+
+        "$payload=$((Get-FileHash -Algorithm MD5 -LiteralPath $path).Hash.ToLowerInvariant())"
+    }
+
+    Set-Content -LiteralPath $manifest -Value $lines
+}
+
 $packageName = Get-TomlString $toml "name"
 $websiteUrl = Get-TomlString $toml "websiteUrl"
 $description = Get-TomlString $toml "description"
@@ -80,16 +102,15 @@ if ([string]::IsNullOrWhiteSpace($ZipName)) {
 
 $stage = Join-Path $env:TEMP "DesktopBuddyPackage\$ZipName"
 $outZip = Join-Path $Root "$ZipName.zip"
-$installSource = Join-Path $Root "INSTALL.txt"
-$readmeSource = Join-Path $Root "README.md"
+$readmeSource = Join-Path $Root "README_THUNDERSTORE.md"
 $iconSource = Join-Path $Root "icon.png"
 $changelogSource = Join-Path $Root "CHANGELOG.md"
 $nativeSource = Join-Path $Root "DesktopBuddyNative"
+Update-SetupPayloadManifest -NativeSource $nativeSource
 
 foreach ($path in @(
     $modDll,
     $bridgeDll,
-    $installSource,
     $readmeSource,
     $iconSource,
     $changelogSource
@@ -107,26 +128,6 @@ foreach ($file in @(
     $path = Join-Path $modOutDir.FullName $file
     if (-not (Test-Path -LiteralPath $path)) {
         throw "DesktopBuddy build dependency $file not found under $($modOutDir.FullName). Run scripts\build.ps1 first."
-    }
-}
-
-foreach ($file in @(
-    "cloudflared.exe",
-    "avcodec-62.dll",
-    "avformat-62.dll",
-    "avutil-60.dll",
-    "swresample-6.dll",
-    "softcam.dll",
-    "softcam64.dll",
-    "VBCABLE_Setup_x64.exe",
-    "vbMmeCable64_win10.inf",
-    "vbaudio_cable64_win10.cat",
-    "vbaudio_cable64_win10.sys",
-    "vbaudio_cable64arm_win10.sys"
-)) {
-    $path = Join-Path $nativeSource $file
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "DesktopBuddyNative\$file not found. Required repo-owned native dependency is missing."
     }
 }
 
@@ -160,8 +161,6 @@ foreach ($file in @(
 
 Copy-Item -LiteralPath $bridgeDll -Destination (Join-Path $bridgeTarget "DesktopBuddySharedTextureBridge.dll")
 
-$installText = (Get-Content -Raw -LiteralPath $installSource).Replace("{{ZIP_NAME}}", $ZipName)
-Set-Content -NoNewline -LiteralPath (Join-Path $stage "INSTALL.txt") -Value $installText
 Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $stage "README.md")
 Copy-Item -LiteralPath $iconSource -Destination (Join-Path $stage "icon.png")
 Copy-Item -LiteralPath $changelogSource -Destination (Join-Path $stage "CHANGELOG.md")

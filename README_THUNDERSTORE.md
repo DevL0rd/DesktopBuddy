@@ -2,15 +2,8 @@
 
 DesktopBuddy brings your Windows desktop into Resonite as native-feeling world-space panels. It is built for people who want their real desktop, monitors, and application windows available inside a world without turning the experience into a flat screen overlay.
 
-
-## Quick Start
-
-Follow the [Bepis modding installation instructions](https://modding.resonite.net/getting-started/installation/) to get started.
-
-In your mod manager, search for **DesktopBuddy** and enable it.
-
-
 ## Features
+
 - Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
 - Interact with windows using VR controller, hand tracking, or touch input.
 - Fully gpu accelerated WGC desktop capture.
@@ -20,62 +13,6 @@ In your mod manager, search for **DesktopBuddy** and enable it.
 - Use privacy controls for hiding or limiting what other users can see.
 - Adjust capture, streaming, audio, culling, viewer, and debug options from the in-world settings panel.
 - Keep game-side and renderer-side work separated through the shared texture bridge.
-
-
-## Building
-
-Install:
-
-- .NET 10 SDK
-- Windows SDK 10.0.26100.0 or newer
-
-Build locally:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart
-```
-
-This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite with that profile's BepInEx target. Add `-Desktop` for desktop mode:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -Desktop
-```
-
-Use a different Gale profile name with `-ProfileName`, or an exact profile path with `-ProfilePath`:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -ProfileName MyProfile
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -ProfilePath "$env:APPDATA\com.kesomannen.gale\resonite\profiles\MyProfile"
-```
-
-CI-style compile without deploy:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
-```
-
-
-## Packaging
-
-Thunderstore metadata lives in `thunderstore.toml`. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
-```
-
-Build the Thunderstore package with TCLI:
-
-```powershell
-dotnet tool restore
-dotnet tcli build
-```
-
-You can also create the same package layout locally with:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
-```
-
 
 ## Credits
 

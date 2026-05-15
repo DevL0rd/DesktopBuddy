@@ -4,6 +4,7 @@ obj/
 *.user
 *.suo
 *.cache
+*.lscache
 *.log
 .env
 build/
