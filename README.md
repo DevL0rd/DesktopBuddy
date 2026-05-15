@@ -1,5 +1,10 @@
 # DesktopBuddy
 
+<p align="center">
+  <img src="icon_transparent.png" alt="DesktopBuddy icon" width="512">
+</p>
+
+
 DesktopBuddy brings your Windows desktop into Resonite as native-feeling world-space panels. It is built for people who want their real desktop, monitors, and application windows available inside a world without turning the experience into a flat screen overlay.
 
 
@@ -35,7 +40,7 @@ Build locally:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart
 ```
 
-This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite with that profile's BepInEx target. Add `-Desktop` for desktop mode:
+This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite through that profile's BepisLoader/BepInEx targets. Add `-Desktop` for desktop mode:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -Desktop
