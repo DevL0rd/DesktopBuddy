@@ -32,6 +32,16 @@ public partial class DesktopBuddyMod
             var json = http.GetStringAsync(ThunderstorePackageApiUrl).Result;
             using var doc = JsonDocument.Parse(json);
             var package = doc.RootElement;
+            if (!IsThunderstoreResoniteListingPublic(package, out var reviewStatus))
+            {
+                _updateCheckError = reviewStatus == "rejected"
+                    ? "Thunderstore package listing is rejected."
+                    : $"Thunderstore package listing is not public yet ({reviewStatus}).";
+                _lastUpdateCheckUtc = DateTime.UtcNow;
+                Msg($"[Update] Thunderstore Resonite listing is not public yet: {reviewStatus}");
+                return;
+            }
+
             if (!package.TryGetProperty("latest", out var latest))
                 return;
             if (!latest.TryGetProperty("version_number", out var versionElement))
@@ -59,6 +69,30 @@ public partial class DesktopBuddyMod
             _lastUpdateCheckUtc = DateTime.UtcNow;
             Msg($"[Update] Check failed: {ex.Message}");
         }
+    }
+
+    private static bool IsThunderstoreResoniteListingPublic(JsonElement package, out string reviewStatus)
+    {
+        reviewStatus = "missing";
+        if (!package.TryGetProperty("community_listings", out var listings) ||
+            listings.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var listing in listings.EnumerateArray())
+        {
+            if (!listing.TryGetProperty("community", out var communityElement))
+                continue;
+            if (!string.Equals(communityElement.GetString(), "resonite", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            reviewStatus = listing.TryGetProperty("review_status", out var statusElement)
+                ? statusElement.GetString() ?? "unknown"
+                : "unknown";
+
+            return string.Equals(reviewStatus, "approved", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     private static bool IsThunderstoreNotFound(Exception ex)

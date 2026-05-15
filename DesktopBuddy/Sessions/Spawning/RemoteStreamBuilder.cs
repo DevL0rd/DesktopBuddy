@@ -35,7 +35,7 @@ public partial class DesktopBuddyMod
     {
         var root = context.Root;
         var session = context.Session;
-        bool allowRemoteStream = context.UseMediaMtx || (StreamServer != null && GetBuiltInStreamBaseUrl() != null);
+        bool allowRemoteStream = context.UseMediaMtx || StreamServer != null;
         if (!allowRemoteStream)
         {
             Msg($"[RemoteStream] Skipped: MediaMtx={IsMediaMtxEnabled} StreamServer={StreamServer != null} StreamBase={GetBuiltInStreamBaseUrl() ?? "null"}");
@@ -182,22 +182,23 @@ public partial class DesktopBuddyMod
 
             bool ready = encoder.IsRunning;
             bool privateNow = isPrivate();
+            Uri effectiveUrl = streamUrl ?? GetBuiltInStreamUrl(streamId);
 
-            if (ready && !privateNow)
+            if (ready && !privateNow && effectiveUrl != null)
             {
-                SetRemoteStreamUrl(session, streamUrl, $"initial bind streamId={streamId}");
+                SetRemoteStreamUrl(session, effectiveUrl, $"initial bind streamId={streamId}");
                 Msg($"[RemoteStream] URL bound after encoder readiness: attempt={attempt} streamId={streamId} {encoder.ReadableStreamState}");
                 return;
             }
 
             if (attempt >= StreamBindMaxAttempts)
             {
-                Msg($"[RemoteStream] URL not bound: encoder did not become readable in time, private={privateNow}, streamId={streamId}, {encoder.ReadableStreamState}");
+                Msg($"[RemoteStream] URL not bound: ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, streamId={streamId}, {encoder.ReadableStreamState}");
                 return;
             }
 
             if (attempt == 0 || attempt % 30 == 0)
-                Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, private={privateNow}, {encoder.ReadableStreamState}");
+                Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, {encoder.ReadableStreamState}");
 
             root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
         }

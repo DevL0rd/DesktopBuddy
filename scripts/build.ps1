@@ -70,6 +70,50 @@ function Get-DesktopBuddyModOutput {
     return $output.FullName
 }
 
+function Copy-DeployFile {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (Test-Path -LiteralPath $Destination) {
+        $sourceItem = Get-Item -LiteralPath $Source
+        $destinationItem = Get-Item -LiteralPath $Destination
+        if ($sourceItem.Length -eq $destinationItem.Length -and
+            $sourceItem.LastWriteTimeUtc -eq $destinationItem.LastWriteTimeUtc) {
+            return
+        }
+    }
+
+    try {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    }
+    catch {
+        Write-Warning "Could not update deployed file '$Destination': $($_.Exception.Message)"
+    }
+}
+
+function Update-SetupPayloadManifest {
+    $nativeSource = Join-Path $Root "DesktopBuddyNative"
+    $manifest = Join-Path $nativeSource "DesktopBuddySetupPayloads.md5"
+    $payloads = @(
+        "softcam64.dll",
+        "softcam.dll",
+        "VBCABLE_Setup_x64.exe"
+    )
+
+    $lines = foreach ($payload in $payloads) {
+        $path = Join-Path $nativeSource $payload
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Setup payload not found: DesktopBuddyNative\$payload"
+        }
+
+        "$payload=$((Get-FileHash -Algorithm MD5 -LiteralPath $path).Hash.ToLowerInvariant())"
+    }
+
+    Set-Content -LiteralPath $manifest -Value $lines
+}
+
 function Copy-DesktopBuddyProfileDeploy {
     param(
         [Parameter(Mandatory)][string]$ResolvedProfilePath,
@@ -115,16 +159,18 @@ function Copy-DesktopBuddyProfileDeploy {
         Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha") -Force
     }
 
-    Copy-Item -Path (Join-Path $nativeSource "*") -Destination $nativeTarget -Recurse -Force
+    foreach ($file in Get-ChildItem -LiteralPath $nativeSource -File) {
+        Copy-DeployFile -Source $file.FullName -Destination (Join-Path $nativeTarget $file.Name)
+    }
     foreach ($file in @(
         "FFmpeg.AutoGen.dll",
         "Microsoft.Windows.SDK.NET.dll",
         "WinRT.Runtime.dll"
     )) {
-        Copy-Item -LiteralPath (Join-Path $modOutDir $file) -Destination (Join-Path $nativeTarget $file) -Force
+        Copy-DeployFile -Source (Join-Path $modOutDir $file) -Destination (Join-Path $nativeTarget $file)
     }
 
-    Copy-Item -LiteralPath $bridgeDll -Destination (Join-Path $bridgeTarget "DesktopBuddySharedTextureBridge.dll") -Force
+    Copy-DeployFile -Source $bridgeDll -Destination (Join-Path $bridgeTarget "DesktopBuddySharedTextureBridge.dll")
 
     foreach ($cacheFile in @($gameCache, $rendererCache)) {
         if (Test-Path -LiteralPath $cacheFile) {
@@ -277,6 +323,8 @@ if ($Restart) {
 
 Push-Location $Root
 try {
+    Update-SetupPayloadManifest
+
     dotnet build (Join-Path $Root "DesktopBuddy\DesktopBuddy.csproj") -c $Configuration @dotnetBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "MOD BUILD FAILED - not launching Resonite"

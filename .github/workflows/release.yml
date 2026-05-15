@@ -1,4 +1,4 @@
-name: Release Zip
+name: GitHub Release
 
 on:
   push:
@@ -32,17 +32,17 @@ jobs:
           echo "short=$short" >> $env:GITHUB_OUTPUT
           echo "name=$name" >> $env:GITHUB_OUTPUT
 
-      - name: Package zip
-        shell: pwsh
-        env:
-          ZIP_NAME: ${{ steps.buildinfo.outputs.name }}
-        run: ./scripts/package.ps1
-
       - name: Render release notes
         id: notes
         shell: pwsh
         run: |
-          $body = (Get-Content -Raw INSTALL.txt).Replace('{{ZIP_NAME}}', '${{ steps.buildinfo.outputs.name }}')
+          $changelog = Get-Content -Raw CHANGELOG.md
+          $body = @(
+            "Download DesktopBuddy from Thunderstore:"
+            "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/"
+            ""
+            $changelog
+          ) -join "`r`n"
           $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           Set-Content -NoNewline -Path $path -Value $body
           echo "path=$path" >> $env:GITHUB_OUTPUT
@@ -53,6 +53,3 @@ jobs:
           tag_name: ${{ steps.buildinfo.outputs.name }}
           name: ${{ steps.buildinfo.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
-          files: |
-            ${{ steps.buildinfo.outputs.name }}.zip
-            CHANGELOG.md

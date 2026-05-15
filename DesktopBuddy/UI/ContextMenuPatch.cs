@@ -340,6 +340,13 @@ public static class ContextMenuPatch
                     {
                         try
                         {
+                            if (DesktopBuddyMod.ShowSetupNoticeFromDesktopClick(__instance.World))
+                            {
+                                DesktopBuddyMod.Msg("[ContextMenu] Setup notice shown from Desktop item");
+                                ctx.Close();
+                                return;
+                            }
+
                             DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
                             ShowPickerPage(ctx, 0);
                         }

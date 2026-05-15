@@ -6,7 +6,6 @@ using System.IO;
 using System.Linq;
 using System.Security.Principal;
 using System.Text;
-using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace DesktopBuddy;
@@ -15,8 +14,10 @@ internal static class DesktopBuddyFirstRunSetup
 {
     private const string SoftCamClsid = "{AEF3B972-5FA5-4647-9571-358EB472BC9E}";
     private const string VideoInputCategoryClsid = "{860BB310-5D01-11d0-BD3B-00A0C911CE86}";
+    private const string SetupHashFile = "DesktopBuddySetupHashes.txt";
+    private const string PackagedSetupHashFile = "DesktopBuddySetupPayloads.md5";
 
-    private enum SetupAction
+    internal enum SetupAction
     {
         SoftCamRegistration,
         VBCableInstall,
@@ -24,62 +25,104 @@ internal static class DesktopBuddyFirstRunSetup
         UrlAcl,
     }
 
-    internal static void Run()
+    internal sealed class SetupState
+    {
+        internal IReadOnlyList<SetupItem> Items { get; init; } = Array.Empty<SetupItem>();
+        internal IReadOnlyList<SetupAction> RequiredActions { get; init; } = Array.Empty<SetupAction>();
+        internal bool HasIssues => Items.Any(item => !item.IsOk);
+        internal bool HasRequiredActions => RequiredActions.Count > 0;
+    }
+
+    internal sealed class SetupItem
+    {
+        internal string Name { get; init; }
+        internal string Status { get; init; }
+        internal string Detail { get; init; }
+        internal bool IsOk { get; init; }
+        internal bool RequiresAdminAction { get; init; }
+        internal SetupAction? Action { get; init; }
+    }
+
+    internal static SetupState Check()
     {
         try
         {
-            string resoniteRoot = ResolveResoniteRoot();
             string nativeDir = GetNativeDir();
 
             Log.Msg("[Setup] Checking DesktopBuddy local setup");
             Log.Msg($"[Setup] Native path: {nativeDir}");
 
-            CheckPackagedFiles(resoniteRoot, nativeDir);
-
-            var required = GetRequiredAdminActions(nativeDir);
-            if (required.Count == 0)
+            var items = GetSetupItems(nativeDir);
+            return new SetupState
             {
-                Log.Msg("[Setup] Admin setup already satisfied");
-                return;
-            }
-
-            Log.Msg("[Setup] Admin setup required: " + string.Join(", ", required.Select(GetActionLabel)));
-            if (IsAdministrator())
-            {
-                RunAdminSetup(required, nativeDir);
-                return;
-            }
-
-            StartElevatedSetupHelper(required, nativeDir);
+                Items = items,
+                RequiredActions = GetRequiredActions(items),
+            };
         }
         catch (Exception ex)
         {
             Log.Msg($"[Setup] First-run setup check failed: {ex}");
+            return new SetupState
+            {
+                Items = new[]
+                {
+                    new SetupItem
+                    {
+                        Name = "Setup check",
+                        Status = "Error",
+                        Detail = ex.Message,
+                        IsOk = false
+                    }
+                }
+            };
         }
     }
 
-    private static void CheckPackagedFiles(string resoniteRoot, string nativeDir)
+    internal static Process StartElevatedSetup(IReadOnlyCollection<SetupAction> actions = null)
     {
-        Log.Msg($"[Setup] DesktopBuddy.dll: {File.Exists(typeof(DesktopBuddyMod).Assembly.Location)}");
-        Log.Msg($"[Setup] DesktopBuddyNative: {Directory.Exists(nativeDir)}");
-        Log.Msg($"[Setup] cloudflared.exe: {File.Exists(Path.Combine(nativeDir, "cloudflared.exe"))}");
-        Log.Msg($"[Setup] VB-Cable installer: {File.Exists(Path.Combine(nativeDir, "VBCABLE_Setup_x64.exe"))}");
-        string bridge = Path.Combine(resoniteRoot, "Renderer", "BepInEx", "plugins", "DesktopBuddySharedTextureBridge", "DesktopBuddySharedTextureBridge.dll");
-        Log.Msg($"[Setup] Renderer bridge: {File.Exists(bridge)}");
+        string nativeDir = GetNativeDir();
+        var required = (actions == null || actions.Count == 0)
+            ? GetRequiredAdminActions(nativeDir)
+            : NormalizeSetupActions(actions);
+
+        if (required.Count == 0)
+        {
+            Log.Msg("[Setup] No elevated setup actions are required");
+            return null;
+        }
+
+        Log.Msg("[Setup] User requested admin setup: " + string.Join(", ", required.Select(GetActionLabel)));
+        if (IsAdministrator())
+        {
+            RunAdminSetup(required, nativeDir);
+            return null;
+        }
+
+        return StartElevatedSetupHelper(required, nativeDir);
     }
 
     private static List<SetupAction> GetRequiredAdminActions(string nativeDir)
     {
-        var actions = new List<SetupAction>();
-        if (!IsSoftCamRegistered(nativeDir))
-            actions.Add(SetupAction.SoftCamRegistration);
-        if (!IsVBCableInstalled())
-            actions.Add(SetupAction.VBCableInstall);
-        if (!IsVBCableLoopbackDisabled())
-            actions.Add(SetupAction.VBCableLoopback);
-        if (!IsUrlAclConfigured())
-            actions.Add(SetupAction.UrlAcl);
-        return actions;
+        return GetRequiredActions(GetSetupItems(nativeDir));
+    }
+
+    private static List<SetupAction> GetRequiredActions(IReadOnlyList<SetupItem> items)
+    {
+        return NormalizeSetupActions(items
+            .Where(item => item.RequiresAdminAction && item.Action.HasValue)
+            .Select(item => item.Action.Value));
+    }
+
+    private static List<SetupAction> NormalizeSetupActions(IEnumerable<SetupAction> actions)
+    {
+        var ordered = actions.Distinct().ToList();
+        if (ordered.Contains(SetupAction.VBCableInstall) && !ordered.Contains(SetupAction.VBCableLoopback))
+        {
+            int installIndex = ordered.IndexOf(SetupAction.VBCableInstall);
+            ordered.Insert(installIndex + 1, SetupAction.VBCableLoopback);
+        }
+
+        return ordered;
     }
 
     private static string GetActionLabel(SetupAction action)
@@ -89,8 +132,119 @@ internal static class DesktopBuddyFirstRunSetup
             SetupAction.SoftCamRegistration => "SoftCam registration",
             SetupAction.VBCableInstall => "VB-Cable install",
             SetupAction.VBCableLoopback => "VB-Cable loopback disable",
-            SetupAction.UrlAcl => "HTTP URL ACL",
+            SetupAction.UrlAcl => "streaming access",
             _ => action.ToString(),
+        };
+    }
+
+    private static IReadOnlyList<SetupItem> GetSetupItems(string nativeDir)
+    {
+        var items = new List<SetupItem>
+        {
+            GetSoftCamSetupItem(nativeDir),
+            GetVBCableInstallSetupItem(nativeDir),
+            GetVBCableLoopbackSetupItem(),
+            GetUrlAclSetupItem(),
+        };
+
+        return items;
+    }
+
+    private static SetupItem GetSoftCamSetupItem(string nativeDir)
+    {
+        string expectedName = File.Exists(Path.Combine(nativeDir, "softcam64.dll")) || !File.Exists(Path.Combine(nativeDir, "softcam.dll"))
+            ? "softcam64.dll"
+            : "softcam.dll";
+        string expected = Path.Combine(nativeDir, expectedName);
+
+        string packagedHash = ReadPackagedSetupHash(nativeDir, expectedName);
+        string registered = GetSoftCamRegisteredDlls().FirstOrDefault();
+        string markerHash = ReadSetupHash(nativeDir, expectedName);
+        var runningApps = GetRunningRestartSensitiveProcesses();
+
+        bool dllMissing = !File.Exists(expected);
+        bool notRegistered = string.IsNullOrWhiteSpace(registered);
+        bool wrongPath = !notRegistered && !PathsEqual(registered, expected);
+        bool markerOutdated = !dllMissing &&
+                              !string.IsNullOrWhiteSpace(packagedHash) &&
+                              !string.Equals(markerHash, packagedHash, StringComparison.OrdinalIgnoreCase);
+        bool required = dllMissing || notRegistered || wrongPath || markerOutdated;
+
+        return new SetupItem
+        {
+            Name = "SoftCam",
+            Status = required ? "Not installed" : "Installed",
+            Detail = required ? GetSoftCamSetupDetail(runningApps) : "Virtual camera support.",
+            IsOk = !required,
+            RequiresAdminAction = required && !dllMissing,
+            Action = SetupAction.SoftCamRegistration,
+        };
+    }
+
+    private static string GetSoftCamSetupDetail(IReadOnlyList<string> runningApps)
+    {
+        if (runningApps == null || runningApps.Count == 0)
+            return "Virtual camera support.";
+
+        var shown = runningApps.Take(3).ToArray();
+        string suffix = runningApps.Count > shown.Length
+            ? $" +{runningApps.Count - shown.Length}"
+            : "";
+        return "Restart: " + string.Join(", ", shown) + suffix;
+    }
+
+    private static SetupItem GetVBCableInstallSetupItem(string nativeDir)
+    {
+        string installer = Path.Combine(nativeDir, "VBCABLE_Setup_x64.exe");
+        string installerHash = ReadPackagedSetupHash(nativeDir, "VBCABLE_Setup_x64.exe");
+        string markerHash = ReadSetupHash(nativeDir, "VBCABLE_Setup_x64.exe");
+        bool installed = IsVBCableInstalled();
+        bool installerMissing = !File.Exists(installer);
+        bool markerOutdated = installed &&
+                              !string.IsNullOrWhiteSpace(installerHash) &&
+                              !string.Equals(markerHash, installerHash, StringComparison.OrdinalIgnoreCase);
+        bool required = !installed || markerOutdated;
+
+        string status = required ? "Not installed" : "Installed";
+        string detail = "Virtual microphone audio route.";
+
+        return new SetupItem
+        {
+            Name = "VB-Cable",
+            Status = status,
+            Detail = detail,
+            IsOk = !required,
+            RequiresAdminAction = required && !installerMissing,
+            Action = SetupAction.VBCableInstall,
+        };
+    }
+
+    private static SetupItem GetVBCableLoopbackSetupItem()
+    {
+        bool installed = IsVBCableInstalled();
+        bool disabled = IsVBCableLoopbackDisabled();
+        return new SetupItem
+        {
+            Name = "VB-Cable loopback",
+            Status = (!installed || disabled) ? "Installed" : "Not installed",
+            Detail = "Prevents microphone echo.",
+            IsOk = !installed || disabled,
+            RequiresAdminAction = installed && !disabled,
+            Action = SetupAction.VBCableLoopback,
+        };
+    }
+
+    private static SetupItem GetUrlAclSetupItem()
+    {
+        bool configured = IsUrlAclConfigured();
+        return new SetupItem
+        {
+            Name = "Streaming access",
+            Status = configured ? "Installed" : "Not installed",
+            Detail = "Allows local stream hosting.",
+            IsOk = configured,
+            RequiresAdminAction = !configured,
+            Action = SetupAction.UrlAcl,
         };
     }
 
@@ -115,15 +269,17 @@ internal static class DesktopBuddyFirstRunSetup
                     break;
             }
         }
+        WriteSetupHashes(nativeDir);
         Log.Msg("[Setup] Admin setup complete");
     }
 
-    private static void StartElevatedSetupHelper(IReadOnlyCollection<SetupAction> actions, string nativeDir)
+    private static Process StartElevatedSetupHelper(IReadOnlyCollection<SetupAction> actions, string nativeDir)
     {
         string logPath = Path.Combine(nativeDir, "DesktopBuddySetup.log");
         string script = BuildElevatedSetupScript(actions, nativeDir, logPath);
-        string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        string args = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand {encodedScript}";
+        string scriptPath = Path.Combine(nativeDir, "DesktopBuddyElevatedSetup.ps1");
+        File.WriteAllText(scriptPath, script, Encoding.UTF8);
+        string args = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"";
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -135,15 +291,15 @@ internal static class DesktopBuddyFirstRunSetup
 
         try
         {
-            Log.Msg("[Setup] Requesting administrator permission for first-run setup");
+            Log.Msg("[Setup] Requesting administrator permission for user-approved setup");
             var process = Process.Start(startInfo);
             if (process == null)
             {
                 Log.Msg("[Setup] Elevated setup helper did not start");
-                return;
+                return null;
             }
 
-            Task.Run(() => WaitForElevatedSetup(process, logPath));
+            return process;
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
@@ -153,6 +309,8 @@ internal static class DesktopBuddyFirstRunSetup
         {
             Log.Msg($"[Setup] Failed to start elevated setup helper: {ex.Message}");
         }
+
+        return null;
     }
 
     private static string BuildElevatedSetupScript(IReadOnlyCollection<SetupAction> actions, string nativeDir, string logPath)
@@ -194,6 +352,7 @@ internal static class DesktopBuddyFirstRunSetup
             }
         }
 
+        AppendSetupHashScript(script);
         script.AppendLine("Write-SetupLog 'DesktopBuddy elevated setup finished'");
         return script.ToString();
     }
@@ -249,45 +408,17 @@ internal static class DesktopBuddyFirstRunSetup
         script.AppendLine("Run-SetupProcess 'netsh' 'http add urlacl url=http://+:48080/ sddl=D:(A;;GX;;;S-1-1-0)' $native 10000");
     }
 
+    private static void AppendSetupHashScript(StringBuilder script)
+    {
+        script.AppendLine("$packagedHashFile = Join-Path $native 'DesktopBuddySetupPayloads.md5'");
+        script.AppendLine("$hashFile = Join-Path $native 'DesktopBuddySetupHashes.txt'");
+        script.AppendLine("if (Test-Path -LiteralPath $packagedHashFile) { Copy-Item -LiteralPath $packagedHashFile -Destination $hashFile -Force; Write-SetupLog ('Wrote setup hash marker ' + $hashFile) }");
+        script.AppendLine("else { Write-SetupLog 'Packaged setup hash manifest missing' }");
+    }
+
     private static string PsSingleQuote(string value)
     {
         return "'" + value.Replace("'", "''") + "'";
-    }
-
-    private static void WaitForElevatedSetup(Process process, string logPath)
-    {
-        try
-        {
-            process.WaitForExit();
-            Log.Msg($"[Setup] Elevated setup helper exited: {process.ExitCode}");
-            foreach (string line in ReadTail(logPath, 200))
-                Log.Msg($"[SetupHelper] {line}");
-        }
-        catch (Exception ex)
-        {
-            Log.Msg($"[Setup] Failed to collect elevated setup result: {ex.Message}");
-        }
-        finally
-        {
-            try { process.Dispose(); } catch { }
-        }
-    }
-
-    private static IEnumerable<string> ReadTail(string path, int maxLines)
-    {
-        if (!File.Exists(path))
-            yield break;
-
-        var queue = new Queue<string>(maxLines);
-        foreach (string line in File.ReadLines(path))
-        {
-            if (queue.Count == maxLines)
-                queue.Dequeue();
-            queue.Enqueue(line);
-        }
-
-        foreach (string line in queue)
-            yield return line;
     }
 
     private static void RegisterSoftCam(string nativeDir)
@@ -385,14 +516,115 @@ internal static class DesktopBuddyFirstRunSetup
         return string.Equals(registered.Trim('"'), expected, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void InstallVBCable(string nativeDir)
+    private static void WriteSetupHashes(string nativeDir)
     {
-        if (IsVBCableInstalled())
+        try
         {
-            Log.Msg("[Setup] VB-Cable already installed");
-            return;
+            Directory.CreateDirectory(nativeDir);
+            string packagedHashPath = Path.Combine(nativeDir, PackagedSetupHashFile);
+            if (File.Exists(packagedHashPath))
+                File.Copy(packagedHashPath, Path.Combine(nativeDir, SetupHashFile), overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Msg($"[Setup] Failed to write setup hash marker: {ex.Message}");
+        }
+    }
+
+    private static string ReadSetupHash(string nativeDir, string fileName)
+    {
+        return ReadHashFile(Path.Combine(nativeDir, SetupHashFile), fileName);
+    }
+
+    private static string ReadPackagedSetupHash(string nativeDir, string fileName)
+    {
+        return ReadHashFile(Path.Combine(nativeDir, PackagedSetupHashFile), fileName);
+    }
+
+    private static string ReadHashFile(string path, string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(fileName))
+            return null;
+
+        try
+        {
+            if (!File.Exists(path))
+                return null;
+
+            foreach (string line in File.ReadLines(path))
+            {
+                int separator = line.IndexOf('=');
+                if (separator <= 0)
+                    continue;
+
+                string name = line[..separator].Trim();
+                if (!string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                return line[(separator + 1)..].Trim();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Msg($"[Setup] Failed to read setup hash marker: {ex.Message}");
         }
 
+        return null;
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        try
+        {
+            left = Path.GetFullPath(left.Trim('"'));
+            right = Path.GetFullPath(right.Trim('"'));
+        }
+        catch
+        {
+            left = left.Trim('"');
+            right = right.Trim('"');
+        }
+
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<string> GetRunningRestartSensitiveProcesses()
+    {
+        string[] names =
+        {
+            "Discord", "DiscordCanary", "DiscordPTB",
+            "obs64", "obs32", "zoom", "Teams", "ms-teams",
+            "chrome", "msedge", "firefox", "brave", "slack",
+            "Skype", "Webex", "ManyCam"
+        };
+        var interesting = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        var running = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (var process in Process.GetProcesses())
+            {
+                using (process)
+                {
+                    string name = process.ProcessName;
+                    if (interesting.Contains(name))
+                        running.Add(name);
+                }
+            }
+        }
+        catch
+        {
+            // Process enumeration is best-effort only; setup should never fail because of it.
+        }
+
+        return running.ToArray();
+    }
+
+    private static void InstallVBCable(string nativeDir)
+    {
         string installer = Path.Combine(nativeDir, "VBCABLE_Setup_x64.exe");
         if (!File.Exists(installer))
         {

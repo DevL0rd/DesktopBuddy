@@ -139,7 +139,7 @@ public partial class DesktopBuddyMod
         mesh.Slot.ActiveSelf = false;
         state.Mesh = mesh;
         state.SurfaceSlot = mesh.Slot;
-        state.BackgroundBlur = AddCurvedMeshBackdropBlur(mesh.Slot, mesh, 64, 0.012f, SettingsBackdropBlurRenderQueue);
+        state.BackgroundBlur = AddCurvedMeshBackdropBlur(mesh.Slot, mesh, 64, 0.012f);
         state.BackgroundBlurMask = TextureProviderSettings.ClampWrap(mesh.Slot.AttachComponent<StaticTexture2D>());
         UpdateSettingsBlurMask(state);
         RegisterTopBarRaycastPortal(mesh.Slot, renderRoot);
