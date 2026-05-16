@@ -40,7 +40,7 @@ Build locally:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart
 ```
 
-This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite through that profile's BepisLoader/BepInEx targets. Add `-Desktop` for desktop mode:
+This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite through the root HookFxr loader with that profile's BepInEx target. Add `-Desktop` for desktop mode:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -Desktop
