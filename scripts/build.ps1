@@ -281,20 +281,13 @@ function Start-Resonite {
         [string]$ResolvedProfilePath
     )
 
-    $steamExe = $null
-    $steamKey = Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -ErrorAction SilentlyContinue
-    if ($steamKey -and -not [string]::IsNullOrWhiteSpace($steamKey.SteamExe) -and (Test-Path -LiteralPath $steamKey.SteamExe)) {
-        $steamExe = $steamKey.SteamExe
-    }
-    elseif (Test-Path -LiteralPath "C:\Program Files (x86)\Steam\steam.exe") {
-        $steamExe = "C:\Program Files (x86)\Steam\steam.exe"
+    $resoniteDir = "C:\Program Files (x86)\Steam\steamapps\common\Resonite"
+    $resoniteExe = Join-Path $resoniteDir "Resonite.exe"
+    if (-not (Test-Path -LiteralPath $resoniteExe)) {
+        throw "Resonite.exe was not found at $resoniteExe"
     }
 
-    if ([string]::IsNullOrWhiteSpace($steamExe)) {
-        throw "Steam executable was not found."
-    }
-
-    $launchArgs = @("-applaunch", "2519830", "--hookfxr-enable")
+    $launchArgs = @("--hookfxr-enable")
     if (-not [string]::IsNullOrWhiteSpace($ResolvedProfilePath)) {
         $launchArgs += @(
             "--bepinex-target",
@@ -309,7 +302,7 @@ function Start-Resonite {
         $launchArgs += "-Screen"
     }
 
-    Start-Process -FilePath $steamExe -ArgumentList $launchArgs
+    Start-Process -FilePath $resoniteExe -WorkingDirectory $resoniteDir -ArgumentList $launchArgs
 }
 
 if ($Restart) {
