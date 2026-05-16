@@ -104,6 +104,7 @@ $stage = Join-Path $env:TEMP "DesktopBuddyPackage\$ZipName"
 $outZip = Join-Path $Root "$ZipName.zip"
 $readmeSource = Join-Path $Root "README_THUNDERSTORE.md"
 $iconSource = Join-Path $Root "icon.png"
+$transparentIconSource = Join-Path $Root "icon_transparent.png"
 $changelogSource = Join-Path $Root "CHANGELOG.md"
 $nativeSource = Join-Path $Root "DesktopBuddyNative"
 Update-SetupPayloadManifest -NativeSource $nativeSource
@@ -113,6 +114,7 @@ foreach ($path in @(
     $bridgeDll,
     $readmeSource,
     $iconSource,
+    $transparentIconSource,
     $changelogSource
 )) {
     if (-not (Test-Path -LiteralPath $path)) {
@@ -146,6 +148,7 @@ $bridgeTarget = Join-Path $stage "Renderer\BepInEx\plugins\DesktopBuddySharedTex
 New-Item -ItemType Directory -Force -Path $gamePluginDir, $nativeTarget, $bridgeTarget | Out-Null
 
 Copy-Item -LiteralPath $modDll -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll")
+Copy-Item -LiteralPath $transparentIconSource -Destination (Join-Path $gamePluginDir "icon_transparent.png")
 if (Test-Path -LiteralPath $modSha) {
     Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha")
 }

@@ -26,6 +26,7 @@ public partial class DesktopBuddyMod
             double now = session.Root.World.Time.WorldTime;
             var inside = GetUsersInsideCullingTrigger(session);
             var presentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool anyViewerShouldPlay = false;
 
             foreach (var user in session.Root.World.AllUsers.Where(u => u.IsPresentInWorld))
             {
@@ -64,6 +65,7 @@ public partial class DesktopBuddyMod
                 }
 
                 SetStreamAllowedForUser(session, user, shouldPlay);
+                anyViewerShouldPlay |= shouldPlay;
             }
 
             foreach (string key in session.CullingAppliedStreamAllowedByUserId.Keys.ToArray())
@@ -75,8 +77,7 @@ public partial class DesktopBuddyMod
                 session.CullingOutOfRangeSinceByUserId.Remove(key);
             }
 
-            bool localShouldPlay = IsLocalStreamAllowedByGraceGate(session);
-            if (localShouldPlay)
+            if (anyViewerShouldPlay)
             {
                 if (!videoTex.IsPlaying)
                     videoTex.Play();

@@ -31,9 +31,6 @@ public partial class DesktopBuddyMod
             if (session != null) session.VMicMuted = value;
             if (VMic != null) VMic.Muted = value;
         });
-        AddSectionHeader(ui, "Audio");
-        AddCheckboxWithBadge(ui, state, "Spatial audio", "(Experimental)", SettingsExperimentalOrange, Config?.GetValue(SpatialAudioEnabled) ?? false,
-            value => SaveConfigValue(SpatialAudioEnabled, value));
     }
 
     private static void AddVirtualCameraPreview(UIBuilder ui, SettingsPanelState state, DesktopSession session)

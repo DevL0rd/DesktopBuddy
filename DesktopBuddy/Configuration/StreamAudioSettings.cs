@@ -102,18 +102,13 @@ public partial class DesktopBuddyMod
 
         try
         {
-            float outputVolume = NormalizeStreamAudioOutputVolume(Config.GetValue(StreamAudioOutputVolume));
             if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed)
                 session.VideoTexture.Volume.Value = 1f;
-
-            if (session.StreamVolumeSlider != null && !session.StreamVolumeSlider.IsDestroyed)
-                session.StreamVolumeSlider.Value.Value = outputVolume;
 
             var output = session.StreamAudioOutput;
             if (output == null || output.IsDestroyed)
                 return;
 
-            output.Volume.Value = outputVolume;
             output.Global.Value = ParseStreamAudioGlobalMode(Config.GetValue(StreamAudioGlobalMode));
             output.Spatialize.Value = Config.GetValue(StreamAudioSpatialize);
             output.SpatialBlend.Value = Math.Clamp(Config.GetValue(StreamAudioSpatialBlend), 0f, 1f);

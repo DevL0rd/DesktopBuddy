@@ -17,11 +17,6 @@ public partial class DesktopBuddyMod
     private static void BuildAudioTab(UIBuilder ui, SettingsPanelState state, DesktopSession session)
     {
         AddSectionHeader(ui, "Stream Audio");
-        AddFloatSlider(ui, state, "Volume", Config?.GetValue(StreamAudioOutputVolume) ?? 1f, 0f, 1f, value =>
-        {
-            SaveConfigValue(StreamAudioOutputVolume, NormalizeStreamAudioOutputVolume(value));
-            ApplyStreamAudioSettingsToAllSessions();
-        });
         AddOptionRow(ui, state, "Mode", NormalizeStreamAudioGlobalMode(Config?.GetValue(StreamAudioGlobalMode)),
             new[] { ("global", "Global"), ("auto", "Auto"), ("positional", "Positional") },
             value =>

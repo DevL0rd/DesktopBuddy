@@ -159,6 +159,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="..\icon_transparent.png" Link="icon_transparent.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <DesktopBuddyManagedDependencyName Include="FFmpeg.AutoGen.dll" />
     <DesktopBuddyManagedDependencyName Include="Microsoft.Windows.SDK.NET.dll" />
     <DesktopBuddyManagedDependencyName Include="WinRT.Runtime.dll" />
@@ -173,6 +179,7 @@
     <MakeDir Directories="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>

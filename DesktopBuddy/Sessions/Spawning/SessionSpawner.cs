@@ -140,7 +140,6 @@ public partial class DesktopBuddyMod
         CurvedPlaneMesh streamPlaneRef = null;
         CurvedPlaneMesh topBarStripRef = null;
         CurvedPlaneMesh topBarBackStripRef = null;
-        CurvedPlaneMesh topBarBlurMeshRef = null;
         DesktopUVRayExit displayRayExitRef = null;
         TextRenderer titleTextRef = null;
         Slot deviceIndicatorsSlot = null;
@@ -166,9 +165,6 @@ public partial class DesktopBuddyMod
 
             if (topBarBackStripRef != null && !topBarBackStripRef.IsDestroyed)
                 topBarBackStripRef.Curvature.Value = currentPanelCurvature;
-
-            if (topBarBlurMeshRef != null && !topBarBlurMeshRef.IsDestroyed)
-                topBarBlurMeshRef.Curvature.Value = currentPanelCurvature;
 
             if (session != null)
                 ResizeSettingsPanel(session, session.LastKnownW > 0 ? session.LastKnownW : w, session.LastKnownH > 0 ? session.LastKnownH : h, canvasScale, currentPanelCurvature);
@@ -720,9 +716,10 @@ public partial class DesktopBuddyMod
 
         BlurMaterial topBarBlur = null;
         StaticTexture2D topBarBlurMask = null;
-        int topBarBlurMaskWidth = 0;
-        int topBarBlurMaskHeight = 0;
-        int topBarBlurPillWidth = 0;
+        int topBarBlurMaskCanvasWidth = 0;
+        int topBarBlurMaskCanvasHeight = 0;
+        int topBarBlurMaskPillWidth = 0;
+        int topBarBlurMaskPillHeight = 0;
 
         float barYPos = -worldHalfH - barH / 2f * canvasScale - barMarginBottom;
         widthField.Value.Value = barCollapsedW;
@@ -730,7 +727,7 @@ public partial class DesktopBuddyMod
         float currentBarWidth = barCollapsedW;
         bool barExpanded = false;
 
-        void UpdateTopBarBlurMask(int canvasWidthPx, int heightPx, int pillWidthPx)
+        void UpdateTopBarBlurMask(int canvasWidthPx, int canvasHeightPx, int pillWidthPx, int pillHeightPx)
         {
             if (topBarBlur == null || topBarBlur.IsDestroyed ||
                 topBarBlurMask == null || topBarBlurMask.IsDestroyed ||
@@ -738,19 +735,32 @@ public partial class DesktopBuddyMod
                 return;
 
             canvasWidthPx = Math.Max(1, canvasWidthPx);
-            pillWidthPx = Math.Max(1, pillWidthPx);
+            canvasHeightPx = Math.Max(1, canvasHeightPx);
+            pillWidthPx = Math.Max(1, Math.Min(canvasWidthPx, pillWidthPx));
+            pillHeightPx = Math.Max(1, Math.Min(canvasHeightPx, pillHeightPx));
 
-            if (topBarBlurMaskWidth == canvasWidthPx && topBarBlurMaskHeight == heightPx && topBarBlurPillWidth == pillWidthPx)
+            if (topBarBlurMaskCanvasWidth == canvasWidthPx &&
+                topBarBlurMaskCanvasHeight == canvasHeightPx &&
+                topBarBlurMaskPillWidth == pillWidthPx &&
+                topBarBlurMaskPillHeight == pillHeightPx)
                 return;
 
-            topBarBlurMaskWidth = canvasWidthPx;
-            topBarBlurMaskHeight = heightPx;
-            topBarBlurPillWidth = pillWidthPx;
+            topBarBlurMaskCanvasWidth = canvasWidthPx;
+            topBarBlurMaskCanvasHeight = canvasHeightPx;
+            topBarBlurMaskPillWidth = pillWidthPx;
+            topBarBlurMaskPillHeight = pillHeightPx;
 
             var tex = topBarBlurMask;
             var blur = topBarBlur;
             var engine = root.Engine;
-            byte[] data = CreateCenteredRoundedMaskPixels(canvasWidthPx, heightPx, pillWidthPx, heightPx, barH * 0.5f, out int texW, out int texH);
+            byte[] data = CreateCenteredRoundedMaskPixels(
+                canvasWidthPx,
+                canvasHeightPx,
+                pillWidthPx,
+                pillHeightPx,
+                barH * 0.5f,
+                out int texW,
+                out int texH);
 
             Task.Run(async () =>
             {
@@ -814,13 +824,11 @@ public partial class DesktopBuddyMod
                 topBarBackStripRef.Slot.LocalPosition = new float3(0f, barYPos, TopBarBackZOffset);
             }
 
-            if (topBarBlurMeshRef != null && !topBarBlurMeshRef.IsDestroyed)
-            {
-                topBarBlurMeshRef.Size.Value = new float2(barRenderW, barH);
-                topBarBlurMeshRef.Slot.LocalPosition = new float3(0f, barYPos, TopBarSurfaceZOffset);
-            }
-
-            UpdateTopBarBlurMask(Math.Max(1, barRenderW), Math.Max(1, (int)MathF.Ceiling(barH)), Math.Max(1, (int)MathF.Ceiling(width)));
+            UpdateTopBarBlurMask(
+                Math.Max(1, barRenderW),
+                Math.Max(1, (int)MathF.Ceiling(barH)),
+                Math.Max(1, (int)MathF.Ceiling(width)),
+                Math.Max(1, (int)MathF.Ceiling(barH)));
         }
 
         void BarUpdateLoop()
@@ -974,7 +982,6 @@ public partial class DesktopBuddyMod
             blendMode: BlendMode.Alpha,
             renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f);
-        topBarBlurMeshRef = topBarStripRef;
         topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 64, 0.012f);
         topBarBlurMask = TextureProviderSettings.ClampWrap(topBarStripRef.Slot.AttachComponent<StaticTexture2D>());
         RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
@@ -1040,10 +1047,6 @@ public partial class DesktopBuddyMod
             if (session.StreamVisualAllowed != null && !session.StreamVisualAllowed.IsDestroyed)
                 session.StreamVisualAllowed.SetOverride(root.World.LocalUser, session.LocalPreviewingRemoteStream);
             displaySlot.ActiveSelf = !session.LocalPreviewingRemoteStream;
-            if (!session.LocalPreviewingRemoteStream && videoTexRef.IsPlaying)
-                videoTexRef.Stop();
-            else if (session.LocalPreviewingRemoteStream && !videoTexRef.IsPlaying && videoTexRef.IsAssetAvailable)
-                videoTexRef.Play();
 
             var img = previewBtn.Slot.GetComponent<Image>();
             if (img != null)
@@ -1200,14 +1203,14 @@ public partial class DesktopBuddyMod
             VolumeSlider = volSlider,
             StreamOutputVolume = streamOutputVolume,
             IsPrivate = () => isPrivate,
-            CurrentPanelCurvature = () => currentPanelCurvature,
-            ApplyPanelCurvature = ApplyPanelCurvature
+            CurrentPanelCurvature = () => currentPanelCurvature
         });
         if (remoteStream != null)
         {
             videoTexRef = remoteStream.VideoTexture;
             streamPlaneRef = remoteStream.StreamPlane;
             streamCanvasRef = remoteStream.StreamCanvas;
+            ApplyPanelCurvature(currentPanelCurvature);
         }
 
         grabbable = root.AttachComponent<Grabbable>();
