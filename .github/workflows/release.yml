@@ -3,6 +3,8 @@ name: GitHub Release
 on:
   push:
     branches: [main]
+    paths:
+      - 'VERSION'
 
 jobs:
   release:
@@ -12,44 +14,90 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION must be semantic Major.Minor.Patch for releases. Current value: '$version'"
+          }
+
+          $toml = Get-Content -Raw thunderstore.toml
+          $match = [regex]::Match($toml, 'versionNumber\s*=\s*"([^"]+)"')
+          if (-not $match.Success) {
+            throw "versionNumber was not found in thunderstore.toml"
+          }
+          if ($match.Groups[1].Value -ne $version) {
+            throw "VERSION ($version) does not match thunderstore.toml versionNumber ($($match.Groups[1].Value))"
+          }
+
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "tag=v$version" >> $env:GITHUB_OUTPUT
+          echo "name=DesktopBuddy $version" >> $env:GITHUB_OUTPUT
+
+      - name: Check existing release
+        id: existing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $tag = '${{ steps.version.outputs.tag }}'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
 
       - uses: actions/setup-dotnet@v4
+        if: steps.existing.outputs.exists != 'true'
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
       - name: Build release DLLs
+        if: steps.existing.outputs.exists != 'true'
         shell: pwsh
         run: ./scripts/build.ps1
 
-      - name: Get build info
-        id: buildinfo
-        shell: pwsh
-        run: |
-          $short = git rev-parse --short HEAD
-          $dt    = (Get-Date -AsUTC).ToString("yyyy.MM.dd_HH.mm.ss")
-          $name  = "DesktopBuddy-Alpha-${dt}_${short}"
-          echo "short=$short" >> $env:GITHUB_OUTPUT
-          echo "name=$name" >> $env:GITHUB_OUTPUT
-
       - name: Render release notes
         id: notes
+        if: steps.existing.outputs.exists != 'true'
         shell: pwsh
         run: |
+          $version = '${{ steps.version.outputs.version }}'
           $changelog = Get-Content -Raw CHANGELOG.md
+          $sectionMatch = [regex]::Match(
+            $changelog,
+            "(?ms)^##\s+$([regex]::Escape($version))\b.*?(?=^##\s+|\z)"
+          )
+          $notes = if ($sectionMatch.Success) { $sectionMatch.Value.Trim() } else { $changelog.Trim() }
           $body = @(
             "Download DesktopBuddy from Thunderstore:"
             "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/"
             ""
-            $changelog
+            $notes
           ) -join "`r`n"
           $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           Set-Content -NoNewline -Path $path -Value $body
           echo "path=$path" >> $env:GITHUB_OUTPUT
 
       - name: Create Release
+        if: steps.existing.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.buildinfo.outputs.name }}
-          name: ${{ steps.buildinfo.outputs.name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
+          make_latest: true
+
+      - name: Skip existing release
+        if: steps.existing.outputs.exists == 'true'
+        shell: pwsh
+        run: Write-Host "Release ${{ steps.version.outputs.tag }} already exists; skipping."
