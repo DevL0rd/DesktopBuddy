@@ -91,13 +91,7 @@ $modDll = Join-Path $modOutDir.FullName "DesktopBuddy.dll"
 $modSha = Join-Path $modOutDir.FullName "DesktopBuddy.sha"
 
 if ([string]::IsNullOrWhiteSpace($ZipName)) {
-    $short = (& git -C $Root rev-parse --short HEAD 2>$null)
-    if ([string]::IsNullOrWhiteSpace($short)) {
-        $short = "unknown"
-    }
-
-    $timestamp = Get-Date -Format "yyyy.MM.dd_HH.mm.ss"
-    $ZipName = "DesktopBuddy-Alpha-${timestamp}_$short"
+    $ZipName = "DesktopBuddy-$version"
 }
 
 $stage = Join-Path $env:TEMP "DesktopBuddyPackage\$ZipName"
