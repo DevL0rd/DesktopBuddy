@@ -7,6 +7,8 @@ $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $version = (Get-Content -Raw -LiteralPath (Join-Path $Root "VERSION")).Trim()
+& (Join-Path $PSScriptRoot "sync-version.ps1") -Root $Root
+
 $tomlPath = Join-Path $Root "thunderstore.toml"
 $toml = Get-Content -Raw -LiteralPath $tomlPath
 $bridgeDll = Join-Path $Root "DesktopBuddySharedTextureBridge\bin\$Configuration\net472\DesktopBuddySharedTextureBridge.dll"
