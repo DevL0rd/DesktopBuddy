@@ -10,10 +10,35 @@ DesktopBuddy brings your Windows desktop into Resonite as native-feeling world-s
 
 ## Quick Start
 
-Follow the [Bepis modding installation instructions](https://modding.resonite.net/getting-started/installation/) to get started.
+Follow the [Bepis modding installation instructions](https://modding.resonite.net/getting-started/installation/) to get the loader set up.
 
-In your mod manager, search for **DesktopBuddy** and enable it.
+NOTE DESKTOPBUDDY WILL NOT SHOW ON GALE, THIS IS BECAUSE EVERY UPDATE REQURIES A SLOW MANUAL REVIEW PROCESS DUE TO THE NATURE OF THIS MOD. IT IS APPROVED THERE BUT IT MAY BE SEVERELY OUTDATED. INSTALLING MANUALLY IS REQUIRED TO GET LATEST UPDATES
 
+Install or enable the required packages:
+
+- BepisLoader
+- BepisResoniteWrapper
+- InterprocessLib
+- BepInExRenderer
+- RenderiteHook
+
+Download `DesktopBuddy-x.y.z.zip` from the latest [GitHub release](https://github.com/DevL0rd/DesktopBuddy/releases), then extract it into the correct root folder.
+
+For Gale, extract into the profile root:
+
+```text
+%APPDATA%\com.kesomannen.gale\resonite\profiles\Default
+```
+
+For another Gale profile, replace `Default` with that profile folder name.
+
+For a manual BepisLoader install, extract into the Resonite install folder:
+
+```text
+C:\Program Files (x86)\Steam\steamapps\common\Resonite
+```
+
+For manual installs, launch Resonite with BepisLoader enabled, such as with `--hookfxr-enable`.
 
 ## Features
 - Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
@@ -62,20 +87,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
 
 ## Packaging
 
-Thunderstore metadata lives in `thunderstore.toml`. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
+Thunderstore package metadata still lives in `thunderstore.toml` so the release zip keeps the same package layout and manifest. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
 ```
 
-Build the Thunderstore package with TCLI:
-
-```powershell
-dotnet tool restore
-dotnet tcli build
-```
-
-You can also create the same package layout locally with:
+Create the GitHub release zip locally with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1

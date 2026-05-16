@@ -21,6 +21,9 @@
 ### Build And Packaging
 - Packaged and deployed `icon_transparent.png` with the game plugin so runtime UI can use the same icon asset as documentation.
 - Kept Thunderstore/package metadata in sync with the new version.
+- Disabled Thunderstore publishing while keeping the package layout for GitHub release zips.
+- Updated GitHub releases to attach the install zip and show manual Gale/manual BepisLoader install paths before the changelog.
+- Moved in-game update links and checks to GitHub releases.
 
 ## 1.0.12 - 2026-05-15
 

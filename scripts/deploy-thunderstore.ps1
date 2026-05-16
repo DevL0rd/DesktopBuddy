@@ -54,11 +54,7 @@ try {
     }
 
     if ($Publish) {
-        if ([string]::IsNullOrWhiteSpace($env:TCLI_AUTH_TOKEN)) {
-            throw "TCLI_AUTH_TOKEN is not set. Put it in a local .env file or GitHub Actions secret."
-        }
-
-        dotnet tcli publish
+        throw "Thunderstore publishing is disabled. Use scripts\package.ps1 and GitHub releases for distribution."
     }
     else {
         dotnet tcli build

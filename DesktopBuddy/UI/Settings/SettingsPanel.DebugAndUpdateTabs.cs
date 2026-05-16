@@ -90,7 +90,7 @@ public partial class DesktopBuddyMod
 
         AddStatusRow(ui, state, "Update", updateStatus, updateColor);
         AddInfoRow(ui, state, "Current version", $"{DesktopBuddyVersion} ({BuildInfo.GitSha})");
-        AddLinkButtonRow(ui, state, "Thunderstore", "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/", buttonLabel: "Open");
+        AddLinkButtonRow(ui, state, "Releases", "https://github.com/DevL0rd/DesktopBuddy/releases", buttonLabel: "Open");
         AddLinkButtonRow(ui, state, "Repository", "https://github.com/DevL0rd/DesktopBuddy", buttonLabel: "GitHub");
 
         AddSectionHeader(ui, "Settings");
