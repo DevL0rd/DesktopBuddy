@@ -295,8 +295,6 @@ function Start-Resonite {
     $launchArgs = @("-applaunch", "2519830", "--hookfxr-enable")
     if (-not [string]::IsNullOrWhiteSpace($ResolvedProfilePath)) {
         $launchArgs += @(
-            "--hookfxr-target",
-            (Join-Path $ResolvedProfilePath "BepisLoader.dll"),
             "--bepinex-target",
             (Join-Path $ResolvedProfilePath "BepInEx"),
             "--doorstop-enabled",
