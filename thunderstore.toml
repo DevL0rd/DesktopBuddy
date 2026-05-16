@@ -4,7 +4,7 @@ schemaVersion = "0.0.1"
 [package]
 namespace = "DesktopBuddy"
 name = "DesktopBuddy"
-versionNumber = "1.0.12"
+versionNumber = "1.0.13"
 description = "Desktop and window viewer with input, GPU capture, shared texture rendering, hardware encoding, and remote streaming for Resonite."
 websiteUrl = "https://github.com/DevL0rd/DesktopBuddy"
 containsNsfwContent = false
