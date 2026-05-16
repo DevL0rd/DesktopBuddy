@@ -66,6 +66,11 @@ jobs:
         shell: pwsh
         run: ./scripts/build.ps1
 
+      - name: Build release package
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: ./scripts/package.ps1
+
       - name: Render release notes
         id: notes
         if: steps.existing.outputs.exists != 'true'
@@ -78,10 +83,18 @@ jobs:
             "(?ms)^##\s+$([regex]::Escape($version))\b.*?(?=^##\s+|\z)"
           )
           $notes = if ($sectionMatch.Success) { $sectionMatch.Value.Trim() } else { $changelog.Trim() }
+          $readme = Get-Content -Raw README.md
+          $quickStartMatch = [regex]::Match(
+            $readme,
+            '(?ms)^##\s+Quick Start\s*(.*?)(?=^##\s+|\z)'
+          )
+          if (-not $quickStartMatch.Success) {
+            throw "README.md Quick Start section was not found"
+          }
+
+          $installNotes = "## Manual Install`r`n`r`n" + $quickStartMatch.Groups[1].Value.Trim()
           $body = @(
-            "Download DesktopBuddy from Thunderstore:"
-            "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/"
-            ""
+            $installNotes
             $notes
           ) -join "`r`n"
           $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
@@ -96,6 +109,7 @@ jobs:
           name: ${{ steps.version.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
           make_latest: true
+          files: DesktopBuddy-${{ steps.version.outputs.version }}.zip
 
       - name: Skip existing release
         if: steps.existing.outputs.exists == 'true'

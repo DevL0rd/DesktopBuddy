@@ -11,10 +11,8 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-    private const string ThunderstoreNamespace = "DesktopBuddy";
-    private const string ThunderstorePackage = "DesktopBuddy";
-    private const string ThunderstorePackageUrl = "https://thunderstore.io/c/resonite/p/DesktopBuddy/DesktopBuddy/";
-    private const string ThunderstorePackageApiUrl = "https://thunderstore.io/api/experimental/package/DesktopBuddy/DesktopBuddy/";
+    private const string ReleasesUrl = "https://github.com/DevL0rd/DesktopBuddy/releases";
+    private const string LatestReleaseApiUrl = "https://api.github.com/repos/DevL0rd/DesktopBuddy/releases/latest";
     private const string ChangelogUrl = "https://raw.githubusercontent.com/DevL0rd/DesktopBuddy/main/CHANGELOG.md";
 
     private static void CheckForUpdate()
@@ -29,39 +27,29 @@ public partial class DesktopBuddyMod
             using var http = new System.Net.Http.HttpClient();
             http.Timeout = TimeSpan.FromSeconds(8);
             http.DefaultRequestHeaders.Add("User-Agent", "DesktopBuddy");
-            var json = http.GetStringAsync(ThunderstorePackageApiUrl).Result;
+            var json = http.GetStringAsync(LatestReleaseApiUrl).Result;
             using var doc = JsonDocument.Parse(json);
-            var package = doc.RootElement;
-            if (!IsThunderstoreResoniteListingPublic(package, out var reviewStatus))
-            {
-                _updateCheckError = reviewStatus == "rejected"
-                    ? "Thunderstore package listing is rejected."
-                    : $"Thunderstore package listing is not public yet ({reviewStatus}).";
-                _lastUpdateCheckUtc = DateTime.UtcNow;
-                Msg($"[Update] Thunderstore Resonite listing is not public yet: {reviewStatus}");
-                return;
-            }
-
-            if (!package.TryGetProperty("latest", out var latest))
-                return;
-            if (!latest.TryGetProperty("version_number", out var versionElement))
+            var release = doc.RootElement;
+            if (!release.TryGetProperty("tag_name", out var tagElement))
                 return;
 
-            var latestVersion = versionElement.GetString() ?? "";
+            var latestVersion = (tagElement.GetString() ?? "").Trim();
+            if (latestVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+                latestVersion = latestVersion.Substring(1);
             _remoteVersion = latestVersion;
-            _remoteSha = latest.TryGetProperty("full_name", out var fullNameElement)
-                ? fullNameElement.GetString() ?? $"{ThunderstoreNamespace}-{ThunderstorePackage}-{latestVersion}"
-                : $"{ThunderstoreNamespace}-{ThunderstorePackage}-{latestVersion}";
+            _remoteSha = release.TryGetProperty("target_commitish", out var commitishElement)
+                ? commitishElement.GetString() ?? $"v{latestVersion}"
+                : $"v{latestVersion}";
             _remoteChangelog = FetchChangelog(http);
             _lastUpdateCheckUtc = DateTime.UtcNow;
-            Msg($"[Update] Latest Thunderstore version: {latestVersion}");
+            Msg($"[Update] Latest GitHub release version: {latestVersion}");
             _latestVersion = IsRemoteVersionNewer(latestVersion, currentVersion) ? latestVersion : null;
         }
-        catch (Exception ex) when (IsThunderstoreNotFound(ex))
+        catch (Exception ex) when (IsGitHubReleaseNotFound(ex))
         {
-            _updateCheckError = "Thunderstore package is not published yet.";
+            _updateCheckError = "No GitHub release is published yet.";
             _lastUpdateCheckUtc = DateTime.UtcNow;
-            Msg("[Update] Thunderstore package is not published yet");
+            Msg("[Update] No GitHub release is published yet");
         }
         catch (Exception ex)
         {
@@ -71,40 +59,16 @@ public partial class DesktopBuddyMod
         }
     }
 
-    private static bool IsThunderstoreResoniteListingPublic(JsonElement package, out string reviewStatus)
-    {
-        reviewStatus = "missing";
-        if (!package.TryGetProperty("community_listings", out var listings) ||
-            listings.ValueKind != JsonValueKind.Array)
-            return false;
-
-        foreach (var listing in listings.EnumerateArray())
-        {
-            if (!listing.TryGetProperty("community", out var communityElement))
-                continue;
-            if (!string.Equals(communityElement.GetString(), "resonite", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            reviewStatus = listing.TryGetProperty("review_status", out var statusElement)
-                ? statusElement.GetString() ?? "unknown"
-                : "unknown";
-
-            return string.Equals(reviewStatus, "approved", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
-
-    private static bool IsThunderstoreNotFound(Exception ex)
+    private static bool IsGitHubReleaseNotFound(Exception ex)
     {
         if (ex is System.Net.Http.HttpRequestException httpEx &&
             httpEx.StatusCode == System.Net.HttpStatusCode.NotFound)
             return true;
 
         if (ex is AggregateException aggregate)
-            return aggregate.Flatten().InnerExceptions.Any(IsThunderstoreNotFound);
+            return aggregate.Flatten().InnerExceptions.Any(IsGitHubReleaseNotFound);
 
-        return ex.InnerException != null && IsThunderstoreNotFound(ex.InnerException);
+        return ex.InnerException != null && IsGitHubReleaseNotFound(ex.InnerException);
     }
 
     private static string FetchChangelog(System.Net.Http.HttpClient http)
@@ -233,7 +197,7 @@ public partial class DesktopBuddyMod
             try
             {
                 Msg("[Update] Opening releases page");
-                try { Process.Start(new ProcessStartInfo(ThunderstorePackageUrl) { UseShellExecute = true }); }
+                try { Process.Start(new ProcessStartInfo(ReleasesUrl) { UseShellExecute = true }); }
                 catch (Exception ex) { Msg($"[Update] Failed: {ex.Message}"); }
                 if (!updateSlot.IsDestroyed) updateSlot.Destroy();
             }
