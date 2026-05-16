@@ -16,6 +16,8 @@ public partial class DesktopBuddyMod
             Config.Set(StreamFps, Math.Clamp(Config.GetValue(StreamFps), 1, 240));
             Config.Set(MaxStreamResolution, Math.Clamp(Config.GetValue(MaxStreamResolution), 128, 8192));
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
+            Config.Set(ShowContextMenuItem, Config.GetValue(ShowContextMenuItem));
+            Config.Set(ThrowToDestroy, Config.GetValue(ThrowToDestroy));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -80,6 +82,8 @@ public partial class DesktopBuddyMod
     {
         Config.Set(SpatialAudioEnabled, SpatialAudioEnabled.DefaultValue);
         Config.Set(CheckForUpdates, CheckForUpdates.DefaultValue);
+        Config.Set(ShowContextMenuItem, ShowContextMenuItem.DefaultValue);
+        Config.Set(ThrowToDestroy, ThrowToDestroy.DefaultValue);
         Config.Set(Bitrate, Bitrate.DefaultValue);
         Config.Set(StreamFps, StreamFps.DefaultValue);
         Config.Set(MaxStreamResolution, MaxStreamResolution.DefaultValue);

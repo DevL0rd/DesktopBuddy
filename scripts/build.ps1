@@ -131,6 +131,7 @@ function Copy-DesktopBuddyProfileDeploy {
 
     foreach ($path in @(
         (Join-Path $modOutDir "DesktopBuddy.dll"),
+        (Join-Path $modOutDir "icon_transparent.png"),
         $bridgeDll,
         $nativeSource
     )) {
@@ -154,6 +155,7 @@ function Copy-DesktopBuddyProfileDeploy {
     New-Item -ItemType Directory -Force -Path $gamePluginDir, $nativeTarget, $bridgeTarget | Out-Null
 
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll") -Force
+    Copy-DeployFile -Source (Join-Path $modOutDir "icon_transparent.png") -Destination (Join-Path $gamePluginDir "icon_transparent.png")
     $modSha = Join-Path $modOutDir "DesktopBuddy.sha"
     if (Test-Path -LiteralPath $modSha) {
         Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha") -Force

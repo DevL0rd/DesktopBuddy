@@ -1,3 +1,27 @@
+## 1.0.14 - 2026-05-16
+
+### Settings And UI
+- Added a dedicated General settings tab after Viewers.
+- Added General toggles for showing DesktopBuddy in the context menu and enabling throw-to-destroy.
+- Moved experimental spatial audio from Devices to General.
+- Changed the settings panel title to show `DesktopBuddy - version`.
+- Replaced the generated context-menu Desktop icon with the packaged transparent DesktopBuddy icon.
+
+### Streaming And Audio
+- Fixed remote stream audio playback being tied to the owner's local stream preview state.
+- Kept stream audio volume local to each user instead of resetting it from shared stream settings.
+- Removed the global Audio tab volume slider to avoid confusing shared/local audio control.
+- Fixed the remote stream visual missing the current panel curvature on spawn.
+
+### Visual Fixes
+- Reworked quick-menu blur so it attaches to the actual quick-menu curved mesh like the settings panel blur.
+- Fixed quick-menu blur sizing so it follows the current rounded menu width during expand/collapse and resize.
+- Removed custom render-order/render-queue overrides from blur effect materials where they were not needed.
+
+### Build And Packaging
+- Packaged and deployed `icon_transparent.png` with the game plugin so runtime UI can use the same icon asset as documentation.
+- Kept Thunderstore/package metadata in sync with the new version.
+
 ## 1.0.12 - 2026-05-15
 
 ### Loader And Distribution

@@ -19,7 +19,6 @@ internal sealed class RemoteStreamBuildContext
     public float StreamOutputVolume;
     public Func<bool> IsPrivate;
     public Func<float> CurrentPanelCurvature;
-    public Action<float> ApplyPanelCurvature;
 }
 
 internal sealed class RemoteStreamVisual
@@ -124,7 +123,7 @@ public partial class DesktopBuddyMod
                 0f,
                 flipY: false,
                 offsetUnits: -100f);
-            context.ApplyPanelCurvature(context.CurrentPanelCurvature());
+            streamPlane.Curvature.Value = MathX.Clamp(context.CurrentPanelCurvature(), 0f, 1f);
 
             var streamCanvas = streamSlot.AttachComponent<Canvas>();
             streamCanvas.Collider.RawTarget.Enabled = false;

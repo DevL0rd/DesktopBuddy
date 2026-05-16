@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -14,11 +15,12 @@ namespace DesktopBuddy;
 public static class ContextMenuPatch
 {
     private const int PAGE_SIZE = 8;
+    private const string DesktopIconFileName = "icon_transparent.png";
 
     private static readonly ConcurrentDictionary<IntPtr, Uri> _iconCache = new();
 
     private static Uri _desktopIconUri;
-    private static bool _desktopIconGenerated;
+    private static bool _desktopIconLoaded;
 
     private static readonly string[] IgnoredSubstrings = { "vrmonitor", "SteamVR Status", "rainmeter" };
 
@@ -84,78 +86,38 @@ public static class ContextMenuPatch
         return monitors;
     }
 
-    private static byte[] GenerateDesktopIcon(int size = 32)
-    {
-        var pixels = new byte[size * size * 4];
-        var border = new byte[] { 40, 40, 50, 255 };
-        var screen = new byte[] { 60, 140, 220, 255 };
-        var stand  = new byte[] { 80, 80, 90, 255 };
-
-        for (int y = 0; y < size; y++)
-        {
-            for (int x = 0; x < size; x++)
-            {
-                int idx = (y * size + x) * 4;
-                byte[] color;
-
-                if (y >= 2 && y <= 22 && x >= 2 && x <= 29)
-                {
-                    if (y <= 3 || y >= 21 || x <= 3 || x >= 28)
-                        color = border;
-                    else
-                        color = screen;
-                }
-                else if (y >= 23 && y <= 25 && x >= 13 && x <= 18)
-                {
-                    color = stand;
-                }
-                else if (y >= 26 && y <= 27 && x >= 10 && x <= 21)
-                {
-                    color = stand;
-                }
-                else
-                {
-                    pixels[idx] = 0; pixels[idx + 1] = 0; pixels[idx + 2] = 0; pixels[idx + 3] = 0;
-                    continue;
-                }
-
-                pixels[idx]     = color[0];
-                pixels[idx + 1] = color[1];
-                pixels[idx + 2] = color[2];
-                pixels[idx + 3] = color[3];
-            }
-        }
-        return pixels;
-    }
-
     internal static StaticTexture2D GetDesktopIconTexture(Engine engine, Slot slot)
     {
         try
         {
             var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
 
-            if (_desktopIconGenerated && _desktopIconUri != null)
+            if (_desktopIconLoaded && _desktopIconUri != null)
             {
                 tex.URL.Value = _desktopIconUri;
                 DesktopBuddyMod.Msg("[Icon] Using cached desktop icon");
                 return tex;
             }
 
-            DesktopBuddyMod.Msg("[Icon] Generating desktop icon bitmap");
-            var iconData = GenerateDesktopIcon(32);
+            var iconPath = Path.Combine(Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? string.Empty, DesktopIconFileName);
+            if (!File.Exists(iconPath))
+            {
+                DesktopBuddyMod.Msg($"[Icon] Desktop icon file not found: {iconPath}");
+                return tex;
+            }
+
             var capturedTex = tex;
 
             Task.Run(async () =>
             {
                 try
                 {
-                    var bitmap = new Bitmap2D(iconData, 32, 32,
-                        Renderite.Shared.TextureFormat.RGBA32, false, Renderite.Shared.ColorProfile.sRGB, false);
+                    var bitmap = Bitmap2D.Load(iconPath, false);
                     var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
                     if (uri != null)
                     {
                         _desktopIconUri = uri;
-                        _desktopIconGenerated = true;
+                        _desktopIconLoaded = true;
                         DesktopBuddyMod.Msg($"[Icon] Desktop icon saved: {uri}");
                         capturedTex.World.RunInUpdates(0, () =>
                         {
@@ -323,6 +285,9 @@ public static class ContextMenuPatch
 
                 if (options == MenuOptions.Default)
                 {
+                    if (DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.ShowContextMenuItem) == false)
+                        return;
+
                     DesktopBuddyMod.Msg("[ContextMenu] Postfix fired, adding Desktop item");
                     LocaleString label = "Desktop";
                     colorX? color = colorX.Cyan;

@@ -133,6 +133,7 @@ public sealed class SettingsPanelState
 public enum SettingsPanelTab
 {
     Viewers,
+    General,
     Stream,
     Audio,
     Network,

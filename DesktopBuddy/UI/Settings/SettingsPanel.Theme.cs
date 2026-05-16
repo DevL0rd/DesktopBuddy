@@ -44,6 +44,7 @@ public partial class DesktopBuddyMod
     private static readonly (SettingsPanelTab Tab, string Label, string Glyph)[] SettingsTabs =
     {
         (SettingsPanelTab.Viewers, "Viewers", "\U0001F465"),
+        (SettingsPanelTab.General, "General", "\u2699"),
         (SettingsPanelTab.Stream, "Stream", "\U0001F4E1"),
         (SettingsPanelTab.Network, "Network", "\u2601"),
         (SettingsPanelTab.Devices, "Devices", "\U0001F3A5"),

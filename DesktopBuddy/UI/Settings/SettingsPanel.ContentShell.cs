@@ -48,7 +48,7 @@ public partial class DesktopBuddyMod
         headerUi.Style.FlexibleWidth = 1f;
         headerUi.Style.MinHeight = 56f;
         headerUi.Style.PreferredHeight = 56f;
-        var title = headerUi.Text("DesktopBuddy Settings", bestFit: true, alignment: Alignment.MiddleLeft);
+        var title = headerUi.Text($"DesktopBuddy - {DesktopBuddyVersion}", bestFit: true, alignment: Alignment.MiddleLeft);
         title.Size.Value = 28f;
         title.Color.Value = SettingsText;
 
@@ -148,6 +148,9 @@ public partial class DesktopBuddyMod
         {
             case SettingsPanelTab.Viewers:
                 BuildViewersTab(contentUi, state, session);
+                break;
+            case SettingsPanelTab.General:
+                BuildGeneralTab(contentUi, state);
                 break;
             case SettingsPanelTab.Stream:
                 BuildStreamTab(contentUi, state, session);

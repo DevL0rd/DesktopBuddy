@@ -7,6 +7,9 @@ public partial class DesktopBuddyMod
 {
     private static void StartThrowDismissalTracker(Slot root, Grabbable grabbable, User localUser)
     {
+        if (Config?.GetValue(ThrowToDestroy) == false)
+            return;
+
         const int HISTORY_SIZE = 5;
         float3[] posHistory = new float3[HISTORY_SIZE];
         floatQ[] rotHistory = new floatQ[HISTORY_SIZE];

@@ -13,6 +13,10 @@ public partial class DesktopBuddyMod
         new("spatialAudio", "Enable spatial in-game audio (redirects window audio to VB-Cable). When off, use Windows volume slider instead.", () => false);
     internal static readonly DesktopBuddyConfigKey<bool> CheckForUpdates =
         new("checkForUpdates", "Check for updates and show a notification when a new version is available on startup.", () => true);
+    internal static readonly DesktopBuddyConfigKey<bool> ShowContextMenuItem =
+        new("showContextMenuItem", "Show DesktopBuddy in the Resonite context menu.", () => true);
+    internal static readonly DesktopBuddyConfigKey<bool> ThrowToDestroy =
+        new("throwToDestroy", "Destroy DesktopBuddy panels when thrown quickly.", () => true);
     internal static readonly DesktopBuddyConfigKey<int> Bitrate =
         new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
     internal static readonly DesktopBuddyConfigKey<int> StreamFps =
@@ -92,6 +96,8 @@ public partial class DesktopBuddyMod
     {
         Config.Bind(SpatialAudioEnabled);
         Config.Bind(CheckForUpdates);
+        Config.Bind(ShowContextMenuItem);
+        Config.Bind(ThrowToDestroy);
         Config.Bind(Bitrate);
         Config.Bind(StreamFps);
         Config.Bind(MaxStreamResolution);
