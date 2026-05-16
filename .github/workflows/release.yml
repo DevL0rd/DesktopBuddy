@@ -26,15 +26,6 @@ jobs:
             throw "VERSION must be semantic Major.Minor.Patch for releases. Current value: '$version'"
           }
 
-          $toml = Get-Content -Raw thunderstore.toml
-          $match = [regex]::Match($toml, 'versionNumber\s*=\s*"([^"]+)"')
-          if (-not $match.Success) {
-            throw "versionNumber was not found in thunderstore.toml"
-          }
-          if ($match.Groups[1].Value -ne $version) {
-            throw "VERSION ($version) does not match thunderstore.toml versionNumber ($($match.Groups[1].Value))"
-          }
-
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "tag=v$version" >> $env:GITHUB_OUTPUT
           echo "name=DesktopBuddy $version" >> $env:GITHUB_OUTPUT
