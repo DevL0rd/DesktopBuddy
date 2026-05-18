@@ -231,6 +231,12 @@ function Build-ManualPackage {
     $runtimeSource = Join-Path $Root $runtimeDirName
     $namespace = Get-TomlString $toml "namespace"
     $mainName = Get-TomlString $toml "name"
+    $description = Get-TomlString $toml "description"
+    $runtimeDependency = "$namespace-$runtimePackageName-$runtimeVersion"
+    $dependencies = @(Get-TomlDependencies $toml | Where-Object { $_ -notmatch "^[^-]+-$runtimePackageName-" })
+    $dependencies += $runtimeDependency
+    $runtimeDescription = "Runtime payloads for DesktopBuddy, including FFmpeg, tunnel, virtual camera, and virtual audio setup files."
+    $runtimeIcon = Join-Path $Root "icon_runtime.png"
 
     foreach ($path in @((Join-Path $modOutDir "DesktopBuddy.dll"), $bridgeDll, $runtimeSource, (Join-Path $Root "icon_transparent.png"))) {
         if (-not (Test-Path -LiteralPath $path)) {
@@ -238,14 +244,20 @@ function Build-ManualPackage {
         }
     }
 
+    New-GrayscalePng -Source (Join-Path $Root "icon.png") -Destination $runtimeIcon
+
     $name = if ([string]::IsNullOrWhiteSpace($ZipName)) { "DesktopBuddy-$version" } else { $ZipName }
     $stage = New-PackageStage -Name $name
     $outZip = Join-Path $Root "$name.zip"
-    $gamePluginDir = Join-Path $stage "BepInEx\plugins\$namespace-$mainName\DesktopBuddy"
-    $runtimeTarget = Join-Path $stage "BepInEx\plugins\$namespace-$runtimePackageName\DesktopBuddy\$runtimeDirName"
+    $mainPackageRoot = Join-Path $stage "BepInEx\plugins\$namespace-$mainName"
+    $runtimePackageRoot = Join-Path $stage "BepInEx\plugins\$namespace-$runtimePackageName"
+    $gamePluginDir = Join-Path $mainPackageRoot "DesktopBuddy"
+    $runtimeTarget = Join-Path $runtimePackageRoot "DesktopBuddy\$runtimeDirName"
     $bridgeTarget = Join-Path $stage "Renderer\BepInEx\plugins\$namespace-$mainName\DesktopBuddySharedTextureBridge"
 
-    New-Item -ItemType Directory -Force -Path $gamePluginDir, $runtimeTarget, $bridgeTarget | Out-Null
+    New-Item -ItemType Directory -Force -Path $mainPackageRoot, $runtimePackageRoot, $gamePluginDir, $runtimeTarget, $bridgeTarget | Out-Null
+    Add-PackageMetadata -Stage $mainPackageRoot -PackageName $mainName -PackageVersion $version -Description $description -Dependencies $dependencies -Icon (Join-Path $Root "icon.png")
+    Add-PackageMetadata -Stage $runtimePackageRoot -PackageName $runtimePackageName -PackageVersion $runtimeVersion -Description $runtimeDescription -Dependencies @() -Icon $runtimeIcon
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll")
     Copy-Item -LiteralPath (Join-Path $Root "icon_transparent.png") -Destination (Join-Path $gamePluginDir "icon_transparent.png")
     $modSha = Join-Path $modOutDir "DesktopBuddy.sha"

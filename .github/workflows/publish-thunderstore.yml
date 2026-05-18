@@ -21,6 +21,7 @@ on:
 jobs:
   publish:
     runs-on: windows-latest
+    environment: main
     permissions:
       contents: read
 
