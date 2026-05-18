@@ -209,7 +209,6 @@ function Stop-ProcessTreeByName {
 function Get-DesktopBuddyCloudflared {
     @(Get-CimInstance Win32_Process -Filter "name='cloudflared.exe'" -ErrorAction SilentlyContinue | Where-Object {
         ($_.ExecutablePath -like "*\plugins\DesktopBuddy\DesktopBuddyRuntime\cloudflared.exe") -or
-        ($_.ExecutablePath -like "*\plugins\DesktopBuddy\DesktopBuddyNative\cloudflared.exe") -or
         ($_.CommandLine -like "*--url http://localhost:48080*")
     })
 }
