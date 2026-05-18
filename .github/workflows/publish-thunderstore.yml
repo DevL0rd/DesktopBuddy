@@ -1,11 +1,47 @@
 name: Publish Thunderstore
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'VERSION'
+      - 'RUNTIME_VERSION'
   workflow_dispatch:
+    inputs:
+      package:
+        description: 'Thunderstore package(s) to publish'
+        required: true
+        default: 'All'
+        type: choice
+        options:
+          - All
+          - Runtime
+          - Main
 
 jobs:
-  disabled:
-    runs-on: ubuntu-latest
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
     steps:
-      - name: Disabled
-        run: echo "Thunderstore publishing is disabled. GitHub releases are the current distribution path."
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Publish changed Thunderstore packages
+        shell: pwsh
+        env:
+          TCLI_AUTH_TOKEN: ${{ secrets.TCLI_AUTH_TOKEN }}
+        run: |
+          $package = '${{ github.event.inputs.package }}'
+          if ([string]::IsNullOrWhiteSpace($package)) {
+            $package = 'All'
+          }
+
+          ./scripts/deploy-thunderstore.ps1 -Publish -Package $package

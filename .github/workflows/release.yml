@@ -3,8 +3,7 @@ name: GitHub Release
 on:
   push:
     branches: [main]
-    paths:
-      - 'VERSION'
+  workflow_dispatch:
 
 jobs:
   release:
@@ -30,41 +29,21 @@ jobs:
           echo "tag=v$version" >> $env:GITHUB_OUTPUT
           echo "name=DesktopBuddy $version" >> $env:GITHUB_OUTPUT
 
-      - name: Check existing release
-        id: existing
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $tag = '${{ steps.version.outputs.tag }}'
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            echo "exists=true" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "exists=false" >> $env:GITHUB_OUTPUT
-          }
-          exit 0
-
       - uses: actions/setup-dotnet@v4
-        if: steps.existing.outputs.exists != 'true'
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
       - name: Build release DLLs
-        if: steps.existing.outputs.exists != 'true'
         shell: pwsh
-        run: ./scripts/build.ps1
+        run: ./scripts/build.ps1 -Configuration Release -NoDeploy
 
-      - name: Build release package
-        if: steps.existing.outputs.exists != 'true'
+      - name: Build manual release package
         shell: pwsh
-        run: ./scripts/package.ps1
+        run: ./scripts/package.ps1 -Configuration Release -Package Manual
 
       - name: Render release notes
         id: notes
-        if: steps.existing.outputs.exists != 'true'
         shell: pwsh
         run: |
           $version = '${{ steps.version.outputs.version }}'
@@ -75,34 +54,37 @@ jobs:
           )
           $notes = if ($sectionMatch.Success) { $sectionMatch.Value.Trim() } else { $changelog.Trim() }
           $readme = Get-Content -Raw README.md
-          $quickStartMatch = [regex]::Match(
+          $installMatch = [regex]::Match(
             $readme,
-            '(?ms)^##\s+Quick Start\s*(.*?)(?=^##\s+|\z)'
+            '(?ms)^##\s+Install\s*(.*?)(?=^##\s+|\z)'
           )
-          if (-not $quickStartMatch.Success) {
-            throw "README.md Quick Start section was not found"
+          if (-not $installMatch.Success) {
+            throw "README.md Install section was not found"
           }
 
-          $installNotes = "## Manual Install`r`n`r`n" + $quickStartMatch.Groups[1].Value.Trim()
+          $installNotes = "## Install`r`n`r`n" + $installMatch.Groups[1].Value.Trim()
           $body = @(
             $installNotes
             $notes
-          ) -join "`r`n"
+          ) -join "`r`n`r`n"
           $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
           Set-Content -NoNewline -Path $path -Value $body
           echo "path=$path" >> $env:GITHUB_OUTPUT
 
-      - name: Create Release
-        if: steps.existing.outputs.exists != 'true'
+      - name: Move release tag to this build
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f '${{ steps.version.outputs.tag }}' $env:GITHUB_SHA
+          git push origin "refs/tags/${{ steps.version.outputs.tag }}" --force
+
+      - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
           make_latest: true
+          overwrite_files: true
           files: DesktopBuddy-${{ steps.version.outputs.version }}.zip
-
-      - name: Skip existing release
-        if: steps.existing.outputs.exists == 'true'
-        shell: pwsh
-        run: Write-Host "Release ${{ steps.version.outputs.tag }} already exists; skipping."

@@ -1,6 +1,18 @@
 # DesktopBuddy
 
-DesktopBuddy brings your Windows desktop into Resonite as native-feeling world-space panels. It is built for people who want their real desktop, monitors, and application windows available inside a world without turning the experience into a flat screen overlay.
+DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and microphone to integrate windows completly and seemlessly into resonite.
+
+
+## Install
+
+1. Follow instructions here to setup resonite with Gale, a mod manager for bepis mods.
+https://modding.resonite.net/getting-started/installation/
+
+2. Search for DesktopBuddy and enable the mod.
+
+3. Launch resonite with Gale.
+
+GitHub release zips are the bleeding-edge manual install path and may update faster than Thunderstore while packages wait for review.
 
 ## Features
 
