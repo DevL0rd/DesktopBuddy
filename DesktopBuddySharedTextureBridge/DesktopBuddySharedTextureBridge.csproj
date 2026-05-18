@@ -123,8 +123,8 @@
 
   <!-- Deploy to local Resonite Renderer BepInEx plugins folder -->
   <Target Name="CopyToRenderer" AfterTargets="Build" Condition="Exists('$(ResonitePath)\Renderer\BepInEx\plugins') and '$(DesktopBuddySkipDeploy)' != 'true'">
-    <MakeDir Directories="$(ResonitePath)\Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge" Retries="0" />
+    <MakeDir Directories="$(ResonitePath)\Renderer\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddySharedTextureBridge" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\Renderer\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddySharedTextureBridge" Retries="0" />
   </Target>
 
 </Project>

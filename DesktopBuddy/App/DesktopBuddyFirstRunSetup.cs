@@ -47,12 +47,12 @@ internal static class DesktopBuddyFirstRunSetup
     {
         try
         {
-            string nativeDir = GetNativeDir();
+            string runtimeDir = GetRuntimeDir();
 
             Log.Msg("[Setup] Checking DesktopBuddy local setup");
-            Log.Msg($"[Setup] Native path: {nativeDir}");
+            Log.Msg($"[Setup] Runtime path: {runtimeDir}");
 
-            var items = GetSetupItems(nativeDir);
+            var items = GetSetupItems(runtimeDir);
             return new SetupState
             {
                 Items = items,
@@ -80,9 +80,9 @@ internal static class DesktopBuddyFirstRunSetup
 
     internal static Process StartElevatedSetup(IReadOnlyCollection<SetupAction> actions = null)
     {
-        string nativeDir = GetNativeDir();
+        string runtimeDir = GetRuntimeDir();
         var required = (actions == null || actions.Count == 0)
-            ? GetRequiredAdminActions(nativeDir)
+            ? GetRequiredAdminActions(runtimeDir)
             : NormalizeSetupActions(actions);
 
         if (required.Count == 0)
@@ -94,16 +94,16 @@ internal static class DesktopBuddyFirstRunSetup
         Log.Msg("[Setup] User requested admin setup: " + string.Join(", ", required.Select(GetActionLabel)));
         if (IsAdministrator())
         {
-            RunAdminSetup(required, nativeDir);
+            RunAdminSetup(required, runtimeDir);
             return null;
         }
 
-        return StartElevatedSetupHelper(required, nativeDir);
+        return StartElevatedSetupHelper(required, runtimeDir);
     }
 
-    private static List<SetupAction> GetRequiredAdminActions(string nativeDir)
+    private static List<SetupAction> GetRequiredAdminActions(string runtimeDir)
     {
-        return GetRequiredActions(GetSetupItems(nativeDir));
+        return GetRequiredActions(GetSetupItems(runtimeDir));
     }
 
     private static List<SetupAction> GetRequiredActions(IReadOnlyList<SetupItem> items)
@@ -137,12 +137,12 @@ internal static class DesktopBuddyFirstRunSetup
         };
     }
 
-    private static IReadOnlyList<SetupItem> GetSetupItems(string nativeDir)
+    private static IReadOnlyList<SetupItem> GetSetupItems(string runtimeDir)
     {
         var items = new List<SetupItem>
         {
-            GetSoftCamSetupItem(nativeDir),
-            GetVBCableInstallSetupItem(nativeDir),
+            GetSoftCamSetupItem(runtimeDir),
+            GetVBCableInstallSetupItem(runtimeDir),
             GetVBCableLoopbackSetupItem(),
             GetUrlAclSetupItem(),
         };
@@ -150,16 +150,16 @@ internal static class DesktopBuddyFirstRunSetup
         return items;
     }
 
-    private static SetupItem GetSoftCamSetupItem(string nativeDir)
+    private static SetupItem GetSoftCamSetupItem(string runtimeDir)
     {
-        string expectedName = File.Exists(Path.Combine(nativeDir, "softcam64.dll")) || !File.Exists(Path.Combine(nativeDir, "softcam.dll"))
+        string expectedName = File.Exists(Path.Combine(runtimeDir, "softcam64.dll")) || !File.Exists(Path.Combine(runtimeDir, "softcam.dll"))
             ? "softcam64.dll"
             : "softcam.dll";
-        string expected = Path.Combine(nativeDir, expectedName);
+        string expected = Path.Combine(runtimeDir, expectedName);
 
-        string packagedHash = ReadPackagedSetupHash(nativeDir, expectedName);
+        string packagedHash = ReadPackagedSetupHash(runtimeDir, expectedName);
         string registered = GetSoftCamRegisteredDlls().FirstOrDefault();
-        string markerHash = ReadSetupHash(nativeDir, expectedName);
+        string markerHash = ReadSetupHash(runtimeDir, expectedName);
         var runningApps = GetRunningRestartSensitiveProcesses();
 
         bool dllMissing = !File.Exists(expected);
@@ -193,11 +193,11 @@ internal static class DesktopBuddyFirstRunSetup
         return "Restart: " + string.Join(", ", shown) + suffix;
     }
 
-    private static SetupItem GetVBCableInstallSetupItem(string nativeDir)
+    private static SetupItem GetVBCableInstallSetupItem(string runtimeDir)
     {
-        string installer = Path.Combine(nativeDir, "VBCABLE_Setup_x64.exe");
-        string installerHash = ReadPackagedSetupHash(nativeDir, "VBCABLE_Setup_x64.exe");
-        string markerHash = ReadSetupHash(nativeDir, "VBCABLE_Setup_x64.exe");
+        string installer = Path.Combine(runtimeDir, "VBCABLE_Setup_x64.exe");
+        string installerHash = ReadPackagedSetupHash(runtimeDir, "VBCABLE_Setup_x64.exe");
+        string markerHash = ReadSetupHash(runtimeDir, "VBCABLE_Setup_x64.exe");
         bool installed = IsVBCableInstalled();
         bool installerMissing = !File.Exists(installer);
         bool markerOutdated = installed &&
@@ -248,7 +248,7 @@ internal static class DesktopBuddyFirstRunSetup
         };
     }
 
-    private static void RunAdminSetup(IReadOnlyCollection<SetupAction> actions, string nativeDir)
+    private static void RunAdminSetup(IReadOnlyCollection<SetupAction> actions, string runtimeDir)
     {
         Log.Msg("[Setup] Running admin setup inside DesktopBuddy");
         foreach (var action in actions)
@@ -256,10 +256,10 @@ internal static class DesktopBuddyFirstRunSetup
             switch (action)
             {
                 case SetupAction.SoftCamRegistration:
-                    RegisterSoftCam(nativeDir);
+                    RegisterSoftCam(runtimeDir);
                     break;
                 case SetupAction.VBCableInstall:
-                    InstallVBCable(nativeDir);
+                    InstallVBCable(runtimeDir);
                     break;
                 case SetupAction.VBCableLoopback:
                     ConfigureVBCableLoopback();
@@ -269,15 +269,15 @@ internal static class DesktopBuddyFirstRunSetup
                     break;
             }
         }
-        WriteSetupHashes(nativeDir);
+        WriteSetupHashes(runtimeDir);
         Log.Msg("[Setup] Admin setup complete");
     }
 
-    private static Process StartElevatedSetupHelper(IReadOnlyCollection<SetupAction> actions, string nativeDir)
+    private static Process StartElevatedSetupHelper(IReadOnlyCollection<SetupAction> actions, string runtimeDir)
     {
-        string logPath = Path.Combine(nativeDir, "DesktopBuddySetup.log");
-        string script = BuildElevatedSetupScript(actions, nativeDir, logPath);
-        string scriptPath = Path.Combine(nativeDir, "DesktopBuddyElevatedSetup.ps1");
+        string logPath = Path.Combine(runtimeDir, "DesktopBuddySetup.log");
+        string script = BuildElevatedSetupScript(actions, runtimeDir, logPath);
+        string scriptPath = Path.Combine(runtimeDir, "DesktopBuddyElevatedSetup.ps1");
         File.WriteAllText(scriptPath, script, Encoding.UTF8);
         string args = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"";
         var startInfo = new ProcessStartInfo
@@ -313,16 +313,16 @@ internal static class DesktopBuddyFirstRunSetup
         return null;
     }
 
-    private static string BuildElevatedSetupScript(IReadOnlyCollection<SetupAction> actions, string nativeDir, string logPath)
+    private static string BuildElevatedSetupScript(IReadOnlyCollection<SetupAction> actions, string runtimeDir, string logPath)
     {
         var script = new StringBuilder();
         script.AppendLine("$ErrorActionPreference = 'Continue'");
-        script.AppendLine($"$native = {PsSingleQuote(nativeDir)}");
+        script.AppendLine($"$runtime = {PsSingleQuote(runtimeDir)}");
         script.AppendLine($"$log = {PsSingleQuote(logPath)}");
         script.AppendLine("New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null");
         script.AppendLine("\"[{0:yyyy-MM-dd HH:mm:ss}] DesktopBuddy elevated setup started\" -f (Get-Date) | Set-Content -LiteralPath $log");
         script.AppendLine("function Write-SetupLog([string]$Message) { Add-Content -LiteralPath $log -Value (\"[{0:HH:mm:ss}] {1}\" -f (Get-Date), $Message) }");
-        script.AppendLine("function Run-SetupProcess([string]$File, [string]$Arguments, [string]$WorkingDirectory = $native, [int]$TimeoutMs = 60000) {");
+        script.AppendLine("function Run-SetupProcess([string]$File, [string]$Arguments, [string]$WorkingDirectory = $runtime, [int]$TimeoutMs = 60000) {");
         script.AppendLine("  Write-SetupLog ($File + ' ' + $Arguments)");
         script.AppendLine("  try {");
         script.AppendLine("    $process = Start-Process -FilePath $File -ArgumentList $Arguments -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru");
@@ -360,8 +360,8 @@ internal static class DesktopBuddyFirstRunSetup
     private static void AppendSoftCamRegistrationScript(StringBuilder script)
     {
         script.AppendLine("Write-SetupLog 'Registering SoftCam'");
-        script.AppendLine("$softCamCandidates = @((Join-Path $native 'softcam64.dll'), (Join-Path $native 'softcam.dll'))");
-        script.AppendLine("foreach ($candidate in $softCamCandidates) { if (Test-Path -LiteralPath $candidate) { Run-SetupProcess 'regsvr32.exe' ('/s /u \"' + $candidate + '\"') $native 10000 } }");
+        script.AppendLine("$softCamCandidates = @((Join-Path $runtime 'softcam64.dll'), (Join-Path $runtime 'softcam.dll'))");
+        script.AppendLine("foreach ($candidate in $softCamCandidates) { if (Test-Path -LiteralPath $candidate) { Run-SetupProcess 'regsvr32.exe' ('/s /u \"' + $candidate + '\"') $runtime 10000 } }");
         script.AppendLine("$softCamKeys = @(");
         script.AppendLine("  'HKCU:\\Software\\Classes\\CLSID\\' + $softCamClsid,");
         script.AppendLine("  'HKCU:\\Software\\Classes\\WOW6432Node\\CLSID\\' + $softCamClsid,");
@@ -377,16 +377,16 @@ internal static class DesktopBuddyFirstRunSetup
         script.AppendLine("  'HKLM:\\Software\\Classes\\WOW6432Node\\CLSID\\' + $videoInputCategoryClsid + '\\Instance\\DirectShow Softcam'");
         script.AppendLine(")");
         script.AppendLine("foreach ($key in $softCamKeys) { if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue; Write-SetupLog ('Removed registry key ' + $key) } }");
-        script.AppendLine("$softCamDll = Join-Path $native 'softcam64.dll'");
-        script.AppendLine("if (-not (Test-Path -LiteralPath $softCamDll)) { $softCamDll = Join-Path $native 'softcam.dll' }");
-        script.AppendLine("if (Test-Path -LiteralPath $softCamDll) { Run-SetupProcess 'regsvr32.exe' ('/s \"' + $softCamDll + '\"') $native 10000 } else { Write-SetupLog 'SoftCam DLL missing' }");
+        script.AppendLine("$softCamDll = Join-Path $runtime 'softcam64.dll'");
+        script.AppendLine("if (-not (Test-Path -LiteralPath $softCamDll)) { $softCamDll = Join-Path $runtime 'softcam.dll' }");
+        script.AppendLine("if (Test-Path -LiteralPath $softCamDll) { Run-SetupProcess 'regsvr32.exe' ('/s \"' + $softCamDll + '\"') $runtime 10000 } else { Write-SetupLog 'SoftCam DLL missing' }");
     }
 
     private static void AppendVBCableInstallScript(StringBuilder script)
     {
         script.AppendLine("Write-SetupLog 'Installing VB-Cable'");
-        script.AppendLine("$vbCableInstaller = Join-Path $native 'VBCABLE_Setup_x64.exe'");
-        script.AppendLine("if (Test-Path -LiteralPath $vbCableInstaller) { Run-SetupProcess $vbCableInstaller '-i -h' $native 60000 } else { Write-SetupLog 'VB-Cable installer missing' }");
+        script.AppendLine("$vbCableInstaller = Join-Path $runtime 'VBCABLE_Setup_x64.exe'");
+        script.AppendLine("if (Test-Path -LiteralPath $vbCableInstaller) { Run-SetupProcess $vbCableInstaller '-i -h' $runtime 60000 } else { Write-SetupLog 'VB-Cable installer missing' }");
     }
 
     private static void AppendVBCableLoopbackScript(StringBuilder script)
@@ -395,23 +395,23 @@ internal static class DesktopBuddyFirstRunSetup
         script.AppendLine("$vbCableKey = 'HKLM:\\Software\\VB-Audio\\Cable'");
         script.AppendLine("if (Test-Path -LiteralPath $vbCableKey) {");
         script.AppendLine("  Set-ItemProperty -LiteralPath $vbCableKey -Name 'VBAudioCableWDM_LoopBack' -Type DWord -Value 0");
-        script.AppendLine("  Run-SetupProcess 'net.exe' 'stop \"AudioEndpointBuilder\" /yes' $native 15000");
-        script.AppendLine("  Run-SetupProcess 'net.exe' 'start \"AudioEndpointBuilder\"' $native 15000");
-        script.AppendLine("  Run-SetupProcess 'net.exe' 'stop \"AudioSrv\" /yes' $native 15000");
-        script.AppendLine("  Run-SetupProcess 'net.exe' 'start \"AudioSrv\"' $native 15000");
+        script.AppendLine("  Run-SetupProcess 'net.exe' 'stop \"AudioEndpointBuilder\" /yes' $runtime 15000");
+        script.AppendLine("  Run-SetupProcess 'net.exe' 'start \"AudioEndpointBuilder\"' $runtime 15000");
+        script.AppendLine("  Run-SetupProcess 'net.exe' 'stop \"AudioSrv\" /yes' $runtime 15000");
+        script.AppendLine("  Run-SetupProcess 'net.exe' 'start \"AudioSrv\"' $runtime 15000");
         script.AppendLine("} else { Write-SetupLog 'VB-Cable registry key not present yet' }");
     }
 
     private static void AppendUrlAclScript(StringBuilder script)
     {
         script.AppendLine("Write-SetupLog 'Configuring HTTP URL ACL'");
-        script.AppendLine("Run-SetupProcess 'netsh' 'http add urlacl url=http://+:48080/ sddl=D:(A;;GX;;;S-1-1-0)' $native 10000");
+        script.AppendLine("Run-SetupProcess 'netsh' 'http add urlacl url=http://+:48080/ sddl=D:(A;;GX;;;S-1-1-0)' $runtime 10000");
     }
 
     private static void AppendSetupHashScript(StringBuilder script)
     {
-        script.AppendLine("$packagedHashFile = Join-Path $native 'DesktopBuddySetupPayloads.md5'");
-        script.AppendLine("$hashFile = Join-Path $native 'DesktopBuddySetupHashes.txt'");
+        script.AppendLine("$packagedHashFile = Join-Path $runtime 'DesktopBuddySetupPayloads.md5'");
+        script.AppendLine("$hashFile = Join-Path $runtime 'DesktopBuddySetupHashes.txt'");
         script.AppendLine("if (Test-Path -LiteralPath $packagedHashFile) { Copy-Item -LiteralPath $packagedHashFile -Destination $hashFile -Force; Write-SetupLog ('Wrote setup hash marker ' + $hashFile) }");
         script.AppendLine("else { Write-SetupLog 'Packaged setup hash manifest missing' }");
     }
@@ -421,10 +421,10 @@ internal static class DesktopBuddyFirstRunSetup
         return "'" + value.Replace("'", "''") + "'";
     }
 
-    private static void RegisterSoftCam(string nativeDir)
+    private static void RegisterSoftCam(string runtimeDir)
     {
         Log.Msg("[Setup] Registering SoftCam");
-        foreach (string dll in GetSoftCamUnregisterCandidates(nativeDir))
+        foreach (string dll in GetSoftCamUnregisterCandidates(runtimeDir))
         {
             if (File.Exists(dll))
                 RunProcess("regsvr32.exe", $"/s /u \"{dll}\"", timeoutMs: 10000);
@@ -433,25 +433,25 @@ internal static class DesktopBuddyFirstRunSetup
         foreach (var key in GetSoftCamRegistryTrees())
             DeleteRegistryTree(key.Root, key.SubKey);
 
-        string softcam = Path.Combine(nativeDir, "softcam64.dll");
+        string softcam = Path.Combine(runtimeDir, "softcam64.dll");
         if (!File.Exists(softcam))
-            softcam = Path.Combine(nativeDir, "softcam.dll");
+            softcam = Path.Combine(runtimeDir, "softcam.dll");
         if (!File.Exists(softcam))
         {
-            Log.Msg($"[Setup] SoftCam DLL missing in {nativeDir}");
+            Log.Msg($"[Setup] SoftCam DLL missing in {runtimeDir}");
             return;
         }
 
         RunProcess("regsvr32.exe", $"/s \"{softcam}\"", timeoutMs: 10000);
-        Log.Msg(IsSoftCamRegistered(nativeDir)
+        Log.Msg(IsSoftCamRegistered(runtimeDir)
             ? "[Setup] SoftCam registered"
             : "[Setup] WARNING: SoftCam registration did not resolve to expected path");
     }
 
-    private static IEnumerable<string> GetSoftCamUnregisterCandidates(string nativeDir)
+    private static IEnumerable<string> GetSoftCamUnregisterCandidates(string runtimeDir)
     {
-        yield return Path.Combine(nativeDir, "softcam64.dll");
-        yield return Path.Combine(nativeDir, "softcam.dll");
+        yield return Path.Combine(runtimeDir, "softcam64.dll");
+        yield return Path.Combine(runtimeDir, "softcam.dll");
         foreach (string registered in GetSoftCamRegisteredDlls())
             yield return registered;
     }
@@ -505,25 +505,25 @@ internal static class DesktopBuddyFirstRunSetup
         }
     }
 
-    private static bool IsSoftCamRegistered(string nativeDir)
+    private static bool IsSoftCamRegistered(string runtimeDir)
     {
         using var key = Registry.ClassesRoot.OpenSubKey($@"CLSID\{SoftCamClsid}\InprocServer32");
         string registered = key?.GetValue("") as string;
         if (string.IsNullOrWhiteSpace(registered))
             return false;
 
-        string expected = Path.Combine(nativeDir, "softcam64.dll");
+        string expected = Path.Combine(runtimeDir, "softcam64.dll");
         return string.Equals(registered.Trim('"'), expected, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void WriteSetupHashes(string nativeDir)
+    private static void WriteSetupHashes(string runtimeDir)
     {
         try
         {
-            Directory.CreateDirectory(nativeDir);
-            string packagedHashPath = Path.Combine(nativeDir, PackagedSetupHashFile);
+            Directory.CreateDirectory(runtimeDir);
+            string packagedHashPath = Path.Combine(runtimeDir, PackagedSetupHashFile);
             if (File.Exists(packagedHashPath))
-                File.Copy(packagedHashPath, Path.Combine(nativeDir, SetupHashFile), overwrite: true);
+                File.Copy(packagedHashPath, Path.Combine(runtimeDir, SetupHashFile), overwrite: true);
         }
         catch (Exception ex)
         {
@@ -531,14 +531,14 @@ internal static class DesktopBuddyFirstRunSetup
         }
     }
 
-    private static string ReadSetupHash(string nativeDir, string fileName)
+    private static string ReadSetupHash(string runtimeDir, string fileName)
     {
-        return ReadHashFile(Path.Combine(nativeDir, SetupHashFile), fileName);
+        return ReadHashFile(Path.Combine(runtimeDir, SetupHashFile), fileName);
     }
 
-    private static string ReadPackagedSetupHash(string nativeDir, string fileName)
+    private static string ReadPackagedSetupHash(string runtimeDir, string fileName)
     {
-        return ReadHashFile(Path.Combine(nativeDir, PackagedSetupHashFile), fileName);
+        return ReadHashFile(Path.Combine(runtimeDir, PackagedSetupHashFile), fileName);
     }
 
     private static string ReadHashFile(string path, string fileName)
@@ -623,16 +623,16 @@ internal static class DesktopBuddyFirstRunSetup
         return running.ToArray();
     }
 
-    private static void InstallVBCable(string nativeDir)
+    private static void InstallVBCable(string runtimeDir)
     {
-        string installer = Path.Combine(nativeDir, "VBCABLE_Setup_x64.exe");
+        string installer = Path.Combine(runtimeDir, "VBCABLE_Setup_x64.exe");
         if (!File.Exists(installer))
         {
             Log.Msg($"[Setup] VB-Cable installer missing at {installer}");
             return;
         }
 
-        RunProcess(installer, "-i -h", workingDirectory: nativeDir, timeoutMs: 60000);
+        RunProcess(installer, "-i -h", workingDirectory: runtimeDir, timeoutMs: 60000);
         Log.Msg(IsVBCableInstalled()
             ? "[Setup] VB-Cable detected"
             : "[Setup] VB-Cable not detected yet; reboot may be required");
@@ -733,7 +733,7 @@ internal static class DesktopBuddyFirstRunSetup
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 
-    private static string GetNativeDir()
+    private static string GetRuntimeDir()
     {
         return DesktopBuddyRuntimePaths.GetDirectory();
     }

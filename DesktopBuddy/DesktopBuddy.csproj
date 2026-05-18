@@ -176,12 +176,12 @@
       <DesktopBuddyRuntime Include="$(MSBuildThisFileDirectory)..\DesktopBuddyRuntime\**\*" />
       <DesktopBuddyManagedDependency Include="@(DesktopBuddyManagedDependencyName->'$(OutputPath)%(Identity)')" />
     </ItemGroup>
-    <MakeDir Directories="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyRuntime)" DestinationFiles="@(DesktopBuddyRuntime->'$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <MakeDir Directories="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy;$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyRuntime)" DestinationFiles="@(DesktopBuddyRuntime->'$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>

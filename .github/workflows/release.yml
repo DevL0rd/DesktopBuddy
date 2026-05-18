@@ -71,18 +71,11 @@ jobs:
           Set-Content -NoNewline -Path $path -Value $body
           echo "path=$path" >> $env:GITHUB_OUTPUT
 
-      - name: Move release tag to this build
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f '${{ steps.version.outputs.tag }}' $env:GITHUB_SHA
-          git push origin "refs/tags/${{ steps.version.outputs.tag }}" --force
-
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
           make_latest: true
