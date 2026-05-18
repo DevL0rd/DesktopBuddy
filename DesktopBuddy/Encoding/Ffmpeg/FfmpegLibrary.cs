@@ -38,8 +38,7 @@ public sealed unsafe partial class FfmpegEncoder
 
     public static string FindFfmpegDlls()
     {
-        var modDir = Path.GetDirectoryName(typeof(FfmpegEncoder).Assembly.Location) ?? "";
-        string dir = Path.GetFullPath(Path.Combine(modDir, "DesktopBuddyNative"));
+        string dir = Path.GetFullPath(DesktopBuddyRuntimePaths.GetDirectory());
         if (File.Exists(Path.Combine(dir, "avcodec-62.dll")))
             return dir;
 

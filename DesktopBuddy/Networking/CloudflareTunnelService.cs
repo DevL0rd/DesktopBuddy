@@ -63,8 +63,7 @@ public partial class DesktopBuddyMod
 
     private static string FindCloudflared()
     {
-        var modDir = System.IO.Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        string path = System.IO.Path.Combine(modDir, "DesktopBuddyNative", "cloudflared.exe");
+        string path = DesktopBuddyRuntimePaths.FindFile("cloudflared.exe");
         try
         {
             if (System.IO.File.Exists(path))

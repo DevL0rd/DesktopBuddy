@@ -2,6 +2,7 @@
 
 ### Build And Packaging
 - Fixed zip layout.
+- Split runtime payloads into a separate `DesktopBuddyRuntime` Thunderstore package.
 
 ## 1.0.14 - 2026-05-16
 

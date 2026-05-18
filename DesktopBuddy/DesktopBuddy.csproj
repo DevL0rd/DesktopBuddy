@@ -173,15 +173,15 @@
   <!-- Deploy to local Resonite BepisLoader plugin layout (skipped on CI / when Resonite not installed) -->
   <Target Name="CopyToResonite" AfterTargets="Build" Condition="Exists('$(ResonitePath)') and '$(DesktopBuddySkipDeploy)' != 'true'">
     <ItemGroup>
-      <DesktopBuddyNative Include="$(MSBuildThisFileDirectory)..\DesktopBuddyNative\**\*" />
+      <DesktopBuddyRuntime Include="$(MSBuildThisFileDirectory)..\DesktopBuddyRuntime\**\*" />
       <DesktopBuddyManagedDependency Include="@(DesktopBuddyManagedDependencyName->'$(OutputPath)%(Identity)')" />
     </ItemGroup>
-    <MakeDir Directories="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" />
+    <MakeDir Directories="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyNative)" DestinationFiles="@(DesktopBuddyNative->'$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
-    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyNative" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyRuntime)" DestinationFiles="@(DesktopBuddyRuntime->'$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\plugins\DesktopBuddy\DesktopBuddyRuntime" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>
 
 </Project>
