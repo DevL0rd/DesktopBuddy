@@ -1,3 +1,8 @@
+## 1.0.15 - 2026-05-18
+
+### Build And Packaging
+- Fixed zip layout.
+
 ## 1.0.14 - 2026-05-16
 
 ### Settings And UI

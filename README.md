@@ -22,7 +22,7 @@ Install or enable the required packages:
 - BepInExRenderer
 - RenderiteHook
 
-Download `DesktopBuddy-x.y.z.zip` from the latest [GitHub release](https://github.com/DevL0rd/DesktopBuddy/releases), then extract it into the correct root folder.
+Download `DesktopBuddy-x.y.z.zip` from the latest [GitHub release](https://github.com/DevL0rd/DesktopBuddy/releases), then extract it into the correct root folder. The zip contains the `BepInEx` and `Renderer` folders used by the manual install layout.
 
 For Gale, extract into the profile root:
 
@@ -87,7 +87,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
 
 ## Packaging
 
-Thunderstore package metadata still lives in `thunderstore.toml` so the release zip keeps the same package layout and manifest. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
+Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts\package.ps1` builds a clean GitHub release zip for manual installation into a Gale profile or manual BepisLoader root. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
@@ -97,6 +97,12 @@ Create the GitHub release zip locally with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
+```
+
+To build the old Thunderstore-style package layout for manager/testing use, add `-ThunderstoreFormat`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -ThunderstoreFormat -ZipName DesktopBuddy-Thunderstore
 ```
 
 
