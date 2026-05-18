@@ -123,9 +123,12 @@ function Copy-DesktopBuddyProfileDeploy {
     $modOutDir = Get-DesktopBuddyModOutput -ConfigurationName $ConfigurationName
     $bridgeDll = Join-Path $Root "DesktopBuddySharedTextureBridge\bin\$ConfigurationName\net472\DesktopBuddySharedTextureBridge.dll"
     $runtimeSource = Join-Path $Root "DesktopBuddyRuntime"
-    $gamePluginDir = Join-Path $ResolvedProfilePath "BepInEx\plugins\DesktopBuddy"
-    $runtimeTarget = Join-Path $gamePluginDir "DesktopBuddyRuntime"
-    $bridgeTarget = Join-Path $ResolvedProfilePath "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge"
+    $pluginsRoot = Join-Path $ResolvedProfilePath "BepInEx\plugins"
+    $gamePluginDir = Join-Path $pluginsRoot "DevL0rd-DesktopBuddy\DesktopBuddy"
+    $runtimeTarget = Join-Path $pluginsRoot "DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime"
+    $bridgeTarget = Join-Path $ResolvedProfilePath "Renderer\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddySharedTextureBridge"
+    $oldBridgeTarget = Join-Path $ResolvedProfilePath "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge"
+    $oldGamePluginDir = Join-Path $pluginsRoot "DesktopBuddy"
     $gameCache = Join-Path $ResolvedProfilePath "BepInEx\cache\chainloader_typeloader.dat"
     $rendererCache = Join-Path $ResolvedProfilePath "Renderer\BepInEx\cache\chainloader_typeloader.dat"
 
@@ -152,6 +155,25 @@ function Copy-DesktopBuddyProfileDeploy {
     }
 
     Write-Host "Deploying DesktopBuddy to BepInEx profile: $ResolvedProfilePath"
+    if (Test-Path -LiteralPath $oldGamePluginDir) {
+        try {
+            Remove-Item -LiteralPath $oldGamePluginDir -Recurse -Force
+            Write-Host "Removed old DesktopBuddy deploy folder: $oldGamePluginDir"
+        }
+        catch {
+            Write-Warning "Could not remove old DesktopBuddy deploy folder '$oldGamePluginDir': $($_.Exception.Message)"
+        }
+    }
+    if (Test-Path -LiteralPath $oldBridgeTarget) {
+        try {
+            Remove-Item -LiteralPath $oldBridgeTarget -Recurse -Force
+            Write-Host "Removed old DesktopBuddy renderer bridge folder: $oldBridgeTarget"
+        }
+        catch {
+            Write-Warning "Could not remove old DesktopBuddy renderer bridge folder '$oldBridgeTarget': $($_.Exception.Message)"
+        }
+    }
+
     New-Item -ItemType Directory -Force -Path $gamePluginDir, $runtimeTarget, $bridgeTarget | Out-Null
 
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll") -Force
@@ -208,7 +230,7 @@ function Stop-ProcessTreeByName {
 
 function Get-DesktopBuddyCloudflared {
     @(Get-CimInstance Win32_Process -Filter "name='cloudflared.exe'" -ErrorAction SilentlyContinue | Where-Object {
-        ($_.ExecutablePath -like "*\plugins\DesktopBuddy\DesktopBuddyRuntime\cloudflared.exe") -or
+        ($_.ExecutablePath -like "*\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime\cloudflared.exe") -or
         ($_.CommandLine -like "*--url http://localhost:48080*")
     })
 }

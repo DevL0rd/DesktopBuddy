@@ -229,6 +229,8 @@ function Build-ManualPackage {
     $modOutDir = Get-DesktopBuddyModOutput -ConfigurationName $Configuration
     $bridgeDll = Join-Path $Root "DesktopBuddySharedTextureBridge\bin\$Configuration\net472\DesktopBuddySharedTextureBridge.dll"
     $runtimeSource = Join-Path $Root $runtimeDirName
+    $namespace = Get-TomlString $toml "namespace"
+    $mainName = Get-TomlString $toml "name"
 
     foreach ($path in @((Join-Path $modOutDir "DesktopBuddy.dll"), $bridgeDll, $runtimeSource, (Join-Path $Root "icon_transparent.png"))) {
         if (-not (Test-Path -LiteralPath $path)) {
@@ -239,9 +241,9 @@ function Build-ManualPackage {
     $name = if ([string]::IsNullOrWhiteSpace($ZipName)) { "DesktopBuddy-$version" } else { $ZipName }
     $stage = New-PackageStage -Name $name
     $outZip = Join-Path $Root "$name.zip"
-    $gamePluginDir = Join-Path $stage "BepInEx\plugins\DesktopBuddy"
-    $runtimeTarget = Join-Path $gamePluginDir $runtimeDirName
-    $bridgeTarget = Join-Path $stage "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge"
+    $gamePluginDir = Join-Path $stage "BepInEx\plugins\$namespace-$mainName\DesktopBuddy"
+    $runtimeTarget = Join-Path $stage "BepInEx\plugins\$namespace-$runtimePackageName\DesktopBuddy\$runtimeDirName"
+    $bridgeTarget = Join-Path $stage "Renderer\BepInEx\plugins\$namespace-$mainName\DesktopBuddySharedTextureBridge"
 
     New-Item -ItemType Directory -Force -Path $gamePluginDir, $runtimeTarget, $bridgeTarget | Out-Null
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll")
@@ -256,7 +258,7 @@ function Build-ManualPackage {
 
     New-ZipFromStage -Stage $stage -OutZip $outZip
     Remove-Item -LiteralPath $stage -Recurse -Force
-    Write-Host "Done: $outZip (manual profile-root install layout)"
+    Write-Host "Done: $outZip (manual profile-root package layout)"
 }
 
 function Build-MainThunderstorePackage {

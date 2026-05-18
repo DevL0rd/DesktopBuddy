@@ -12,8 +12,6 @@ DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and
 
 ### Easy Install
 
-## Install
-
 1. Follow instructions here to setup resonite with Gale, a mod manager for bepis mods.
 https://modding.resonite.net/getting-started/installation/
 

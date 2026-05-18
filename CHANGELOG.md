@@ -1,3 +1,15 @@
+## 1.0.17 - 2026-05-19
+
+### Build And Packaging
+- Aligned the manual install zip, local build deploy, and Gale/Thunderstore final install layout so DesktopBuddy uses the same package-style paths everywhere.
+- Fixed DesktopBuddy runtime lookup to resolve `DesktopBuddyRuntime` from `BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime`.
+- Moved the renderer bridge manual/local deploy path to match Gale's package-wrapped renderer install path.
+- Kept the runtime package version unchanged because the runtime payload files did not change.
+
+### Runtime
+- Fixed FFmpeg, Cloudflare tunnel, and SoftCam loading after the runtime payload split.
+- Fixed the setup panel missing the Install button when the runtime package was installed by Gale but DesktopBuddy was looking in the wrong folder.
+
 ## 1.0.15 - 2026-05-18
 
 ### Build And Packaging
