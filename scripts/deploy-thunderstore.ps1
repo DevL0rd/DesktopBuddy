@@ -80,7 +80,12 @@ function Invoke-TcliPublish {
         throw "Package zip not found: $ZipPath"
     }
 
-    $output = @(dotnet tcli publish --file $ZipPath 2>&1)
+    $token = $env:TCLI_AUTH_TOKEN
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        throw "TCLI_AUTH_TOKEN is empty. Add it as a repository secret, or attach the GitHub environment that contains it to this workflow job."
+    }
+
+    $output = @(dotnet tcli publish --file $ZipPath --token $token 2>&1)
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         $joinedOutput = $output -join "`n"
