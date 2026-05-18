@@ -87,7 +87,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
 
 ## Packaging
 
-Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts\package.ps1` builds a clean GitHub release zip for manual installation into a Gale profile or manual BepisLoader root. `VERSION` is the source of truth for the plugin and package version. After changing `VERSION`, run:
+Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts\package.ps1` builds a clean GitHub release zip for manual installation into a Gale profile or manual BepisLoader root. `VERSION` is the source of truth for the plugin package, and `RUNTIME_VERSION` is the source of truth for the separate `DesktopBuddyRuntime` Thunderstore package. After changing either file, run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
@@ -99,10 +99,10 @@ Create the GitHub release zip locally with:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
 ```
 
-To build the old Thunderstore-style package layout for manager/testing use, add `-ThunderstoreFormat`:
+To build the split Thunderstore packages for manager/testing use, add `-ThunderstoreFormat`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -ThunderstoreFormat -ZipName DesktopBuddy-Thunderstore
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -ThunderstoreFormat
 ```
 
 
@@ -117,8 +117,8 @@ Special thanks to the projects and libraries DesktopBuddy builds on.
 | [InterprocessLib](https://thunderstore.io/c/resonite/p/Nytra/InterprocessLib/) | Control messages between the game plugin and renderer bridge |
 | [BepInEx.Renderer](https://github.com/ResoniteModding/BepInEx.Renderer) | Renderer-side BepInEx loader |
 | [RenderiteHook](https://github.com/ResoniteModding/RenderiteHook) | Renderer-side hook support |
-| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `DesktopBuddyNative` |
-| [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg, packaged in `DesktopBuddyNative` |
+| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | H.264/HEVC encoding libraries in `DesktopBuddyRuntime` |
+| [FFmpeg.AutoGen](https://github.com/Ruslan-B/FFmpeg.AutoGen) | C# bindings for FFmpeg, packaged in `DesktopBuddyRuntime` |
 | [cloudflared](https://github.com/cloudflare/cloudflared) | Bundled Cloudflare Tunnel client for public HTTPS stream URLs |
 | [SoftCam](https://github.com/tshino/softcam) | DirectShow virtual camera filter |
 | [VB-Cable](https://vb-audio.com/Cable/) | Virtual microphone driver; no public source repository is provided by VB-Audio |

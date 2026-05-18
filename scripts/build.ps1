@@ -94,8 +94,8 @@ function Copy-DeployFile {
 }
 
 function Update-SetupPayloadManifest {
-    $nativeSource = Join-Path $Root "DesktopBuddyNative"
-    $manifest = Join-Path $nativeSource "DesktopBuddySetupPayloads.md5"
+    $runtimeSource = Join-Path $Root "DesktopBuddyRuntime"
+    $manifest = Join-Path $runtimeSource "DesktopBuddySetupPayloads.md5"
     $payloads = @(
         "softcam64.dll",
         "softcam.dll",
@@ -103,9 +103,9 @@ function Update-SetupPayloadManifest {
     )
 
     $lines = foreach ($payload in $payloads) {
-        $path = Join-Path $nativeSource $payload
+        $path = Join-Path $runtimeSource $payload
         if (-not (Test-Path -LiteralPath $path)) {
-            throw "Setup payload not found: DesktopBuddyNative\$payload"
+            throw "Setup payload not found: DesktopBuddyRuntime\$payload"
         }
 
         "$payload=$((Get-FileHash -Algorithm MD5 -LiteralPath $path).Hash.ToLowerInvariant())"
@@ -122,9 +122,9 @@ function Copy-DesktopBuddyProfileDeploy {
 
     $modOutDir = Get-DesktopBuddyModOutput -ConfigurationName $ConfigurationName
     $bridgeDll = Join-Path $Root "DesktopBuddySharedTextureBridge\bin\$ConfigurationName\net472\DesktopBuddySharedTextureBridge.dll"
-    $nativeSource = Join-Path $Root "DesktopBuddyNative"
+    $runtimeSource = Join-Path $Root "DesktopBuddyRuntime"
     $gamePluginDir = Join-Path $ResolvedProfilePath "BepInEx\plugins\DesktopBuddy"
-    $nativeTarget = Join-Path $gamePluginDir "DesktopBuddyNative"
+    $runtimeTarget = Join-Path $gamePluginDir "DesktopBuddyRuntime"
     $bridgeTarget = Join-Path $ResolvedProfilePath "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge"
     $gameCache = Join-Path $ResolvedProfilePath "BepInEx\cache\chainloader_typeloader.dat"
     $rendererCache = Join-Path $ResolvedProfilePath "Renderer\BepInEx\cache\chainloader_typeloader.dat"
@@ -133,7 +133,7 @@ function Copy-DesktopBuddyProfileDeploy {
         (Join-Path $modOutDir "DesktopBuddy.dll"),
         (Join-Path $modOutDir "icon_transparent.png"),
         $bridgeDll,
-        $nativeSource
+        $runtimeSource
     )) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Required deploy input not found: $path"
@@ -152,7 +152,7 @@ function Copy-DesktopBuddyProfileDeploy {
     }
 
     Write-Host "Deploying DesktopBuddy to BepInEx profile: $ResolvedProfilePath"
-    New-Item -ItemType Directory -Force -Path $gamePluginDir, $nativeTarget, $bridgeTarget | Out-Null
+    New-Item -ItemType Directory -Force -Path $gamePluginDir, $runtimeTarget, $bridgeTarget | Out-Null
 
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll") -Force
     Copy-DeployFile -Source (Join-Path $modOutDir "icon_transparent.png") -Destination (Join-Path $gamePluginDir "icon_transparent.png")
@@ -161,15 +161,15 @@ function Copy-DesktopBuddyProfileDeploy {
         Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha") -Force
     }
 
-    foreach ($file in Get-ChildItem -LiteralPath $nativeSource -File) {
-        Copy-DeployFile -Source $file.FullName -Destination (Join-Path $nativeTarget $file.Name)
+    foreach ($file in Get-ChildItem -LiteralPath $runtimeSource -File) {
+        Copy-DeployFile -Source $file.FullName -Destination (Join-Path $runtimeTarget $file.Name)
     }
     foreach ($file in @(
         "FFmpeg.AutoGen.dll",
         "Microsoft.Windows.SDK.NET.dll",
         "WinRT.Runtime.dll"
     )) {
-        Copy-DeployFile -Source (Join-Path $modOutDir $file) -Destination (Join-Path $nativeTarget $file)
+        Copy-DeployFile -Source (Join-Path $modOutDir $file) -Destination (Join-Path $runtimeTarget $file)
     }
 
     Copy-DeployFile -Source $bridgeDll -Destination (Join-Path $bridgeTarget "DesktopBuddySharedTextureBridge.dll")
@@ -208,6 +208,7 @@ function Stop-ProcessTreeByName {
 
 function Get-DesktopBuddyCloudflared {
     @(Get-CimInstance Win32_Process -Filter "name='cloudflared.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        ($_.ExecutablePath -like "*\plugins\DesktopBuddy\DesktopBuddyRuntime\cloudflared.exe") -or
         ($_.ExecutablePath -like "*\plugins\DesktopBuddy\DesktopBuddyNative\cloudflared.exe") -or
         ($_.CommandLine -like "*--url http://localhost:48080*")
     })

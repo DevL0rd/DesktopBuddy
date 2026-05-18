@@ -735,8 +735,7 @@ internal static class DesktopBuddyFirstRunSetup
 
     private static string GetNativeDir()
     {
-        string pluginDir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        return Path.Combine(pluginDir, "DesktopBuddyNative");
+        return DesktopBuddyRuntimePaths.GetDirectory();
     }
 
     private static string ResolveResoniteRoot()

@@ -49,7 +49,6 @@ public partial class DesktopBuddyMod
     private static string GetDesktopBuddyManagedDependencyPath(string assemblyName)
     {
         string fileName = assemblyName + ".dll";
-        string modDir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? "";
-        return Path.Combine(modDir, "DesktopBuddyNative", fileName);
+        return DesktopBuddyRuntimePaths.FindFile(fileName);
     }
 }
