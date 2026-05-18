@@ -1,6 +1,9 @@
 param(
     [string]$Configuration = "Release",
-    [string]$ZipName = $env:ZIP_NAME
+    [string]$ZipName = $env:ZIP_NAME,
+
+    [Alias("Thunderstore")]
+    [switch]$ThunderstoreFormat
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,11 +74,7 @@ function Update-SetupPayloadManifest {
     Set-Content -LiteralPath $manifest -Value $lines
 }
 
-$packageName = Get-TomlString $toml "name"
-$websiteUrl = Get-TomlString $toml "websiteUrl"
-$description = Get-TomlString $toml "description"
 $tomlVersion = Get-TomlString $toml "versionNumber"
-$dependencies = Get-TomlDependencies $toml
 if ($tomlVersion -ne $version) {
     throw "VERSION ($version) does not match thunderstore.toml versionNumber ($tomlVersion). Run scripts\sync-version.ps1."
 }
@@ -105,14 +104,21 @@ $changelogSource = Join-Path $Root "CHANGELOG.md"
 $nativeSource = Join-Path $Root "DesktopBuddyNative"
 Update-SetupPayloadManifest -NativeSource $nativeSource
 
-foreach ($path in @(
+$requiredInputs = @(
     $modDll,
     $bridgeDll,
-    $readmeSource,
-    $iconSource,
     $transparentIconSource,
-    $changelogSource
-)) {
+    $nativeSource
+)
+if ($ThunderstoreFormat) {
+    $requiredInputs += @(
+        $readmeSource,
+        $iconSource,
+        $changelogSource
+    )
+}
+
+foreach ($path in $requiredInputs) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Required package input not found: $path"
     }
@@ -137,7 +143,9 @@ if (Test-Path -LiteralPath $stage) {
 }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-$gamePluginDir = Join-Path $stage "plugins\DesktopBuddy"
+$layoutName = if ($ThunderstoreFormat) { "Thunderstore package layout" } else { "manual profile-root install layout" }
+$gamePluginRelativeDir = if ($ThunderstoreFormat) { "plugins\DesktopBuddy" } else { "BepInEx\plugins\DesktopBuddy" }
+$gamePluginDir = Join-Path $stage $gamePluginRelativeDir
 $nativeTarget = Join-Path $gamePluginDir "DesktopBuddyNative"
 $bridgeTarget = Join-Path $stage "Renderer\BepInEx\plugins\DesktopBuddySharedTextureBridge"
 
@@ -160,18 +168,20 @@ foreach ($file in @(
 
 Copy-Item -LiteralPath $bridgeDll -Destination (Join-Path $bridgeTarget "DesktopBuddySharedTextureBridge.dll")
 
-Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $stage "README.md")
-Copy-Item -LiteralPath $iconSource -Destination (Join-Path $stage "icon.png")
-Copy-Item -LiteralPath $changelogSource -Destination (Join-Path $stage "CHANGELOG.md")
+if ($ThunderstoreFormat) {
+    Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $stage "README.md")
+    Copy-Item -LiteralPath $iconSource -Destination (Join-Path $stage "icon.png")
+    Copy-Item -LiteralPath $changelogSource -Destination (Join-Path $stage "CHANGELOG.md")
 
-$manifest = [ordered]@{
-    name = $packageName
-    version_number = $version
-    website_url = $websiteUrl
-    description = $description
-    dependencies = $dependencies
+    $manifest = [ordered]@{
+        name = Get-TomlString $toml "name"
+        version_number = $version
+        website_url = Get-TomlString $toml "websiteUrl"
+        description = Get-TomlString $toml "description"
+        dependencies = Get-TomlDependencies $toml
+    }
+    $manifest | ConvertTo-Json -Depth 4 | Set-Content -NoNewline -LiteralPath (Join-Path $stage "manifest.json")
 }
-$manifest | ConvertTo-Json -Depth 4 | Set-Content -NoNewline -LiteralPath (Join-Path $stage "manifest.json")
 
 if (Test-Path -LiteralPath $outZip) {
     Remove-Item -LiteralPath $outZip -Force
@@ -197,4 +207,4 @@ Remove-Item -LiteralPath $stage -Recurse -Force
 
 Write-Host ""
 Write-Host "Done:"
-Write-Host "  $ZipName.zip (Thunderstore package layout)"
+Write-Host "  $ZipName.zip ($layoutName)"
