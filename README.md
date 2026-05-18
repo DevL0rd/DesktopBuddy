@@ -5,25 +5,31 @@
 </p>
 
 
-DesktopBuddy brings your Windows desktop into Resonite as native-feeling world-space panels. It is built for people who want their real desktop, monitors, and application windows available inside a world without turning the experience into a flat screen overlay.
+DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and microphone to integrate windows completly and seemlessly into resonite.
 
 
-## Quick Start
+## Install
 
-Follow the [Bepis modding installation instructions](https://modding.resonite.net/getting-started/installation/) to get the loader set up.
+### Easy Install
 
-NOTE DESKTOPBUDDY WILL NOT SHOW ON GALE, THIS IS BECAUSE EVERY UPDATE REQURIES A SLOW MANUAL REVIEW PROCESS DUE TO THE NATURE OF THIS MOD. IT IS APPROVED THERE BUT IT MAY BE SEVERELY OUTDATED. INSTALLING MANUALLY IS REQUIRED TO GET LATEST UPDATES
+## Install
 
-Install or enable the required packages:
+1. Follow instructions here to setup resonite with Gale, a mod manager for bepis mods.
+https://modding.resonite.net/getting-started/installation/
 
-- BepisLoader
-- BepisResoniteWrapper
-- InterprocessLib
-- BepInExRenderer
-- RenderiteHook
+2. Search for DesktopBuddy and enable the mod.
 
-Download `DesktopBuddy-x.y.z.zip` from the latest [GitHub release](https://github.com/DevL0rd/DesktopBuddy/releases), then extract it into the correct root folder. The zip contains the `BepInEx` and `Renderer` folders used by the manual install layout.
+3. Launch resonite with Gale.
 
+Thunderstore packages update more slowly because every release can require review.
+
+### Manual Install
+
+Manual GitHub release zips are the bleeding-edge path. They include both DesktopBuddy and the runtime payloads in one self-contained zip.
+
+1. Download `DesktopBuddy-x.y.z.zip` from the latest [GitHub release](https://github.com/DevL0rd/DesktopBuddy/releases), then extract it into the correct root folder. The zip contains the `BepInEx` and `Renderer` folders used by the manual install layout.
+
+2. Choose install method:
 For Gale, extract into the profile root:
 
 ```text
@@ -39,6 +45,14 @@ C:\Program Files (x86)\Steam\steamapps\common\Resonite
 ```
 
 For manual installs, launch Resonite with BepisLoader enabled, such as with `--hookfxr-enable`.
+
+Install or enable these loader packages too:
+
+- BepisLoader
+- BepisResoniteWrapper
+- InterprocessLib
+- BepInExRenderer
+- RenderiteHook
 
 ## Features
 - Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
@@ -85,7 +99,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
 ```
 
 
-## Packaging
+## Packaging And Release
 
 Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts\package.ps1` builds a clean GitHub release zip for manual installation into a Gale profile or manual BepisLoader root. `VERSION` is the source of truth for the plugin package, and `RUNTIME_VERSION` is the source of truth for the separate `DesktopBuddyRuntime` Thunderstore package. After changing either file, run:
 
@@ -93,17 +107,21 @@ Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
 ```
 
-Create the GitHub release zip locally with:
+Create the manual GitHub release zip locally with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
 ```
+
+The manual zip is always self-contained and includes both the mod DLLs and `DesktopBuddyRuntime`.
 
 To build the split Thunderstore packages for manager/testing use, add `-ThunderstoreFormat`:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -ThunderstoreFormat
 ```
+
+GitHub Actions refreshes the manual release zip on pushes to `main`, even when `VERSION` does not change. Thunderstore publishing is separate and only uploads exact package versions that do not already exist.
 
 
 ## Credits
