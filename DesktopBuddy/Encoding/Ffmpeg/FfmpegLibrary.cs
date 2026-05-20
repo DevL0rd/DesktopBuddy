@@ -1,8 +1,5 @@
 using System;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading;
 using FFmpeg.AutoGen;
 
 namespace DesktopBuddy;
@@ -44,30 +41,6 @@ public sealed unsafe partial class FfmpegEncoder
 
         Log.Msg($"[FFmpeg] Missing FFmpeg libraries at {dir}");
         return null;
-    }
-
-    public static void PrewarmHardwareEncoder(IntPtr d3dDevice, object d3dContextLock)
-    {
-        lock (_ffmpegInitLock)
-        {
-            if (_hardwareEncoderPrewarmed) return;
-            if (d3dDevice == IntPtr.Zero)
-            {
-                Log.Msg("[FFmpeg] Hardware encoder prewarm skipped: no D3D device");
-                return;
-            }
-
-            using var encoder = new FfmpegEncoder(0);
-            if (encoder.Initialize(d3dDevice, 640, 360, d3dContextLock))
-            {
-                _hardwareEncoderPrewarmed = true;
-                Log.Msg("[FFmpeg] Hardware encoder prewarmed");
-            }
-            else
-            {
-                Log.Msg("[FFmpeg] Hardware encoder prewarm failed");
-            }
-        }
     }
 
 }

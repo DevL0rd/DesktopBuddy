@@ -150,7 +150,7 @@ public sealed unsafe partial class FfmpegEncoder
                 bool converted = false;
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    CopyWithD3dContextLock(() =>
+                    TryCopyWithD3dContextLock(() =>
                     {
                         converted = VideoProcessorConvert(srcTexture);
                         if (converted)
@@ -169,14 +169,20 @@ public sealed unsafe partial class FfmpegEncoder
             }
             else
             {
+                bool copied = false;
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    CopyWithD3dContextLock(() =>
+                    copied = TryCopyWithD3dContextLock(() =>
                     {
                         IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
                         int dstIndex = (int)_hwFrame->data[1];
                         CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, srcTexture, (int)_width, (int)_height);
                     });
+                }
+                if (!copied)
+                {
+                    ffmpeg.av_frame_unref(_hwFrame);
+                    return;
                 }
             }
 
@@ -276,16 +282,31 @@ public sealed unsafe partial class FfmpegEncoder
         fn(deviceContext, dstTexture, (uint)dstArrayIndex, 0, 0, 0, srcTexture, 0, box);
     }
 
-    private void CopyWithD3dContextLock(Action copy)
+    private bool TryCopyWithD3dContextLock(Action copy)
     {
         if (_d3dContextLock == null)
         {
             copy();
-            return;
+            return true;
         }
 
-        lock (_d3dContextLock)
+        if (!Monitor.TryEnter(_d3dContextLock, 50))
+        {
+            int timeouts = Interlocked.Increment(ref _d3dLockTimeouts);
+            if (timeouts == 1 || timeouts % 120 == 0)
+                Log.Msg($"[FfmpegEnc:{_streamId}] D3D lock busy, dropping encoder frame (count={timeouts})");
+            return false;
+        }
+
+        try
+        {
             copy();
+            return true;
+        }
+        finally
+        {
+            Monitor.Exit(_d3dContextLock);
+        }
     }
 
 }

@@ -1191,27 +1191,33 @@ public partial class DesktopBuddyMod
         }
 
         bool useMediaMtx = IsMediaMtxEnabled;
-        var remoteStream = BuildRemoteStream(new RemoteStreamBuildContext
+        root.World.RunInUpdates(1, () =>
         {
-            Root = root,
-            Hwnd = hwnd,
-            Width = w,
-            Height = h,
-            CanvasScale = canvasScale,
-            Session = session,
-            UseMediaMtx = useMediaMtx,
-            VolumeSlider = volSlider,
-            StreamOutputVolume = streamOutputVolume,
-            IsPrivate = () => isPrivate,
-            CurrentPanelCurvature = () => currentPanelCurvature
+            if (root == null || root.IsDestroyed || session == null || session.Cleaned)
+                return;
+
+            var remoteStream = BuildRemoteStream(new RemoteStreamBuildContext
+            {
+                Root = root,
+                Hwnd = hwnd,
+                Width = w,
+                Height = h,
+                CanvasScale = canvasScale,
+                Session = session,
+                UseMediaMtx = useMediaMtx,
+                VolumeSlider = volSlider,
+                StreamOutputVolume = streamOutputVolume,
+                IsPrivate = () => isPrivate,
+                CurrentPanelCurvature = () => currentPanelCurvature
+            });
+            if (remoteStream != null)
+            {
+                videoTexRef = remoteStream.VideoTexture;
+                streamPlaneRef = remoteStream.StreamPlane;
+                streamCanvasRef = remoteStream.StreamCanvas;
+                ApplyPanelCurvature(currentPanelCurvature);
+            }
         });
-        if (remoteStream != null)
-        {
-            videoTexRef = remoteStream.VideoTexture;
-            streamPlaneRef = remoteStream.StreamPlane;
-            streamCanvasRef = remoteStream.StreamCanvas;
-            ApplyPanelCurvature(currentPanelCurvature);
-        }
 
         grabbable = root.AttachComponent<Grabbable>();
         grabbable.Scalable.Value = true;

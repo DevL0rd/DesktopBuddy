@@ -144,13 +144,21 @@ public partial class DesktopBuddyMod
                             var stopTicks = TraceStart($"FfmpegEncoder.Stop stream={streamId}");
                             encoderToDispose.Stop();
                             TraceDone($"FfmpegEncoder.Stop stream={streamId}", stopTicks);
+                        }
+
+                        if (StreamServer != null)
+                        {
+                            var serverTicks = TraceStart($"BuiltInStreamServer.StopEncoder stream={streamId}");
+                            StreamServer.StopEncoder(streamId);
+                            TraceDone($"BuiltInStreamServer.StopEncoder stream={streamId}", serverTicks);
+                        }
+                        else if (encoderToDispose != null)
+                        {
                             var disposeTicks = TraceStart($"FfmpegEncoder.Dispose stream={streamId}");
                             encoderToDispose.Dispose();
                             TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
                         }
-                        var serverTicks = TraceStart($"BuiltInStreamServer.StopEncoder stream={streamId}");
-                        StreamServer?.StopEncoder(streamId);
-                        TraceDone($"BuiltInStreamServer.StopEncoder stream={streamId}", serverTicks);
+
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 

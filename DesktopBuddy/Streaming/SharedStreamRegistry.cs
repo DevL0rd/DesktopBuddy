@@ -9,6 +9,7 @@ internal sealed class SharedStream
     public int StreamId;
     public FfmpegEncoder Encoder;
     public AudioCapture Audio;
+    public Action StartAudio;
     public Uri StreamUrl;
     public int RefCount;
     public DesktopSession DriverSession;

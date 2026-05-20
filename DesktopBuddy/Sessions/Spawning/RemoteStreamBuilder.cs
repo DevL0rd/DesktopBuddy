@@ -46,6 +46,8 @@ public partial class DesktopBuddyMod
             SharedStream shared = AcquireSharedStream(context.Hwnd, context.UseMediaMtx);
             session.StreamId = shared.StreamId;
             session.Encoder = shared.Encoder;
+            session.StreamAudioCapture = shared.Audio;
+            session.StartStreamAudioCapture = shared.StartAudio;
             var nvEncoder = shared.Encoder;
 
             if (session.SpatialAudioSource != null && shared.Audio != null)
@@ -55,7 +57,7 @@ public partial class DesktopBuddyMod
 
             if (shouldDriveEncoder)
             {
-                ConnectEncoder(session, nvEncoder);
+                ConnectEncoder(session, nvEncoder, shared.Audio, shared.StartAudio);
                 Msg($"[RemoteStream] This panel drives the encoder for stream {shared.StreamId}");
             }
             else

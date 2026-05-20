@@ -98,6 +98,30 @@ public partial class DesktopBuddyMod
         return IsLocalStreamAllowedByGraceGate(session);
     }
 
+    private static bool IsAnyStreamPlaybackAllowedNow(DesktopSession session)
+    {
+        return session?.CullingAppliedStreamAllowedByUserId.Values.Any(allowed => allowed) == true;
+    }
+
+    private static void ApplyStreamUrlOverrideForUser(DesktopSession session, FrooxEngine.User user, bool allowed)
+    {
+        if (session?.StreamUrlOverride == null || session.StreamUrlOverride.IsDestroyed || user == null)
+            return;
+
+        session.StreamUrlOverride.SetOverride(user, allowed ? session.StreamUrl : null);
+    }
+
+    private static void ApplyStreamUrlOverrides(DesktopSession session)
+    {
+        if (session?.StreamUrlOverride == null || session.StreamUrlOverride.IsDestroyed || session.Root?.World == null)
+            return;
+
+        session.StreamUrlOverride.Default.Value = null;
+
+        foreach (var user in session.Root.World.AllUsers.Where(u => u.IsPresentInWorld))
+            ApplyStreamUrlOverrideForUser(session, user, GetAppliedStreamAllowed(session, user));
+    }
+
     private static void SetRemoteStreamUrl(DesktopSession session, Uri url, string reason)
     {
         var videoTex = session?.VideoTexture;
@@ -105,12 +129,14 @@ public partial class DesktopBuddyMod
             return;
 
         session.StreamUrl = url;
-        bool playbackAllowed = IsLocalStreamPlaybackAllowedNow(session);
+        bool playbackAllowed = session.StreamUrlOverride != null && !session.StreamUrlOverride.IsDestroyed
+            ? IsAnyStreamPlaybackAllowedNow(session)
+            : IsLocalStreamPlaybackAllowedNow(session);
         if (!playbackAllowed && videoTex.IsPlaying)
             videoTex.Stop();
 
-        if (session.StreamUrlDriver != null && !session.StreamUrlDriver.IsDestroyed)
-            session.StreamUrlDriver.TrueValue.Value = url;
+        if (session.StreamUrlOverride != null && !session.StreamUrlOverride.IsDestroyed)
+            ApplyStreamUrlOverrides(session);
         else
             videoTex.URL.Value = playbackAllowed ? url : null;
 
@@ -127,12 +153,15 @@ public partial class DesktopBuddyMod
         if (videoTex == null || videoTex.IsDestroyed)
             return;
 
+        session.StreamUrl = null;
+
         if (videoTex.IsPlaying)
             videoTex.Stop();
 
-        if (session.StreamUrlDriver != null && !session.StreamUrlDriver.IsDestroyed)
-            session.StreamUrlDriver.TrueValue.Value = null;
-        videoTex.URL.Value = null;
+        if (session.StreamUrlOverride != null && !session.StreamUrlOverride.IsDestroyed)
+            ApplyStreamUrlOverrides(session);
+        else
+            videoTex.URL.Value = null;
 
         if (!string.IsNullOrWhiteSpace(reason))
             Msg($"[RemoteStream] URL cleared ({reason})");

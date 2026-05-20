@@ -75,11 +75,12 @@ public partial class DesktopBuddyMod
         finalOverride.PersistentOverrides.Value = false;
         finalOverride.ClearOnUserLeave.Value = true;
 
-        var urlDriver = gateSlot.AttachComponent<BooleanValueDriver<Uri>>();
-        urlDriver.TargetField.Target = videoTex.URL;
-        urlDriver.FalseValue.Value = null;
-        urlDriver.TrueValue.Value = null;
-        urlDriver.State.DriveFrom(finalAllowed.Value);
+        var urlOverride = gateSlot.AttachComponent<ValueUserOverride<Uri>>();
+        urlOverride.Target.Target = videoTex.URL;
+        urlOverride.Default.Value = null;
+        urlOverride.CreateOverrideOnWrite.Value = false;
+        urlOverride.PersistentOverrides.Value = false;
+        urlOverride.ClearOnUserLeave.Value = true;
 
         session.ViewerAllowedField = viewerAllowed;
         session.PreviewAllowedField = previewAllowed;
@@ -88,7 +89,7 @@ public partial class DesktopBuddyMod
         session.ViewerStreamAllowed = viewerOverride;
         session.PreviewStreamAllowed = previewOverride;
         session.FinalStreamAllowedOverride = finalOverride;
-        session.StreamUrlDriver = urlDriver;
+        session.StreamUrlOverride = urlOverride;
         session.CullingTracker = tracker;
         session.CullingTriggerSlot = triggerSlot;
         session.CullingSphereCollider = sphere;
@@ -242,6 +243,8 @@ public partial class DesktopBuddyMod
         session.CullingAppliedStreamAllowedByUserId[key] = allowed;
         if (session.FinalStreamAllowedOverride != null && !session.FinalStreamAllowedOverride.IsDestroyed)
             session.FinalStreamAllowedOverride.SetOverride(user, allowed);
+
+        ApplyStreamUrlOverrideForUser(session, user, allowed);
     }
 
 }

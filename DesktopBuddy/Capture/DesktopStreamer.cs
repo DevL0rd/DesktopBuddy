@@ -34,6 +34,7 @@ public sealed class DesktopStreamer : IDisposable
 
     public bool TryInitialCapture()
     {
+        Log.Msg($"[DesktopStreamer] Initial capture starting hwnd={_hwnd} monitor=0x{_monitorHandle:X}");
         var wgc = new WgcCapture();
         bool success = false;
 
@@ -45,6 +46,7 @@ public sealed class DesktopStreamer : IDisposable
 
         if (!success)
         {
+            Log.Msg($"[DesktopStreamer] Initial capture failed hwnd={_hwnd} monitor=0x{_monitorHandle:X}");
             wgc.Dispose();
             return false;
         }

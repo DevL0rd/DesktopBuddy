@@ -118,10 +118,11 @@ public partial class DesktopBuddyMod
                 try
                 {
                     oldEncoder?.Stop();
-                    oldStreamer?.FlushD3dContext();
                     if (!useMediaMtx)
                         StreamServer?.StopEncoder(oldStreamId);
-                    oldEncoder?.Dispose();
+                    else
+                        oldEncoder?.Dispose();
+                    oldStreamer?.FlushD3dContext();
                 }
                 catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
             });

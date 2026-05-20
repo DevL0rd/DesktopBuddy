@@ -34,7 +34,7 @@ public sealed partial class WgcCapture
     }
 
     private static readonly object _sharedD3dLock = new();
-    private static bool _sharedD3dReady;
+    private static volatile bool _sharedD3dReady;
     private static IntPtr _sharedD3dDevice;
     private static IntPtr _sharedD3dContext;
     private static uint _sharedD3dAdapterVendorId;
@@ -138,12 +138,12 @@ public sealed partial class WgcCapture
 
     internal static bool SharedD3dDeviceInitialized
     {
-        get { lock (_sharedD3dLock) return _sharedD3dReady; }
+        get { return _sharedD3dReady; }
     }
 
     internal static long SharedD3dAdapterLuid
     {
-        get { lock (_sharedD3dLock) return _cachedPreferredAdapterLuid; }
+        get { return _cachedPreferredAdapterLuid; }
     }
 
 

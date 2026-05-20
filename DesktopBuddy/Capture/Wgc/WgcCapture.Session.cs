@@ -37,9 +37,11 @@ public sealed partial class WgcCapture
             {
                 _framePool?.Recreate(_winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2,
                     new SizeInt32 { Width = Width, Height = Height });
-                TryCreateSharedTexture(Width, Height);
+                bool textureReady = TryCreateSharedTexture(Width, Height);
                 _needsPoolRecreate = false;
-                Log.Msg($"[WgcCapture] FramePool/shared texture recreated for {Width}x{Height}");
+                Log.Msg(textureReady
+                    ? $"[WgcCapture] FramePool/shared texture recreated for {Width}x{Height}"
+                    : $"[WgcCapture] FramePool recreated but shared texture was not ready for {Width}x{Height}");
             }
             catch (Exception ex)
             {
@@ -55,10 +57,12 @@ public sealed partial class WgcCapture
         _isDesktop = hwnd == IntPtr.Zero;
         try
         {
+            Log.Msg($"[WgcCapture] Init starting hwnd={hwnd} monitor=0x{monitorHandle:X}");
             if (!EnsureSharedD3dDevice()) return false;
             _d3dDevice = _sharedD3dDevice;
             _d3dContext = _sharedD3dContext;
             _winrtDevice = _sharedWinrtDevice;
+            Log.Msg($"[WgcCapture] Shared D3D ready for hwnd={hwnd}");
 
             if (hwnd == IntPtr.Zero)
             {
@@ -68,18 +72,26 @@ public sealed partial class WgcCapture
             }
             else
             {
+                Log.Msg($"[WgcCapture] Creating capture for window 0x{hwnd:X}");
                 _item = CreateItemForWindow(hwnd);
             }
 
             if (_item == null) { Log.Msg("[WgcCapture] CaptureItem is null"); return false; }
+            Log.Msg($"[WgcCapture] CaptureItem ready: {_item.Size.Width}x{_item.Size.Height}, hwnd={hwnd}");
 
             _itemClosedHandler = (_, _) => { _closed = true; };
             _item.Closed += _itemClosedHandler;
 
             Width = _item.Size.Width;
             Height = _item.Size.Height;
-            TryCreateSharedTexture(Width, Height);
+            Log.Msg($"[WgcCapture] Creating shared texture {Width}x{Height}, hwnd={hwnd}");
+            if (!TryCreateSharedTexture(Width, Height))
+            {
+                Log.Msg($"[WgcCapture] Init failed: shared texture unavailable hwnd={hwnd}");
+                return false;
+            }
 
+            Log.Msg($"[WgcCapture] Creating frame pool {Width}x{Height}, hwnd={hwnd}");
             _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
                 _winrtDevice,
                 DirectXPixelFormat.B8G8R8A8UIntNormalized,
@@ -88,11 +100,13 @@ public sealed partial class WgcCapture
 
             _framePool.FrameArrived += OnFrameArrived;
 
+            Log.Msg($"[WgcCapture] Creating capture session hwnd={hwnd}");
             _session = _framePool.CreateCaptureSession(_item);
             try { _session.IsBorderRequired = false; } catch (Exception ex) { Log.Msg($"[WgcCapture] IsBorderRequired not supported (Win11+ only): {ex.Message}"); }
             TrySetIncludeSecondaryWindows(_session);
             _session.IsCursorCaptureEnabled = true;
 
+            Log.Msg($"[WgcCapture] Starting capture hwnd={hwnd}");
             _session.StartCapture();
 
             Log.Msg($"[WgcCapture] Init complete: {Width}x{Height}, hwnd={hwnd}");
