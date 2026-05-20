@@ -50,6 +50,7 @@ public sealed unsafe partial class FfmpegEncoder
     private volatile bool _disposed;
     private int _disposeGuard;
     private IntPtr _deviceContext;
+    private static readonly object _encoderD3dContextLock = new();
     private object _d3dContextLock;
 
     private Thread _encodeThread;
@@ -70,6 +71,7 @@ public sealed unsafe partial class FfmpegEncoder
     private long _readerOverrunEvents;
     private long _readerOverrunMaxBacklogBytes;
     private long _readerLastOverrunLogTicks;
+    private int _d3dLockTimeouts;
 
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
@@ -143,6 +145,8 @@ public sealed unsafe partial class FfmpegEncoder
     {
         _disposed = true;
         _initialized = false;
+        try { _encodeEvent.Set(); }
+        catch { }
     }
 
     public long CurrentWritePosition
@@ -154,7 +158,6 @@ public sealed unsafe partial class FfmpegEncoder
     }
 
     private static bool _ffmpegPathSet;
-    private static bool _hardwareEncoderPrewarmed;
 
     public FfmpegEncoder(int streamId, string rtspUrl = null)
     {

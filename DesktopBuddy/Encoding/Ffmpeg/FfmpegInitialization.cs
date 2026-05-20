@@ -12,13 +12,13 @@ public sealed unsafe partial class FfmpegEncoder
 
     private readonly object _initLock = new();
 
-    public bool Initialize(IntPtr d3dDevice, uint width, uint height, object d3dContextLock, AudioCapture audioCapture = null)
+    public bool Initialize(IntPtr d3dDevice, uint width, uint height, AudioCapture audioCapture = null)
     {
         lock (_initLock)
         {
         if (_initialized) return true;
         if (_initFailed || _disposed) return false;
-        _d3dContextLock = d3dContextLock;
+        _d3dContextLock = _encoderD3dContextLock;
 
         try
         {
@@ -175,10 +175,20 @@ public sealed unsafe partial class FfmpegEncoder
         }
     }
 
-    public void StartInitializeAsync(IntPtr d3dDevice, uint width, uint height, object d3dContextLock, AudioCapture audioCapture = null)
+    public void StartInitializeAsync(
+        IntPtr d3dDevice,
+        uint width,
+        uint height,
+        AudioCapture audioCapture = null,
+        Action startAudio = null)
     {
         if (Interlocked.Exchange(ref _initStarted, 1) != 0) return;
-        _initThread = new Thread(() => Initialize(d3dDevice, width, height, d3dContextLock, audioCapture))
+        _initThread = new Thread(() =>
+        {
+            try { startAudio?.Invoke(); }
+            catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Audio start before init failed: {ex}"); }
+            Initialize(d3dDevice, width, height, audioCapture);
+        })
         { Name = $"FfmpegEnc:{_streamId}:Init", IsBackground = true };
         _initThread.Start();
     }

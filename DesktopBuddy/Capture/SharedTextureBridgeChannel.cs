@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using DesktopBuddy.Shared;
 using InterprocessLib;
 
@@ -62,7 +63,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
         _slotWidths[slot] = 0;
         _slotHeights[slot] = 0;
 
-        SendStart(slot, sharedTextureHandle, sharedTextureWidth, sharedTextureHeight);
+        QueueStart(slot, sharedTextureHandle, sharedTextureWidth, sharedTextureHeight);
         Log.Msg($"[SharedTextureBridgeChannel] Registered texture slot={slot} shared=0x{sharedTextureHandle:X} {sharedTextureWidth}x{sharedTextureHeight}");
         return slot;
     }
@@ -74,16 +75,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
 
         if (_usedSlots.Remove(slot))
         {
-            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject START slot={slot}");
-            try
-            {
-                _messenger.SendObject(SharedTextureBridgeProtocol.StopMessageId, new SharedTextureStopMessage { SlotId = slot });
-                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject DONE slot={slot}");
-            }
-            catch (Exception ex)
-            {
-                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject ERROR slot={slot}: {ex}");
-            }
+            QueueStop(slot);
             _slotRunning[slot] = false;
             _slotWidths[slot] = 0;
             _slotHeights[slot] = 0;
@@ -102,7 +94,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
         _slotWidths[slot] = 0;
         _slotHeights[slot] = 0;
 
-        SendStart(slot, sharedTextureHandle, sharedTextureWidth, sharedTextureHeight);
+        QueueStart(slot, sharedTextureHandle, sharedTextureWidth, sharedTextureHeight);
         Log.Msg($"[SharedTextureBridgeChannel] Updated texture slot={slot} shared=0x{sharedTextureHandle:X} {sharedTextureWidth}x{sharedTextureHeight}");
     }
 
@@ -120,25 +112,50 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
                _slotHeights[slot] == height;
     }
 
-    private void SendStart(int slot, IntPtr sharedTextureHandle, int sharedTextureWidth, int sharedTextureHeight)
+    private void QueueStart(int slot, IntPtr sharedTextureHandle, int sharedTextureWidth, int sharedTextureHeight)
     {
-        try
+        ThreadPool.QueueUserWorkItem(_ =>
         {
-            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart START slot={slot} shared=0x{sharedTextureHandle:X}");
-            _messenger.SendObject(SharedTextureBridgeProtocol.StartMessageId, new SharedTextureStartMessage
+            try
             {
-                SlotId = slot,
-                SharedTextureHandle = sharedTextureHandle.ToInt64(),
-                SharedTextureWidth = sharedTextureWidth,
-                SharedTextureHeight = sharedTextureHeight
-            });
-            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart DONE slot={slot}");
-        }
-        catch (Exception ex)
+                var messenger = _messenger;
+                if (messenger == null || _disposed) return;
+
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart START slot={slot} shared=0x{sharedTextureHandle:X}");
+                messenger.SendObject(SharedTextureBridgeProtocol.StartMessageId, new SharedTextureStartMessage
+                {
+                    SlotId = slot,
+                    SharedTextureHandle = sharedTextureHandle.ToInt64(),
+                    SharedTextureWidth = sharedTextureWidth,
+                    SharedTextureHeight = sharedTextureHeight
+                });
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart DONE slot={slot}");
+            }
+            catch (Exception ex)
+            {
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart ERROR slot={slot}: {ex}");
+            }
+        });
+    }
+
+    private void QueueStop(int slot)
+    {
+        ThreadPool.QueueUserWorkItem(_ =>
         {
-            Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.SendStart ERROR slot={slot}: {ex}");
-            throw;
-        }
+            try
+            {
+                var messenger = _messenger;
+                if (messenger == null || _disposed) return;
+
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject START slot={slot}");
+                messenger.SendObject(SharedTextureBridgeProtocol.StopMessageId, new SharedTextureStopMessage { SlotId = slot });
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject DONE slot={slot}");
+            }
+            catch (Exception ex)
+            {
+                Log.MsgImmediate($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture SendObject ERROR slot={slot}: {ex}");
+            }
+        });
     }
 
     private void OnRunning(SharedTextureRunningMessage message)

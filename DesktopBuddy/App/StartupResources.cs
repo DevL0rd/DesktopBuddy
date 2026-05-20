@@ -16,9 +16,6 @@ public partial class DesktopBuddyMod
         try { FfmpegEncoder.SetFfmpegPath(); }
         catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
 
-        try { FfmpegEncoder.PrewarmHardwareEncoder(WgcCapture.SharedD3dDevice, WgcCapture.SharedD3dContextLock); }
-        catch (Exception ex) { Msg($"[Startup] FFmpeg hardware encoder prewarm failed: {ex.Message}"); }
-
         try { WindowInput.PrewarmTouchInjection(); }
         catch (Exception ex) { Msg($"[Startup] Touch injection prewarm failed: {ex.Message}"); }
 

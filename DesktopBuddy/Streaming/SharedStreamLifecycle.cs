@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace DesktopBuddy;
 
@@ -34,12 +35,17 @@ public partial class DesktopBuddyMod
             }
 
             var audio = new AudioCapture();
-            if (hwnd != IntPtr.Zero)
-                audio.Start(hwnd, AudioCaptureMode.IncludeProcess);
-            else
-                audio.Start(IntPtr.Zero, AudioCaptureMode.ExcludeProcess);
+            var startAudio = CreateAudioStartAction(audio, hwnd);
 
-            shared = new SharedStream { StreamId = streamId, Encoder = encoder, Audio = audio, StreamUrl = url, RefCount = 1 };
+            shared = new SharedStream
+            {
+                StreamId = streamId,
+                Encoder = encoder,
+                Audio = audio,
+                StartAudio = startAudio,
+                StreamUrl = url,
+                RefCount = 1
+            };
             if (hwnd != IntPtr.Zero)
                 _sharedStreams[hwnd] = shared;
             Msg($"[RemoteStream] Created new shared stream {streamId} for hwnd={hwnd}");
@@ -47,11 +53,43 @@ public partial class DesktopBuddyMod
         }
     }
 
+    private static Action CreateAudioStartAction(AudioCapture audio, IntPtr hwnd)
+    {
+        int started = 0;
+        return () =>
+        {
+            if (audio == null || audio.IsCapturing)
+                return;
+            if (Interlocked.Exchange(ref started, 1) != 0)
+                return;
+
+            try
+            {
+                if (hwnd != IntPtr.Zero)
+                    audio.Start(hwnd, AudioCaptureMode.IncludeProcess);
+                else
+                    audio.Start(IntPtr.Zero, AudioCaptureMode.ExcludeProcess);
+            }
+            catch (Exception ex)
+            {
+                Msg($"[AudioCapture] Async start error: {ex}");
+            }
+        };
+    }
+
     private static AudioCapture GetSharedStreamAudio(IntPtr hwnd)
     {
         lock (_sharedStreams)
         {
             return _sharedStreams.TryGetValue(hwnd, out var shared) ? shared.Audio : null;
+        }
+    }
+
+    private static Action GetSharedStreamAudioStart(IntPtr hwnd)
+    {
+        lock (_sharedStreams)
+        {
+            return _sharedStreams.TryGetValue(hwnd, out var shared) ? shared.StartAudio : null;
         }
     }
 

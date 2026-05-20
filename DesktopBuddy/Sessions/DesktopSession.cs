@@ -52,7 +52,7 @@ public class DesktopSession
     public ValueField<bool> PreviewAllowedField;
     public ValueField<bool> RangeAllowedField;
     public ValueField<bool> FinalStreamAllowedField;
-    public BooleanValueDriver<Uri> StreamUrlDriver;
+    public ValueUserOverride<Uri> StreamUrlOverride;
     public Uri StreamUrl;
     public ColliderUserTracker CullingTracker;
     public Slot CullingTriggerSlot;
@@ -68,6 +68,8 @@ public class DesktopSession
     public DesktopKeyboardSource KeyboardSource;
 
     public FfmpegEncoder Encoder;
+    public AudioCapture StreamAudioCapture;
+    public Action StartStreamAudioCapture;
     public VideoTextureProvider VideoTexture;
     public AudioOutput StreamAudioOutput;
     public Slider<float> StreamVolumeSlider;

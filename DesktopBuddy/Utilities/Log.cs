@@ -104,16 +104,13 @@ internal static class Log
 
     internal static string ExportCombinedLog()
     {
-        string resoniteDir = ResolveResoniteRoot();
-        string logsDir = Path.Combine(resoniteDir, "Logs");
-        if (!Directory.Exists(logsDir))
-            logsDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
+        string logsDir = Path.GetDirectoryName(FilePath) ?? Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
 
         string exportPath = Path.Combine(logsDir, $"DesktopBuddy_Combined_{Environment.MachineName}_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
         var builder = new StringBuilder();
 
         AppendLogSection(builder, "DesktopBuddy", FilePath);
-        AppendLogSection(builder, "Renderer BepInEx", Path.Combine(resoniteDir, "Renderer", "BepInEx", "LogOutput.log"));
+        AppendLogSection(builder, "Renderer BepInEx", ResolveRendererBepInExLogPath());
 
         File.WriteAllText(exportPath, builder.ToString());
         Msg($"[Log] Exported combined log: {exportPath}");
@@ -132,6 +129,41 @@ internal static class Log
         }
 
         return assemblyDir;
+    }
+
+    private static string ResolveRendererBepInExLogPath()
+    {
+        string assemblyDir = Path.GetDirectoryName(typeof(Log).Assembly.Location) ?? ".";
+        string profileRoot = ResolveBepInExProfileRoot(assemblyDir);
+        string resoniteRoot = ResolveResoniteRoot();
+
+        foreach (string root in new[] { profileRoot, resoniteRoot, assemblyDir }.Where(root => !string.IsNullOrWhiteSpace(root)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string path = Path.Combine(root, "Renderer", "BepInEx", "LogOutput.log");
+            if (File.Exists(path))
+                return path;
+        }
+
+        return !string.IsNullOrWhiteSpace(profileRoot)
+            ? Path.Combine(profileRoot, "Renderer", "BepInEx", "LogOutput.log")
+            : Path.Combine(resoniteRoot, "Renderer", "BepInEx", "LogOutput.log");
+    }
+
+    private static string ResolveBepInExProfileRoot(string startDir)
+    {
+        var dir = new DirectoryInfo(startDir);
+        while (dir != null)
+        {
+            if (dir.Name.Equals("BepInEx", StringComparison.OrdinalIgnoreCase) &&
+                Directory.Exists(Path.Combine(dir.FullName, "plugins")))
+            {
+                return dir.Parent?.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
     }
 
     private static void AppendLogSection(StringBuilder builder, string title, string path)

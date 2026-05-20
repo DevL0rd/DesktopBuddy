@@ -44,7 +44,7 @@ public sealed unsafe partial class FfmpegEncoder : IDisposable
         if (ctxLock != null)
         {
             Log.MsgImmediate($"[CleanupTrace] FfmpegEncoder.Dispose D3D TryEnter START stream={_streamId}");
-            gotLock = Monitor.TryEnter(ctxLock, 5000);
+            gotLock = Monitor.TryEnter(ctxLock, 1000);
             if (!gotLock)
             {
                 Log.Msg($"[FfmpegEnc:{_streamId}] WARNING: could not acquire D3D lock, skipping FFmpeg cleanup to avoid crash");

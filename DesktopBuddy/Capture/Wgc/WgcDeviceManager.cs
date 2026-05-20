@@ -273,21 +273,12 @@ public sealed partial class WgcCapture
         return hr;
     }
 
-    internal static IntPtr SharedD3dDevice
-    {
-        get
-        {
-            EnsureSharedD3dDevice();
-            return _sharedD3dDevice;
-        }
-    }
-
-    internal static object SharedD3dContextLock => _sharedD3dLock;
-
     internal static uint SharedD3dAdapterVendorId
     {
         get
         {
+            if (_sharedD3dReady)
+                return _sharedD3dAdapterVendorId;
             EnsureSharedD3dDevice();
             return _sharedD3dAdapterVendorId;
         }
@@ -299,6 +290,9 @@ public sealed partial class WgcCapture
 
     private static bool EnsureSharedD3dDevice()
     {
+        if (_sharedD3dReady)
+            return true;
+
         lock (_sharedD3dLock)
         {
             if (_sharedD3dReady) return true;
