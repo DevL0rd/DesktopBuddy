@@ -1,34 +1,29 @@
 # DesktopBuddy
 
-DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and microphone to integrate windows completly and seemlessly into resonite.
+DesktopBuddy brings your Windows desktop, completely and seamlessly into Resonite, including screensharing, control, a virtual camera and microphone, and more.
 
 
 ## Install
 
-1. Follow instructions here to setup resonite with Gale, a mod manager for bepis mods.
-https://modding.resonite.net/getting-started/installation/
+Use a Thunderstore mod manager, such as Gale, to install the mod directly. 
 
-2. Search for DesktopBuddy and enable the mod.
-
-3. Launch resonite with Gale.
-
-GitHub release zips are the bleeding-edge manual install path and may update faster than Thunderstore while packages wait for review.
+GitHub release zips are provided on the DesktopBuddy Github for manual installation. They will include bleeding-edge features and may update faster than Thunderstore while packages wait for review.
 
 ## Features
 
 - Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
-- Interact with windows using VR controller, hand tracking, or touch input.
-- Fully gpu accelerated WGC desktop capture.
+- Interact with Windows using VR controllers, hand tracking, or touch input.
+- Fully GPU-accelerated WGC desktop capture.
 - Stream panels to other users through local encoding and remote HTTPS tunnel support.
-- Virtual video camera drivers for windows so you can do video calls from within resonite.
-- Virtual microphone driver for windows so friends can hear you in calls in resonite.
+- Virtual video camera for Windows for video calls and more from within Resonite.
+- Virtual microphone for Windows for voice calls with spatialized voice from Resonite.
 - Use privacy controls for hiding or limiting what other users can see.
 - Adjust capture, streaming, audio, culling, viewer, and debug options from the in-world settings panel.
 - Keep game-side and renderer-side work separated through the shared texture bridge.
 
 ## Credits
 
-Special thanks to the projects and libraries DesktopBuddy builds on.
+Special thanks to the projects and libraries DesktopBuddy builds on!
 
 | Project | What DesktopBuddy uses it for |
 | --- | --- |
