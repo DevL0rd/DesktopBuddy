@@ -52,7 +52,7 @@ public class DesktopSession
     public ValueField<bool> PreviewAllowedField;
     public ValueField<bool> RangeAllowedField;
     public ValueField<bool> FinalStreamAllowedField;
-    public ValueUserOverride<Uri> StreamUrlOverride;
+    public BooleanValueDriver<Uri> StreamUrlDriver;
     public Uri StreamUrl;
     public ColliderUserTracker CullingTracker;
     public Slot CullingTriggerSlot;

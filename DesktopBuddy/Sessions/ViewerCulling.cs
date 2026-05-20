@@ -68,19 +68,42 @@ public partial class DesktopBuddyMod
 
         var finalAllowed = gateSlot.AttachComponent<ValueField<bool>>();
         finalAllowed.Value.Value = false;
-        var finalOverride = gateSlot.AttachComponent<ValueUserOverride<bool>>();
-        finalOverride.Target.Target = finalAllowed.Value;
-        finalOverride.Default.Value = false;
-        finalOverride.CreateOverrideOnWrite.Value = false;
-        finalOverride.PersistentOverrides.Value = false;
-        finalOverride.ClearOnUserLeave.Value = true;
 
-        var urlOverride = gateSlot.AttachComponent<ValueUserOverride<Uri>>();
-        urlOverride.Target.Target = videoTex.URL;
-        urlOverride.Default.Value = null;
-        urlOverride.CreateOverrideOnWrite.Value = false;
-        urlOverride.PersistentOverrides.Value = false;
-        urlOverride.ClearOnUserLeave.Value = true;
+        var userEnabled = gateSlot.AttachComponent<ValueField<bool>>();
+        userEnabled.Value.Value = false;
+        var userEnabledDriver = gateSlot.AttachComponent<MultiBoolConditionDriver>();
+        userEnabledDriver.Target.Target = userEnabled.Value;
+        userEnabledDriver.Mode.Value = MultiBoolConditionDriver.ConditionMode.Any;
+        int viewerConditionIndex = userEnabledDriver.Conditions.Count;
+        userEnabledDriver.Conditions.Add();
+        var viewerCondition = userEnabledDriver.Conditions[viewerConditionIndex];
+        viewerCondition.Field.Target = viewerAllowed.Value;
+        viewerCondition.Invert.Value = false;
+        int previewConditionIndex = userEnabledDriver.Conditions.Count;
+        userEnabledDriver.Conditions.Add();
+        var previewCondition = userEnabledDriver.Conditions[previewConditionIndex];
+        previewCondition.Field.Target = previewAllowed.Value;
+        previewCondition.Invert.Value = false;
+
+        var finalDriver = gateSlot.AttachComponent<MultiBoolConditionDriver>();
+        finalDriver.Target.Target = finalAllowed.Value;
+        finalDriver.Mode.Value = MultiBoolConditionDriver.ConditionMode.All;
+        int enabledConditionIndex = finalDriver.Conditions.Count;
+        finalDriver.Conditions.Add();
+        var enabledCondition = finalDriver.Conditions[enabledConditionIndex];
+        enabledCondition.Field.Target = userEnabled.Value;
+        enabledCondition.Invert.Value = false;
+        int rangeConditionIndex = finalDriver.Conditions.Count;
+        finalDriver.Conditions.Add();
+        var rangeCondition = finalDriver.Conditions[rangeConditionIndex];
+        rangeCondition.Field.Target = rangeAllowed.Value;
+        rangeCondition.Invert.Value = false;
+
+        var urlDriver = gateSlot.AttachComponent<BooleanValueDriver<Uri>>();
+        urlDriver.TargetField.Target = videoTex.URL;
+        urlDriver.FalseValue.Value = null;
+        urlDriver.TrueValue.Value = null;
+        urlDriver.State.DriveFrom(finalAllowed.Value);
 
         session.ViewerAllowedField = viewerAllowed;
         session.PreviewAllowedField = previewAllowed;
@@ -88,8 +111,8 @@ public partial class DesktopBuddyMod
         session.FinalStreamAllowedField = finalAllowed;
         session.ViewerStreamAllowed = viewerOverride;
         session.PreviewStreamAllowed = previewOverride;
-        session.FinalStreamAllowedOverride = finalOverride;
-        session.StreamUrlOverride = urlOverride;
+        session.FinalStreamAllowedOverride = null;
+        session.StreamUrlDriver = urlDriver;
         session.CullingTracker = tracker;
         session.CullingTriggerSlot = triggerSlot;
         session.CullingSphereCollider = sphere;
@@ -107,7 +130,6 @@ public partial class DesktopBuddyMod
         }
 
         UpdateViewerCullingTrigger(session);
-        StartViewerCullingPlaybackLoop(session, videoTex);
     }
 
     private static bool IsLocalSessionOwner(DesktopSession session)
@@ -243,8 +265,6 @@ public partial class DesktopBuddyMod
         session.CullingAppliedStreamAllowedByUserId[key] = allowed;
         if (session.FinalStreamAllowedOverride != null && !session.FinalStreamAllowedOverride.IsDestroyed)
             session.FinalStreamAllowedOverride.SetOverride(user, allowed);
-
-        ApplyStreamUrlOverrideForUser(session, user, allowed);
     }
 
 }
