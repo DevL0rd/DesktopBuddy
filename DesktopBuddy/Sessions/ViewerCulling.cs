@@ -1,8 +1,6 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using DesktopBuddy.Shared;
@@ -45,59 +43,13 @@ public partial class DesktopBuddyMod
         previewOverride.CreateOverrideOnWrite.Value = false;
         previewOverride.ClearOnUserLeave.Value = true;
 
-        var rangeAllowed = gateSlot.AttachComponent<ValueField<bool>>();
-        rangeAllowed.Value.Value = false;
-
-        var triggerSlot = session.Root.AddSlot("ViewerCullingTrigger");
-        triggerSlot.LocalPosition = float3.Zero;
-        triggerSlot.LocalRotation = floatQ.Identity;
-        triggerSlot.LocalScale = float3.One;
-
-        var tracker = triggerSlot.AttachComponent<ColliderUserTracker>();
-        tracker.TriggersOnly.Value = true;
-
-        var sphere = triggerSlot.AttachComponent<SphereCollider>();
-        sphere.Type.Value = ColliderType.Trigger;
-        sphere.IgnoreRaycasts.Value = true;
-
-        var box = triggerSlot.AttachComponent<BoxCollider>();
-        box.Type.Value = ColliderType.Trigger;
-        box.IgnoreRaycasts.Value = true;
-
-        rangeAllowed.Value.DriveFrom(tracker.IsLocalUserInside);
-
         var finalAllowed = gateSlot.AttachComponent<ValueField<bool>>();
         finalAllowed.Value.Value = false;
-
-        var userEnabled = gateSlot.AttachComponent<ValueField<bool>>();
-        userEnabled.Value.Value = false;
-        var userEnabledDriver = gateSlot.AttachComponent<MultiBoolConditionDriver>();
-        userEnabledDriver.Target.Target = userEnabled.Value;
-        userEnabledDriver.Mode.Value = MultiBoolConditionDriver.ConditionMode.Any;
-        int viewerConditionIndex = userEnabledDriver.Conditions.Count;
-        userEnabledDriver.Conditions.Add();
-        var viewerCondition = userEnabledDriver.Conditions[viewerConditionIndex];
-        viewerCondition.Field.Target = viewerAllowed.Value;
-        viewerCondition.Invert.Value = false;
-        int previewConditionIndex = userEnabledDriver.Conditions.Count;
-        userEnabledDriver.Conditions.Add();
-        var previewCondition = userEnabledDriver.Conditions[previewConditionIndex];
-        previewCondition.Field.Target = previewAllowed.Value;
-        previewCondition.Invert.Value = false;
-
-        var finalDriver = gateSlot.AttachComponent<MultiBoolConditionDriver>();
-        finalDriver.Target.Target = finalAllowed.Value;
-        finalDriver.Mode.Value = MultiBoolConditionDriver.ConditionMode.All;
-        int enabledConditionIndex = finalDriver.Conditions.Count;
-        finalDriver.Conditions.Add();
-        var enabledCondition = finalDriver.Conditions[enabledConditionIndex];
-        enabledCondition.Field.Target = userEnabled.Value;
-        enabledCondition.Invert.Value = false;
-        int rangeConditionIndex = finalDriver.Conditions.Count;
-        finalDriver.Conditions.Add();
-        var rangeCondition = finalDriver.Conditions[rangeConditionIndex];
-        rangeCondition.Field.Target = rangeAllowed.Value;
-        rangeCondition.Invert.Value = false;
+        var finalOverride = gateSlot.AttachComponent<ValueUserOverride<bool>>();
+        finalOverride.Target.Target = finalAllowed.Value;
+        finalOverride.Default.Value = false;
+        finalOverride.CreateOverrideOnWrite.Value = false;
+        finalOverride.ClearOnUserLeave.Value = true;
 
         var urlDriver = gateSlot.AttachComponent<BooleanValueDriver<Uri>>();
         urlDriver.TargetField.Target = videoTex.URL;
@@ -107,16 +59,11 @@ public partial class DesktopBuddyMod
 
         session.ViewerAllowedField = viewerAllowed;
         session.PreviewAllowedField = previewAllowed;
-        session.RangeAllowedField = rangeAllowed;
         session.FinalStreamAllowedField = finalAllowed;
         session.ViewerStreamAllowed = viewerOverride;
         session.PreviewStreamAllowed = previewOverride;
-        session.FinalStreamAllowedOverride = null;
+        session.FinalStreamAllowedOverride = finalOverride;
         session.StreamUrlDriver = urlDriver;
-        session.CullingTracker = tracker;
-        session.CullingTriggerSlot = triggerSlot;
-        session.CullingSphereCollider = sphere;
-        session.CullingFrustumCollider = box;
 
         viewerOverride.SetOverride(owner, false);
         previewOverride.SetOverride(owner, false);
@@ -129,7 +76,7 @@ public partial class DesktopBuddyMod
                 viewerOverride.SetOverride(user, true);
         }
 
-        UpdateViewerCullingTrigger(session);
+        StartViewerCullingPlaybackLoop(session, videoTex);
     }
 
     private static bool IsLocalSessionOwner(DesktopSession session)
@@ -180,12 +127,12 @@ public partial class DesktopBuddyMod
 
     private static bool ShouldLocalStreamBeAllowedWithoutGrace(DesktopSession session)
     {
-        if (session?.ViewerAllowedField == null || session.PreviewAllowedField == null || session.RangeAllowedField == null)
+        if (session?.ViewerAllowedField == null || session.PreviewAllowedField == null)
             return true;
 
         bool previewAllowed = session.LocalPreviewingRemoteStream;
         bool viewerAllowed = IsLocalViewerStreamEnabled(session);
-        bool rangeAllowed = session.RangeAllowedField.Value.Value;
+        bool rangeAllowed = IsViewerInConfiguredRange(session, session.Root?.World?.LocalUser);
         return rangeAllowed && (previewAllowed || viewerAllowed);
     }
 
@@ -210,39 +157,6 @@ public partial class DesktopBuddyMod
             session.FinalStreamAllowedOverride.SetOverride(localUser, allowed);
         else
             session.FinalStreamAllowedField.Value.Value = allowed;
-    }
-
-    private static HashSet<string> GetUsersInsideCullingTrigger(DesktopSession session)
-    {
-        var inside = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var tracker = session?.CullingTracker;
-        if (tracker == null || tracker.IsDestroyed)
-            return inside;
-
-        try
-        {
-            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
-            var field = typeof(ColliderUserTracker).GetField("_usersInside", flags);
-            if (field?.GetValue(tracker) is not IEnumerable usersInside)
-                return inside;
-
-            foreach (object entry in usersInside)
-            {
-                object userRef = entry?.GetType().GetProperty("Value")?.GetValue(entry);
-                if (userRef is not UserRef userReference)
-                    continue;
-
-                string key = ViewerKey(userReference.Target);
-                if (!string.IsNullOrWhiteSpace(key))
-                    inside.Add(key);
-            }
-        }
-        catch (Exception ex)
-        {
-            Msg($"[Culling] Failed to read ColliderUserTracker users: {ex.Message}");
-        }
-
-        return inside;
     }
 
     private static bool GetAppliedStreamAllowed(DesktopSession session, FrooxEngine.User user)

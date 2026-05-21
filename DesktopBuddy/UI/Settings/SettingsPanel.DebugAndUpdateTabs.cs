@@ -132,7 +132,6 @@ public partial class DesktopBuddyMod
             {
                 if (active == null || active.Cleaned)
                     continue;
-                UpdateViewerCullingTrigger(active);
                 if (active.SettingsPanel != null)
                 {
                     SyncLiveCullingStateFromConfig(active.SettingsPanel);

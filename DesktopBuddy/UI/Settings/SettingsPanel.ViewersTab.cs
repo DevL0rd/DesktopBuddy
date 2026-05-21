@@ -41,14 +41,12 @@ public partial class DesktopBuddyMod
             {
                 state.ViewerCullingMode = NormalizeViewerCullingMode(value);
                 SaveConfigValue(ViewerCullingMode, value);
-                UpdateViewerCullingTrigger(session);
                 RebuildSettingsPanel(state, session);
             });
         AddCheckbox(ui, state, "Preview culling guide", Config?.GetValue(ViewerCullingPreview) ?? false, value =>
         {
             state.ViewerCullingPreviewEnabled = value;
             SaveConfigValue(ViewerCullingPreview, value);
-            UpdateViewerCullingTrigger(session);
             UpdateCullingPreview(session, state);
             session?.Root?.World?.RunInUpdates(1, () => UpdateCullingPreview(session, state));
         });
@@ -59,7 +57,6 @@ public partial class DesktopBuddyMod
             state.ViewerFrustumDepth = value;
             SaveConfigValue(ViewerDistance, value);
             SaveConfigValue(ViewerFrustumDepth, value);
-            UpdateViewerCullingTrigger(session);
             UpdateCullingPreview(session, state);
             session?.Root?.World?.RunInUpdates(1, () => UpdateCullingPreview(session, state));
         });
@@ -71,7 +68,6 @@ public partial class DesktopBuddyMod
             {
                 state.ViewerFrustumAngle = value;
                 SaveConfigValue(ViewerFrustumWidth, value);
-                UpdateViewerCullingTrigger(session);
                 UpdateCullingPreview(session, state);
                 session?.Root?.World?.RunInUpdates(1, () => UpdateCullingPreview(session, state));
             });
