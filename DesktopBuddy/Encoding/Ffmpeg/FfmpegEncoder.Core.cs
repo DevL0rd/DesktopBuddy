@@ -54,8 +54,8 @@ public sealed unsafe partial class FfmpegEncoder
     private object _d3dContextLock;
 
     private Thread _encodeThread;
-    private Thread _initThread;
     private volatile int _initStarted;
+    private int _nativeDisposed;
     private readonly AutoResetEvent _encodeEvent = new(false);
     private volatile IntPtr _pendingTexture;
     private volatile uint _pendingWidth, _pendingHeight;
@@ -71,8 +71,6 @@ public sealed unsafe partial class FfmpegEncoder
     private long _readerOverrunEvents;
     private long _readerOverrunMaxBacklogBytes;
     private long _readerLastOverrunLogTicks;
-    private int _d3dLockTimeouts;
-
     private avio_alloc_context_write_packet _writeCallbackDelegate;
     private GCHandle _selfHandle;
 

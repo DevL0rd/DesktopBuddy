@@ -18,6 +18,7 @@ public sealed unsafe partial class FfmpegEncoder
         var hwDevCtx = (AVHWDeviceContext*)_hwDeviceCtx->data;
         var d3d11DevCtx = (AVD3D11VADeviceContext*)hwDevCtx->hwctx;
 
+        Marshal.AddRef(d3dDevice);
         d3d11DevCtx->device = (ID3D11Device*)d3dDevice;
 
         Log.Msg($"[FfmpegEnc:{_streamId}] av_hwdevice_ctx_init: calling...");

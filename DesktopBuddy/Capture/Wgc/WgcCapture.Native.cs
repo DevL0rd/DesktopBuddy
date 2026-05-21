@@ -120,7 +120,6 @@ public sealed partial class WgcCapture
     private const int D3D_DRIVER_TYPE_HARDWARE = 1;
     private const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
 
-    private const int ID3D11DeviceContext_ClearState = 110;
     private const int ID3D11DeviceContext_Flush = 111;
     private const int ID3D11Device_CreateTexture2D = 5;
     private const int ID3D11DeviceContext_CopyResource = 47;

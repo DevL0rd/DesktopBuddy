@@ -16,22 +16,31 @@ public sealed partial class WgcCapture : IDisposable
     public void StopCapture()
     {
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture ENTER hwnd={_hwnd} disposed={_disposed}");
+        GraphicsCaptureSession session;
+        Direct3D11CaptureFramePool framePool;
+        GraphicsCaptureItem item;
+        TypedEventHandler<GraphicsCaptureItem, object> itemClosedHandler;
         lock (_disposeLock)
         {
             Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture dispose lock ACQUIRED hwnd={_hwnd}");
             if (_disposed) return;
             _disposed = true;
+            session = _session;
+            framePool = _framePool;
+            item = _item;
+            itemClosedHandler = _itemClosedHandler;
+            _session = null;
+            _framePool = null;
+            _itemClosedHandler = null;
         }
         Log.Msg($"[WgcCapture:StopCapture] Stopping session hwnd={_hwnd}");
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture unhook FrameArrived START hwnd={_hwnd}");
-        try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
+        try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Unhook error: {ex.Message}"); }
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture unhook ItemClosed START hwnd={_hwnd}");
-        try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Item closed unhook error: {ex.Message}"); }
+        try { if (item != null && itemClosedHandler != null) item.Closed -= itemClosedHandler; } catch (Exception ex) { Log.Msg($"[WgcCapture:StopCapture] Item closed unhook error: {ex.Message}"); }
 
-        _session = null;
-        _framePool = null;
-        _itemClosedHandler = null;
-        Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked");
+        DisposeCaptureObjects(session, framePool, "StopCapture");
+        Log.Msg("[WgcCapture:StopCapture] Session stopped, events unhooked/disposed");
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.StopCapture EXIT hwnd={_hwnd}");
     }
 
@@ -39,25 +48,34 @@ public sealed partial class WgcCapture : IDisposable
     {
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose ENTER hwnd={_hwnd} disposed={_disposed}");
         bool alreadyStopped;
+        GraphicsCaptureSession session;
+        Direct3D11CaptureFramePool framePool;
+        GraphicsCaptureItem item;
+        TypedEventHandler<GraphicsCaptureItem, object> itemClosedHandler;
         lock (_disposeLock)
         {
             Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose dispose lock ACQUIRED hwnd={_hwnd}");
             alreadyStopped = _disposed;
             _disposed = true;
+            session = _session;
+            framePool = _framePool;
+            item = _item;
+            itemClosedHandler = _itemClosedHandler;
+            _session = null;
+            _framePool = null;
+            _itemClosedHandler = null;
         }
 
         if (!alreadyStopped)
         {
             Log.Msg($"[WgcCapture:Dispose] Unhooking events");
-            try { if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived; }
+            try { if (framePool != null) framePool.FrameArrived -= OnFrameArrived; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Unhook error: {ex.Message}"); }
-            try { if (_item != null && _itemClosedHandler != null) _item.Closed -= _itemClosedHandler; }
+            try { if (item != null && itemClosedHandler != null) item.Closed -= itemClosedHandler; }
             catch (Exception ex) { Log.Msg($"[WgcCapture:Dispose] Item closed unhook error: {ex.Message}"); }
 
-            _session = null;
-            _framePool = null;
+            DisposeCaptureObjects(session, framePool, "Dispose");
         }
-        _itemClosedHandler = null;
         _item = null;
         OnGpuFrame = null;
 
@@ -68,5 +86,14 @@ public sealed partial class WgcCapture : IDisposable
         ReleaseSharedTexture();
         Log.Msg($"[WgcCapture:Dispose] Detached from shared D3D device hwnd={_hwnd}");
         Log.MsgImmediate($"[CleanupTrace] WgcCapture.Dispose EXIT hwnd={_hwnd}");
+    }
+
+    private static void DisposeCaptureObjects(GraphicsCaptureSession session, Direct3D11CaptureFramePool framePool, string reason)
+    {
+        try { session?.Dispose(); }
+        catch (Exception ex) { Log.Msg($"[WgcCapture:{reason}] Session dispose error: {ex.Message}"); }
+
+        try { framePool?.Dispose(); }
+        catch (Exception ex) { Log.Msg($"[WgcCapture:{reason}] FramePool dispose error: {ex.Message}"); }
     }
 }

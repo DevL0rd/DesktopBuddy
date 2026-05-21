@@ -80,7 +80,8 @@ public sealed unsafe partial class FfmpegEncoder
                 _keepAliveTexture = tex;
                 _keepAliveW = w;
                 _keepAliveH = h;
-                if (prev != IntPtr.Zero) Marshal.Release(prev);
+                if (prev != IntPtr.Zero)
+                    WithD3dContextLock(() => ReleaseD3dTextureRef(prev, "previousKeepAliveTexture"));
             }
             catch (Exception ex)
             {
@@ -92,7 +93,10 @@ public sealed unsafe partial class FfmpegEncoder
             }
 
         }
-        if (_keepAliveTexture != IntPtr.Zero) { Marshal.Release(_keepAliveTexture); _keepAliveTexture = IntPtr.Zero; }
+        var keepAliveTexture = _keepAliveTexture;
+        _keepAliveTexture = IntPtr.Zero;
+        if (keepAliveTexture != IntPtr.Zero)
+            WithD3dContextLock(() => ReleaseD3dTextureRef(keepAliveTexture, "keepAliveTexture"));
         Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread stopped");
     }
 
@@ -150,7 +154,7 @@ public sealed unsafe partial class FfmpegEncoder
                 bool converted = false;
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    TryCopyWithD3dContextLock(() =>
+                    WithD3dContextLock(() =>
                     {
                         converted = VideoProcessorConvert(srcTexture);
                         if (converted)
@@ -169,20 +173,14 @@ public sealed unsafe partial class FfmpegEncoder
             }
             else
             {
-                bool copied = false;
                 using (DesktopBuddyMod.Perf.Time("ffmpeg_tex_copy"))
                 {
-                    copied = TryCopyWithD3dContextLock(() =>
+                    WithD3dContextLock(() =>
                     {
                         IntPtr dstTexture = (IntPtr)_hwFrame->data[0];
                         int dstIndex = (int)_hwFrame->data[1];
                         CopyTextureToFrame(_deviceContext, dstTexture, dstIndex, srcTexture, (int)_width, (int)_height);
                     });
-                }
-                if (!copied)
-                {
-                    ffmpeg.av_frame_unref(_hwFrame);
-                    return;
                 }
             }
 
@@ -282,31 +280,16 @@ public sealed unsafe partial class FfmpegEncoder
         fn(deviceContext, dstTexture, (uint)dstArrayIndex, 0, 0, 0, srcTexture, 0, box);
     }
 
-    private bool TryCopyWithD3dContextLock(Action copy)
+    private void WithD3dContextLock(Action action)
     {
         if (_d3dContextLock == null)
         {
-            copy();
-            return true;
+            action();
+            return;
         }
 
-        if (!Monitor.TryEnter(_d3dContextLock, 50))
-        {
-            int timeouts = Interlocked.Increment(ref _d3dLockTimeouts);
-            if (timeouts == 1 || timeouts % 120 == 0)
-                Log.Msg($"[FfmpegEnc:{_streamId}] D3D lock busy, dropping encoder frame (count={timeouts})");
-            return false;
-        }
-
-        try
-        {
-            copy();
-            return true;
-        }
-        finally
-        {
-            Monitor.Exit(_d3dContextLock);
-        }
+        lock (_d3dContextLock)
+            action();
     }
 
 }

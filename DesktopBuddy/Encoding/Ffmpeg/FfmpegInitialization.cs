@@ -12,13 +12,13 @@ public sealed unsafe partial class FfmpegEncoder
 
     private readonly object _initLock = new();
 
-    public bool Initialize(IntPtr d3dDevice, uint width, uint height, AudioCapture audioCapture = null)
+    public bool Initialize(IntPtr d3dDevice, uint width, uint height, AudioCapture audioCapture = null, object d3dContextLock = null)
     {
         lock (_initLock)
         {
         if (_initialized) return true;
         if (_initFailed || _disposed) return false;
-        _d3dContextLock = _encoderD3dContextLock;
+        _d3dContextLock = d3dContextLock ?? _encoderD3dContextLock;
 
         try
         {
@@ -84,7 +84,7 @@ public sealed unsafe partial class FfmpegEncoder
 
                 try
                 {
-                    SetupHardwareContext(d3dDevice, swFormat);
+                    WithD3dContextLock(() => SetupHardwareContext(d3dDevice, swFormat));
                 }
                 catch (Exception ex)
                 {
@@ -149,7 +149,7 @@ public sealed unsafe partial class FfmpegEncoder
             _deviceContext = (IntPtr)d3d11DevCtxData->device_context;
 
             if (_needsVideoProcessor || _needsGpuScale)
-                SetupVideoProcessor(d3dDevice, _sourceWidth, _sourceHeight, _width, _height, _needsVideoProcessor);
+                WithD3dContextLock(() => SetupVideoProcessor(d3dDevice, _sourceWidth, _sourceHeight, _width, _height, _needsVideoProcessor));
 
             if (_rtspUrl == null)
             {
@@ -157,11 +157,9 @@ public sealed unsafe partial class FfmpegEncoder
                 _ringWritePos = 0;
                 Interlocked.Exchange(ref _lastKeyframeRingPos, -1);
             }
-            _initialized = true;
 
-            _encodeThread = new Thread(EncodeLoop) { Name = $"FfmpegEnc:{_streamId}:Encode", IsBackground = true };
-            _encodeThread.Start();
-            Log.Msg($"[FfmpegEnc:{_streamId}] Encode thread started");
+            if (_disposed) return false;
+            _initialized = true;
 
             Log.Msg($"[FfmpegEnc:{_streamId}] Ready: {_width}x{_height} {codecName}");
             return true;
@@ -180,17 +178,27 @@ public sealed unsafe partial class FfmpegEncoder
         uint width,
         uint height,
         AudioCapture audioCapture = null,
-        Action startAudio = null)
+        Action startAudio = null,
+        object d3dContextLock = null)
     {
         if (Interlocked.Exchange(ref _initStarted, 1) != 0) return;
-        _initThread = new Thread(() =>
+        _encodeThread = new Thread(() =>
         {
-            try { startAudio?.Invoke(); }
-            catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Audio start before init failed: {ex}"); }
-            Initialize(d3dDevice, width, height, audioCapture);
+            try
+            {
+                try { startAudio?.Invoke(); }
+                catch (Exception ex) { Log.Msg($"[FfmpegEnc:{_streamId}] Audio start before init failed: {ex}"); }
+
+                if (Initialize(d3dDevice, width, height, audioCapture, d3dContextLock))
+                    EncodeLoop();
+            }
+            finally
+            {
+                DisposeNativeResources();
+            }
         })
-        { Name = $"FfmpegEnc:{_streamId}:Init", IsBackground = true };
-        _initThread.Start();
+        { Name = $"FfmpegEnc:{_streamId}:Encoder", IsBackground = true };
+        _encodeThread.Start();
     }
 
     private static void CalculateEncoderSize(uint sourceWidth, uint sourceHeight, out uint encoderWidth, out uint encoderHeight)
