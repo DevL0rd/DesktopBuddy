@@ -50,14 +50,9 @@ public class DesktopSession
     public ValueUserOverride<bool> FinalStreamAllowedOverride;
     public ValueField<bool> ViewerAllowedField;
     public ValueField<bool> PreviewAllowedField;
-    public ValueField<bool> RangeAllowedField;
     public ValueField<bool> FinalStreamAllowedField;
     public BooleanValueDriver<Uri> StreamUrlDriver;
     public Uri StreamUrl;
-    public ColliderUserTracker CullingTracker;
-    public Slot CullingTriggerSlot;
-    public SphereCollider CullingSphereCollider;
-    public BoxCollider CullingFrustumCollider;
     public readonly Dictionary<string, bool> ViewerStreamEnabledByUserId = new(StringComparer.OrdinalIgnoreCase);
     public readonly Dictionary<string, bool> CullingAppliedStreamAllowedByUserId = new(StringComparer.OrdinalIgnoreCase);
     public readonly Dictionary<string, double> CullingOutOfRangeSinceByUserId = new(StringComparer.OrdinalIgnoreCase);

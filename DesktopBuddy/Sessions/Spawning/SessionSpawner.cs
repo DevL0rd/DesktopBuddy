@@ -1257,7 +1257,6 @@ public partial class DesktopBuddyMod
                 streamCanvasRef.Size.Value = new float2(newW, newH);
 
             ResizeSettingsPanel(session, newW, newH, canvasScale, currentPanelCurvature);
-            UpdateViewerCullingTrigger(session);
 
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
                 keyboardSlot.LocalPosition = new float3(0f, -worldHalfH - 0.15f, -0.08f);

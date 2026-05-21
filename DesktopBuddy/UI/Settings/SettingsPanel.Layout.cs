@@ -39,7 +39,6 @@ public partial class DesktopBuddyMod
         }
         UpdateSettingsBlurMask(state);
         SetSettingsModalRect(state);
-        UpdateViewerCullingTrigger(session);
         UpdateCullingPreview(session, state);
     }
 

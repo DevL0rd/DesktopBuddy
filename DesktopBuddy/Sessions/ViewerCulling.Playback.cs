@@ -24,7 +24,6 @@ public partial class DesktopBuddyMod
                 return;
 
             double now = session.Root.World.Time.WorldTime;
-            var inside = GetUsersInsideCullingTrigger(session);
             var presentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool anyViewerShouldPlay = false;
 
@@ -39,7 +38,7 @@ public partial class DesktopBuddyMod
                 bool streamEnabledForUser = IsSessionOwner(session, user)
                     ? session.LocalPreviewingRemoteStream
                     : IsViewerStreamEnabled(session, user);
-                bool rangeAllowed = inside.Contains(key);
+                bool rangeAllowed = IsViewerInConfiguredRange(session, user);
                 bool wasAllowed = GetAppliedStreamAllowed(session, user);
 
                 bool shouldPlay;

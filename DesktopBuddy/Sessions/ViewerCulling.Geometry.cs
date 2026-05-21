@@ -6,41 +6,6 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-
-    private static void UpdateViewerCullingTrigger(DesktopSession session)
-    {
-        if (session?.CullingTriggerSlot == null || session.CullingTriggerSlot.IsDestroyed)
-            return;
-
-        float range = Math.Clamp(Config?.GetValue(ViewerDistance) ?? Config?.GetValue(ViewerFrustumDepth) ?? 3f, 1f, 10f);
-        string mode = NormalizeViewerCullingMode(Config?.GetValue(ViewerCullingMode));
-        float originZ = GetCullingPreviewOriginZ(session);
-
-        if (session.CullingSphereCollider != null && !session.CullingSphereCollider.IsDestroyed)
-        {
-            session.CullingSphereCollider.Enabled = mode == "distance";
-            session.CullingSphereCollider.Radius.Value = range;
-            session.CullingSphereCollider.Offset.Value = new float3(0f, 0f, originZ);
-        }
-
-        if (session.CullingFrustumCollider != null && !session.CullingFrustumCollider.IsDestroyed)
-        {
-            int panelPixelsW = session.LastKnownW > 0 ? session.LastKnownW : MathX.RoundToInt(session.Canvas?.Size.Value.x ?? 0f);
-            int panelPixelsH = session.LastKnownH > 0 ? session.LastKnownH : MathX.RoundToInt(session.Canvas?.Size.Value.y ?? 0f);
-            float scale = session.PanelCanvasScale > 0f ? session.PanelCanvasScale : 0.0005f;
-            float panelW = Math.Max(1, panelPixelsW) * scale;
-            float panelH = Math.Max(1, panelPixelsH) * scale;
-            float angle = NormalizeViewerFrustumAngle(Config?.GetValue(ViewerFrustumWidth) ?? 120f);
-            float verticalAngle = angle * 0.5f;
-            float farHalfW = panelW * 0.5f + MathF.Tan(angle * MathF.PI / 360f) * range;
-            float farHalfH = panelH * 0.5f + MathF.Tan(verticalAngle * MathF.PI / 360f) * range;
-
-            session.CullingFrustumCollider.Enabled = mode != "distance";
-            session.CullingFrustumCollider.Size.Value = new float3(farHalfW * 2f, farHalfH * 2f, range);
-            session.CullingFrustumCollider.Offset.Value = new float3(0f, 0f, originZ - range * 0.5f);
-        }
-    }
-
     private static float GetCurvedPanelDepthAtU(CurvedPlaneMesh mesh, float u, float scale)
     {
         if (mesh == null || mesh.IsDestroyed)
