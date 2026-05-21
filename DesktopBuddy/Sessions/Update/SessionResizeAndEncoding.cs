@@ -56,9 +56,10 @@ public partial class DesktopBuddyMod
         audioForEncoder ??= session.StreamAudioCapture ?? GetSharedStreamAudio(session.Hwnd);
         startAudioForEncoder ??= session.StartStreamAudioCapture ?? GetSharedStreamAudioStart(session.Hwnd);
         var enc = encoder;
+        var d3dContextLock = session.Streamer.D3dContextLock;
         session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
         {
-            enc.StartInitializeAsync(device, (uint)fw, (uint)fh, audioForEncoder, startAudioForEncoder);
+            enc.StartInitializeAsync(device, (uint)fw, (uint)fh, audioForEncoder, startAudioForEncoder, d3dContextLock);
             enc.QueueFrame(texture, (uint)fw, (uint)fh);
         };
 
@@ -68,7 +69,7 @@ public partial class DesktopBuddyMod
         IntPtr latestDevice = session.Streamer.D3dDevice;
         if (latestTexture != IntPtr.Zero && latestDevice != IntPtr.Zero && latestWidth > 0 && latestHeight > 0)
         {
-            enc.StartInitializeAsync(latestDevice, (uint)latestWidth, (uint)latestHeight, audioForEncoder, startAudioForEncoder);
+            enc.StartInitializeAsync(latestDevice, (uint)latestWidth, (uint)latestHeight, audioForEncoder, startAudioForEncoder, d3dContextLock);
             enc.QueueFrame(latestTexture, (uint)latestWidth, (uint)latestHeight);
             Msg($"[RemoteStream] Seeded encoder from latest captured frame {latestWidth}x{latestHeight}");
         }

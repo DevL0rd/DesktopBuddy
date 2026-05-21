@@ -130,6 +130,29 @@ public partial class DesktopBuddyMod
                 AudioCapture audioToDispose = null;
                 FfmpegEncoder encoderToDispose = null;
                 bool shouldStopEncoder = false;
+
+                if (streamer != null)
+                {
+                    Msg($"[Cleanup:BG] Stopping capture...");
+                    var stopCaptureTicks = TraceStart($"DesktopStreamer.StopCapture stream={streamId}");
+                    streamer.StopCapture();
+                    TraceDone($"DesktopStreamer.StopCapture stream={streamId}", stopCaptureTicks);
+                    Msg($"[Cleanup:BG] Capture stopped");
+
+                    try
+                    {
+                        Msg($"[Cleanup:BG] Flushing D3D context...");
+                        var flushTicks = TraceStart($"DesktopStreamer.FlushD3dContext stream={streamId}");
+                        streamer.FlushD3dContext();
+                        TraceDone($"DesktopStreamer.FlushD3dContext stream={streamId}", flushTicks);
+                        Msg($"[Cleanup:BG] D3D context flushed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Msg($"[Cleanup:BG] D3D flush error: {ex.Message}");
+                    }
+                }
+
                 if (streamId > 0)
                 {
                     CleanupTrace($"BG shared stream release START stream={streamId}");
@@ -162,28 +185,6 @@ public partial class DesktopBuddyMod
                         Msg($"[Cleanup:BG] Encoder {streamId} stopped");
                     }
 
-                }
-
-                if (streamer != null)
-                {
-                    Msg($"[Cleanup:BG] Stopping capture...");
-                    var stopCaptureTicks = TraceStart($"DesktopStreamer.StopCapture stream={streamId}");
-                    streamer.StopCapture();
-                    TraceDone($"DesktopStreamer.StopCapture stream={streamId}", stopCaptureTicks);
-                    Msg($"[Cleanup:BG] Capture stopped");
-
-                    try
-                    {
-                        Msg($"[Cleanup:BG] Flushing D3D context...");
-                        var flushTicks = TraceStart($"DesktopStreamer.FlushD3dContext stream={streamId}");
-                        streamer.FlushD3dContext();
-                        TraceDone($"DesktopStreamer.FlushD3dContext stream={streamId}", flushTicks);
-                        Msg($"[Cleanup:BG] D3D context flushed");
-                    }
-                    catch (Exception ex)
-                    {
-                        Msg($"[Cleanup:BG] D3D flush error: {ex.Message}");
-                    }
                 }
 
                 Msg($"[Cleanup:BG] Disposing streamer...");
