@@ -25,6 +25,16 @@ public partial class DesktopBuddyMod
             SaveConfigValue(ThrowToDestroy, value);
         });
 
+        AddSectionHeader(ui, "Window Spawning");
+        AddCheckbox(ui, state, "Spawn New Windows in game", Config?.GetValue(SpawnNewWindowsInGame) ?? true, value =>
+        {
+            SaveConfigValue(SpawnNewWindowsInGame, value);
+        });
+        AddCheckbox(ui, state, "Spawn private", Config?.GetValue(SpawnNewWindowsPrivate) ?? true, value =>
+        {
+            SaveConfigValue(SpawnNewWindowsPrivate, value);
+        });
+
         AddSectionHeader(ui, "Audio");
         AddCheckboxWithBadge(ui, state, "Spatial audio", "(Experimental)", SettingsExperimentalOrange, Config?.GetValue(SpatialAudioEnabled) ?? false,
             value => SaveConfigValue(SpatialAudioEnabled, value));

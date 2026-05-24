@@ -15,8 +15,8 @@ public sealed partial class WgcCapture
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
     {
-        if (_disposed) return;
-        lock (_disposeLock)
+        if (!TryEnterFrameProcessing()) return;
+        try
         {
             if (_disposed) return;
             Direct3D11CaptureFrame frame = null;
@@ -38,9 +38,7 @@ public sealed partial class WgcCapture
                 if (w != Width || h != Height)
                 {
                     Log.Msg($"[WgcCapture] Resize {Width}x{Height} -> {w}x{h}");
-                    Width = w;
-                    Height = h;
-                    _needsPoolRecreate = true;
+                    RequestPoolRecreate(w, h);
                     return;
                 }
 
@@ -62,13 +60,15 @@ public sealed partial class WgcCapture
                     if (getHr < 0 || srcTexture == IntPtr.Zero) return;
                 }
 
-                IntPtr encoderTexture = CopyFrameToSharedTexture(srcTexture, w, h);
-                if (encoderTexture != IntPtr.Zero)
+                var copiedTexture = CopyFrameToSharedTexture(srcTexture, w, h);
+                if (copiedTexture != IntPtr.Zero)
+                    _sharedFramesCopied++;
+                if (srcTexture != IntPtr.Zero)
                 {
                     using (DesktopBuddyMod.Perf.Time("queue_frame"))
                     {
                         var gpuCb = OnGpuFrame;
-                        try { gpuCb?.Invoke(_d3dDevice, encoderTexture, w, h); }
+                        try { gpuCb?.Invoke(_d3dDevice, srcTexture, w, h); }
                         catch (Exception gpuEx) { Log.Msg($"[WgcCapture] OnGpuFrame error: {gpuEx}"); }
                     }
                 }
@@ -87,6 +87,10 @@ public sealed partial class WgcCapture
                 if (surfaceAbi != IntPtr.Zero) Marshal.Release(surfaceAbi);
                 frame?.Dispose();
             }
+        }
+        finally
+        {
+            LeaveFrameProcessing();
         }
     }
 

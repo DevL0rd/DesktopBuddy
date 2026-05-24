@@ -20,8 +20,8 @@ public partial class DesktopBuddyMod
         if (state == null) return;
 
         (state.ModalWidth, state.ModalHeight) = GetSettingsModalSize(width, height);
-        state.RenderWidth = state.ModalWidth;
-        state.RenderHeight = state.ModalHeight;
+        state.RenderWidth = Math.Max(1, width);
+        state.RenderHeight = Math.Max(1, height);
         state.CanvasScale = canvasScale;
 
         if (state.RenderTexture != null && !state.RenderTexture.IsDestroyed)
@@ -32,14 +32,19 @@ public partial class DesktopBuddyMod
             state.Canvas.Size.Value = new float2(state.RenderWidth, state.RenderHeight);
         if (state.Mesh != null && !state.Mesh.IsDestroyed)
         {
-            state.Mesh.Size.Value = new float2(state.ModalWidth, state.ModalHeight);
+            state.Mesh.Size.Value = new float2(state.RenderWidth, state.RenderHeight);
             state.Mesh.Curvature.Value = curvature;
             state.Mesh.Slot.LocalScale = float3.One * canvasScale;
-            state.Mesh.Slot.LocalPosition = new float3(0f, 0f, SettingsPanelZOffset);
+            state.Mesh.Slot.LocalPosition = new float3(0f, 0f, GetSettingsPanelZOffset(session, canvasScale));
         }
         UpdateSettingsBlurMask(state);
         SetSettingsModalRect(state);
         UpdateCullingPreview(session, state);
+    }
+
+    private static float GetSettingsPanelZOffset(DesktopSession session, float canvasScale)
+    {
+        return SettingsPanelZOffset;
     }
 
     private static void SyncLiveCullingStateFromConfig(SettingsPanelState state)
@@ -70,18 +75,20 @@ public partial class DesktopBuddyMod
             state.OwnerRoot == null || state.OwnerRoot.IsDestroyed)
             return;
 
-        int modalW = Math.Max(1, state.ModalWidth);
-        int modalH = Math.Max(1, state.ModalHeight);
-        if (state.BackgroundBlurMaskWidth == modalW && state.BackgroundBlurMaskHeight == modalH)
+        int renderW = Math.Max(1, state.RenderWidth);
+        int renderH = Math.Max(1, state.RenderHeight);
+        int modalW = Math.Max(1, Math.Min(renderW, state.ModalWidth));
+        int modalH = Math.Max(1, Math.Min(renderH, state.ModalHeight));
+        if (state.BackgroundBlurMaskWidth == renderW && state.BackgroundBlurMaskHeight == renderH)
             return;
 
-        state.BackgroundBlurMaskWidth = modalW;
-        state.BackgroundBlurMaskHeight = modalH;
+        state.BackgroundBlurMaskWidth = renderW;
+        state.BackgroundBlurMaskHeight = renderH;
 
         var tex = state.BackgroundBlurMask;
         var blur = state.BackgroundBlur;
         var engine = state.OwnerRoot.Engine;
-        byte[] data = CreateRoundedMaskPixels(modalW, modalH, 28f, out int texW, out int texH);
+        byte[] data = CreateCenteredRoundedMaskPixels(renderW, renderH, modalW, modalH, 28f, out int texW, out int texH);
 
         Task.Run(async () =>
         {

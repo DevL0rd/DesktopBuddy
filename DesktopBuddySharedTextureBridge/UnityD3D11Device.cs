@@ -8,18 +8,22 @@ namespace DesktopBuddySharedTextureBridge
     internal static class UnityD3D11Device
     {
         private const int ID3D11Resource_GetDevice = 3;
-        private const int ID3D11Device_GetImmediateContext = 40;
+        private const int IDXGIDevice_GetAdapter = 7;
+        private const int IDXGIAdapter_GetDesc = 8;
 
         private static readonly object Lock = new object();
-        private static Texture2D _probeTexture;
         private static IntPtr _d3dDevice;
-        private static IntPtr _d3dContext;
         private static bool _initialized;
+        private static long _adapterLuid;
+        private static int _adapterVendorId;
+        private static string _adapterDescription;
 
         internal static IntPtr D3dDevice => _d3dDevice;
-        internal static IntPtr D3dContext => _d3dContext;
-        internal static object ContextLock => Lock;
-        internal static bool IsReady => _initialized && _d3dDevice != IntPtr.Zero && _d3dContext != IntPtr.Zero;
+        internal static bool IsReady => _initialized && _d3dDevice != IntPtr.Zero;
+        internal static long AdapterLuid => _adapterLuid;
+        internal static int AdapterVendorId => _adapterVendorId;
+        internal static string AdapterDescription => _adapterDescription;
+        internal static bool HasAdapterInfo => _adapterLuid != 0;
 
         internal static bool Initialize(ManualLogSource log)
         {
@@ -33,57 +37,50 @@ namespace DesktopBuddySharedTextureBridge
 
                 try
                 {
+                    Texture2D probeTexture = null;
                     Info(log, "[UnityD3D11] Creating Unity probe texture");
-                    _probeTexture = new Texture2D(1, 1, TextureFormat.BGRA32, false, true);
-                    Info(log, "[UnityD3D11] Applying Unity probe texture");
-                    _probeTexture.Apply(false, true);
-
-                    Info(log, "[UnityD3D11] Getting native texture pointer");
-                    IntPtr nativeTexture = _probeTexture.GetNativeTexturePtr();
-                    if (nativeTexture == IntPtr.Zero)
+                    try
                     {
-                        Error(log, "[UnityD3D11] Unity probe texture native pointer is null");
-                        return false;
-                    }
-                    Info(log, $"[UnityD3D11] Probe native texture=0x{nativeTexture.ToInt64():X}");
+                        probeTexture = new Texture2D(1, 1, TextureFormat.BGRA32, false, true);
+                        Info(log, "[UnityD3D11] Applying Unity probe texture");
+                        probeTexture.Apply(false, true);
 
-                    unsafe
-                    {
-                        Info(log, "[UnityD3D11] Reading D3D resource vtable");
-                        var resourceVtable = *(IntPtr**)nativeTexture;
-                        var getDevice = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, void>)resourceVtable[ID3D11Resource_GetDevice];
-                        IntPtr d3dDevice;
-                        Info(log, "[UnityD3D11] Calling ID3D11Resource.GetDevice");
-                        getDevice(nativeTexture, &d3dDevice);
-                        _d3dDevice = d3dDevice;
-
-                        if (_d3dDevice == IntPtr.Zero)
+                        Info(log, "[UnityD3D11] Getting native texture pointer");
+                        IntPtr nativeTexture = probeTexture.GetNativeTexturePtr();
+                        if (nativeTexture == IntPtr.Zero)
                         {
-                            Error(log, "[UnityD3D11] ID3D11Resource.GetDevice returned null");
+                            Error(log, "[UnityD3D11] Unity probe texture native pointer is null");
                             return false;
                         }
-                        Info(log, $"[UnityD3D11] D3D device=0x{_d3dDevice.ToInt64():X}");
+                        Info(log, $"[UnityD3D11] Probe native texture=0x{nativeTexture.ToInt64():X}");
 
-                        Info(log, "[UnityD3D11] Calling ID3D11Device.GetImmediateContext");
-                        var deviceVtable = *(IntPtr**)_d3dDevice;
-                        var getImmediateContext = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, void>)deviceVtable[ID3D11Device_GetImmediateContext];
-                        IntPtr d3dContext;
-                        getImmediateContext(_d3dDevice, &d3dContext);
-                        _d3dContext = d3dContext;
-                        Info(log, $"[UnityD3D11] D3D context=0x{_d3dContext.ToInt64():X}");
+                        unsafe
+                        {
+                            Info(log, "[UnityD3D11] Reading D3D resource vtable");
+                            var resourceVtable = *(IntPtr**)nativeTexture;
+                            var getDevice = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, void>)resourceVtable[ID3D11Resource_GetDevice];
+                            IntPtr d3dDevice;
+                            Info(log, "[UnityD3D11] Calling ID3D11Resource.GetDevice");
+                            getDevice(nativeTexture, &d3dDevice);
+                            _d3dDevice = d3dDevice;
+                        }
+                    }
+                    finally
+                    {
+                        if (probeTexture != null)
+                            UnityEngine.Object.Destroy(probeTexture);
                     }
 
-                    if (_d3dContext == IntPtr.Zero)
+                    if (_d3dDevice == IntPtr.Zero)
                     {
-                        Error(log, "[UnityD3D11] ID3D11Device.GetImmediateContext returned null");
+                        Error(log, "[UnityD3D11] ID3D11Resource.GetDevice returned null");
                         return false;
                     }
-
-                    Info(log, "[UnityD3D11] Enabling multithread protection");
-                    EnableMultithreadProtection(log);
+                    Info(log, $"[UnityD3D11] D3D device=0x{_d3dDevice.ToInt64():X}");
+                    TryReadAdapterInfo(log);
 
                     _initialized = true;
-                    Info(log, $"[UnityD3D11] Unity D3D11 device ready device=0x{_d3dDevice.ToInt64():X} context=0x{_d3dContext.ToInt64():X}");
+                    Info(log, $"[UnityD3D11] Unity D3D11 device ready device=0x{_d3dDevice.ToInt64():X} adapter='{_adapterDescription}' vendor=0x{_adapterVendorId:X4} LUID=0x{_adapterLuid:X16}");
                     return true;
                 }
                 catch (Exception ex)
@@ -94,41 +91,61 @@ namespace DesktopBuddySharedTextureBridge
             }
         }
 
-        private static unsafe void EnableMultithreadProtection(ManualLogSource log)
+        private static unsafe void TryReadAdapterInfo(ManualLogSource log)
         {
-            var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
-            if (Marshal.QueryInterface(_d3dDevice, ref mtGuid, out IntPtr mtPtr) < 0 || mtPtr == IntPtr.Zero)
-            {
-                Info(log, "[UnityD3D11] ID3D11Multithread unavailable");
-                return;
-            }
-
+            var dxgiDeviceGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+            IntPtr dxgiDevice = IntPtr.Zero;
+            IntPtr adapter = IntPtr.Zero;
             try
             {
-                var vtable = *(IntPtr**)mtPtr;
-                var setProtected = (delegate* unmanaged[Stdcall]<IntPtr, int, int*, int>)vtable[4];
-                setProtected(mtPtr, 1, null);
-                Info(log, "[UnityD3D11] Unity D3D11 multithread protection enabled");
+                int hr = Marshal.QueryInterface(_d3dDevice, ref dxgiDeviceGuid, out dxgiDevice);
+                if (hr < 0 || dxgiDevice == IntPtr.Zero)
+                {
+                    Info(log, $"[UnityD3D11] IDXGIDevice QueryInterface failed hr=0x{hr:X8}");
+                    return;
+                }
+
+                var dxgiVtable = *(IntPtr**)dxgiDevice;
+                var getAdapter = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, int>)dxgiVtable[IDXGIDevice_GetAdapter];
+                hr = getAdapter(dxgiDevice, &adapter);
+                if (hr < 0 || adapter == IntPtr.Zero)
+                {
+                    Info(log, $"[UnityD3D11] IDXGIDevice.GetAdapter failed hr=0x{hr:X8}");
+                    return;
+                }
+
+                var adapterVtable = *(IntPtr**)adapter;
+                var getDesc = (delegate* unmanaged[Stdcall]<IntPtr, DXGI_ADAPTER_DESC*, int>)adapterVtable[IDXGIAdapter_GetDesc];
+                DXGI_ADAPTER_DESC desc;
+                hr = getDesc(adapter, &desc);
+                if (hr < 0)
+                {
+                    Info(log, $"[UnityD3D11] IDXGIAdapter.GetDesc failed hr=0x{hr:X8}");
+                    return;
+                }
+
+                _adapterLuid = desc.AdapterLuid;
+                _adapterVendorId = unchecked((int)desc.VendorId);
+                _adapterDescription = new string(desc.Description).TrimEnd('\0');
+                Info(log, $"[UnityD3D11] Adapter '{_adapterDescription}' VendorId=0x{desc.VendorId:X4} LUID=0x{desc.AdapterLuid:X16}");
+            }
+            catch (Exception ex)
+            {
+                log?.LogWarning($"[UnityD3D11] Failed to read adapter info: {ex.Message}");
             }
             finally
             {
-                Marshal.Release(mtPtr);
+                if (adapter != IntPtr.Zero) Marshal.Release(adapter);
+                if (dxgiDevice != IntPtr.Zero) Marshal.Release(dxgiDevice);
             }
         }
 
         internal static void Dispose()
         {
-            SharedTextureBridgePlugin.LogInfo($"[UnityD3D11] Dispose ENTER initialized={_initialized} device=0x{_d3dDevice.ToInt64():X} context=0x{_d3dContext.ToInt64():X} probe={_probeTexture != null}");
+            SharedTextureBridgePlugin.LogInfo($"[UnityD3D11] Dispose ENTER initialized={_initialized} device=0x{_d3dDevice.ToInt64():X}");
             lock (Lock)
             {
                 SharedTextureBridgePlugin.LogInfo("[UnityD3D11] Dispose lock entered");
-                if (_d3dContext != IntPtr.Zero)
-                {
-                    try { Marshal.Release(_d3dContext); }
-                    catch (Exception ex) { SharedTextureBridgePlugin.LogError("[UnityD3D11] Context release failed", ex); }
-                    _d3dContext = IntPtr.Zero;
-                }
-
                 if (_d3dDevice != IntPtr.Zero)
                 {
                     try { Marshal.Release(_d3dDevice); }
@@ -136,13 +153,10 @@ namespace DesktopBuddySharedTextureBridge
                     _d3dDevice = IntPtr.Zero;
                 }
 
-                if (_probeTexture != null)
-                {
-                    UnityEngine.Object.Destroy(_probeTexture);
-                    _probeTexture = null;
-                }
-
                 _initialized = false;
+                _adapterLuid = 0;
+                _adapterVendorId = 0;
+                _adapterDescription = null;
             }
             SharedTextureBridgePlugin.LogInfo("[UnityD3D11] Dispose EXIT");
         }
@@ -155,6 +169,20 @@ namespace DesktopBuddySharedTextureBridge
         private static void Error(ManualLogSource log, string message)
         {
             log?.LogError(message);
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private unsafe struct DXGI_ADAPTER_DESC
+        {
+            public fixed char Description[128];
+            public uint VendorId;
+            public uint DeviceId;
+            public uint SubSysId;
+            public uint Revision;
+            public UIntPtr DedicatedVideoMemory;
+            public UIntPtr DedicatedSystemMemory;
+            public UIntPtr SharedSystemMemory;
+            public long AdapterLuid;
         }
     }
 }

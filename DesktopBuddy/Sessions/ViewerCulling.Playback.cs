@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using FrooxEngine;
 
 namespace DesktopBuddy;
@@ -17,6 +16,8 @@ public partial class DesktopBuddyMod
         session.CullingOutOfRangeSince = -1.0;
         session.CullingAppliedStreamAllowedByUserId.Clear();
         session.CullingOutOfRangeSinceByUserId.Clear();
+        session.CullingPresentUserIds.Clear();
+        session.CullingStaleUserIds.Clear();
 
         void Tick()
         {
@@ -24,11 +25,17 @@ public partial class DesktopBuddyMod
                 return;
 
             double now = session.Root.World.Time.WorldTime;
-            var presentKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var presentKeys = session.CullingPresentUserIds;
+            var staleKeys = session.CullingStaleUserIds;
+            presentKeys.Clear();
+            staleKeys.Clear();
             bool anyViewerShouldPlay = false;
 
-            foreach (var user in session.Root.World.AllUsers.Where(u => u.IsPresentInWorld))
+            foreach (var user in session.Root.World.AllUsers)
             {
+                if (!user.IsPresentInWorld)
+                    continue;
+
                 string key = ViewerKey(user);
                 if (string.IsNullOrWhiteSpace(key))
                     continue;
@@ -67,11 +74,16 @@ public partial class DesktopBuddyMod
                 anyViewerShouldPlay |= shouldPlay;
             }
 
-            foreach (string key in session.CullingAppliedStreamAllowedByUserId.Keys.ToArray())
+            foreach (string key in session.CullingAppliedStreamAllowedByUserId.Keys)
             {
                 if (presentKeys.Contains(key))
                     continue;
 
+                staleKeys.Add(key);
+            }
+
+            foreach (string key in staleKeys)
+            {
                 session.CullingAppliedStreamAllowedByUserId.Remove(key);
                 session.CullingOutOfRangeSinceByUserId.Remove(key);
             }

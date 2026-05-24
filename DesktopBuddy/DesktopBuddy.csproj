@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
@@ -162,6 +164,9 @@
     <Content Include="..\icon_transparent.png" Link="icon_transparent.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\scripts\CollectDesktopBuddyDiagnostics.ps1" Link="CollectDesktopBuddyDiagnostics.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
@@ -180,6 +185,7 @@
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)CollectDesktopBuddyDiagnostics.ps1" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyRuntime)" DestinationFiles="@(DesktopBuddyRuntime->'$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
   </Target>

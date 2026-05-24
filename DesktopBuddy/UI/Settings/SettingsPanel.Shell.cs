@@ -55,8 +55,8 @@ public partial class DesktopBuddyMod
     private static void CreateSettingsPanel(Slot root, DesktopSession session, int width, int height, float canvasScale, float curvature)
     {
         (int modalW, int modalH) = GetSettingsModalSize(width, height);
-        int renderW = modalW;
-        int renderH = modalH;
+        int renderW = Math.Max(1, width);
+        int renderH = Math.Max(1, height);
 
         var host = root.AddSlot("DesktopBuddySettingsRenderHost", false);
         host.PersistentSelf = false;
@@ -121,11 +121,11 @@ public partial class DesktopBuddyMod
         var mesh = AddCurvedRenderPlane(
             root,
             "SettingsCurvedMesh",
-            modalW,
-            modalH,
+            renderW,
+            renderH,
             canvasScale,
             0f,
-            SettingsPanelZOffset,
+            GetSettingsPanelZOffset(session, canvasScale),
             renderTexture,
             camera,
             addCollider: true,

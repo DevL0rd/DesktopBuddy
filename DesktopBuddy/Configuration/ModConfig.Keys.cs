@@ -17,6 +17,10 @@ public partial class DesktopBuddyMod
         new("showContextMenuItem", "Show DesktopBuddy in the Resonite context menu.", () => true);
     internal static readonly DesktopBuddyConfigKey<bool> ThrowToDestroy =
         new("throwToDestroy", "Destroy DesktopBuddy panels when thrown quickly.", () => true);
+    internal static readonly DesktopBuddyConfigKey<bool> SpawnNewWindowsInGame =
+        new("spawnNewWindowsInGame", "Automatically spawn DesktopBuddy panels for new standalone windows from the same process.", () => true);
+    internal static readonly DesktopBuddyConfigKey<bool> SpawnNewWindowsPrivate =
+        new("spawnNewWindowsPrivate", "Automatically spawned new-window panels start private.", () => true);
     internal static readonly DesktopBuddyConfigKey<int> Bitrate =
         new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
     internal static readonly DesktopBuddyConfigKey<int> StreamFps =
@@ -98,6 +102,8 @@ public partial class DesktopBuddyMod
         Config.Bind(CheckForUpdates);
         Config.Bind(ShowContextMenuItem);
         Config.Bind(ThrowToDestroy);
+        Config.Bind(SpawnNewWindowsInGame);
+        Config.Bind(SpawnNewWindowsPrivate);
         Config.Bind(Bitrate);
         Config.Bind(StreamFps);
         Config.Bind(MaxStreamResolution);

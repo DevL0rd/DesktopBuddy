@@ -15,11 +15,11 @@ namespace DesktopBuddy;
 public partial class DesktopBuddyMod
 {
 
-    internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
+    internal static void SpawnStreaming(World world, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1, bool startPrivate = false)
     {
         try
         {
-            Msg($"[SpawnStreaming] Starting for '{title}' hwnd={hwnd} monitorIndex={monitorIndex}");
+            Msg($"[SpawnStreaming] Starting for '{title}' hwnd={hwnd} monitorIndex={monitorIndex} startPrivate={startPrivate}");
             if (hwnd != IntPtr.Zero)
             {
                 WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
@@ -43,15 +43,17 @@ public partial class DesktopBuddyMod
             var headPos = userRoot.HeadPosition;
             var headRot = userRoot.HeadRotation;
             var forward = headRot * float3.Forward;
-            root.GlobalPosition = headPos + forward * 0.8f;
+            float userScale = GetUserSpawnScale(userRoot);
+            root.LocalScale = float3.One * userScale;
+            root.GlobalPosition = headPos + forward * (0.8f * userScale);
             root.GlobalRotation = floatQ.LookRotation(forward, float3.Up);
             var destroyer = root.AttachComponent<DestroyOnUserLeave>();
 
             destroyer.TargetUser.Target = localUser;
 
-            Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition}");
+            Msg($"[SpawnStreaming] Slot created at pos={root.GlobalPosition} userScale={userScale}");
 
-            StartStreaming(root, hwnd, title, monitorHandle: monitorHandle, monitorIndex: monitorIndex);
+            StartStreaming(root, hwnd, title, monitorHandle: monitorHandle, monitorIndex: monitorIndex, startPrivate: startPrivate);
         }
         catch (Exception ex)
         {
@@ -59,7 +61,22 @@ public partial class DesktopBuddyMod
         }
     }
 
-    private static void StartStreaming(Slot root, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1)
+    private static float GetUserSpawnScale(UserRoot userRoot)
+    {
+        try
+        {
+            var scale = userRoot?.Slot?.GlobalScale ?? float3.One;
+            float userScale = MathF.Max(scale.x, MathF.Max(scale.y, scale.z));
+            return float.IsFinite(userScale) && userScale > 0.001f ? userScale : 1f;
+        }
+        catch (Exception ex)
+        {
+            Msg($"[SpawnStreaming] Failed to read user scale, using 1: {ex.Message}");
+            return 1f;
+        }
+    }
+
+    private static void StartStreaming(Slot root, IntPtr hwnd, string title, IntPtr monitorHandle = default, int monitorIndex = -1, bool startPrivate = false)
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd} monitorIndex={monitorIndex})");
 
@@ -89,7 +106,7 @@ public partial class DesktopBuddyMod
                 }
                 world.RunInUpdates(0, () =>
                 {
-                    try { FinishStartStreaming(root, hwnd, title, streamer, monitorIndex); }
+                    try { FinishStartStreaming(root, hwnd, title, streamer, monitorIndex, startPrivate); }
                     catch (Exception ex)
                     {
                         Msg($"[StartStreaming] FinishStartStreaming callback error: {ex}");
@@ -115,7 +132,7 @@ public partial class DesktopBuddyMod
         });
     }
 
-    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, DesktopStreamer streamer, int monitorIndex = -1)
+    private static void FinishStartStreaming(Slot root, IntPtr hwnd, string title, DesktopStreamer streamer, int monitorIndex = -1, bool startPrivate = false)
     {
         if (root == null || root.IsDestroyed)
         {
@@ -167,7 +184,10 @@ public partial class DesktopBuddyMod
                 topBarBackStripRef.Curvature.Value = currentPanelCurvature;
 
             if (session != null)
+            {
+                UpdateAdaptiveScreenLightPosition(session);
                 ResizeSettingsPanel(session, session.LastKnownW > 0 ? session.LastKnownW : w, session.LastKnownH > 0 ? session.LastKnownH : h, canvasScale, currentPanelCurvature);
+            }
         }
 
         var displaySlot = root.AddLocalSlot("Display", false);
@@ -176,32 +196,15 @@ public partial class DesktopBuddyMod
 
         var texSlot = displaySlot.AddSlot("Texture");
         var procTex = TextureProviderSettings.ClampWrap(texSlot.AttachComponent<DesktopTextureProvider>());
+        procTex.DisplayIndex.Value = int.MinValue;
         OurProviders.Add(procTex);
         int sharedTextureSlot = -1;
+        int pendingBridgeDisplayIndex = -1;
         bool useTextureBridge = TextureBridgeChannel != null && TextureBridgeChannel.IsOpen &&
             (hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
         if (useTextureBridge)
         {
-            sharedTextureSlot = TextureBridgeChannel.RegisterTexture(
-                streamer.SharedTextureHandle,
-                streamer.SharedTextureWidth,
-                streamer.SharedTextureHeight);
-            if (sharedTextureSlot < 0)
-            {
-                Msg($"[StartStreaming] No free shared texture slots for: {title}");
-                streamer.Dispose();
-                root.Destroy();
-                return;
-            }
-            int bridgeIndex = SharedTextureBridgeProtocol.MagicIndexBase + sharedTextureSlot;
-            procTex.DisplayIndex.Value = bridgeIndex;
-            Msg($"[StartStreaming] Shared texture bridge: slot {sharedTextureSlot}, bridgeIndex={bridgeIndex}, shared=0x{streamer.SharedTextureHandle.ToInt64():X}");
-            int textureSlot = sharedTextureSlot;
-            root.World.RunInUpdates(120, () =>
-            {
-                if (TextureBridgeChannel != null && !TextureBridgeChannel.IsTextureRunning(textureSlot))
-                    Msg($"[StartStreaming] WARNING: Shared texture slot {textureSlot} did not report running after 120 updates");
-            });
+            Msg("[StartStreaming] Shared texture bridge registration deferred until first current-size frame");
         }
         else if (hwnd == IntPtr.Zero && monitorIndex >= 0)
         {
@@ -240,21 +243,6 @@ public partial class DesktopBuddyMod
         Msg($"[StartStreaming] Process ID: {processId}");
 
         var seenRelatedHwnds = new HashSet<IntPtr>();
-        if (processId != 0)
-        {
-            try
-            {
-                foreach (var win in WindowEnumerator.GetProcessWindows(processId))
-                {
-                    seenRelatedHwnds.Add(win.Handle);
-                }
-                Msg($"[StartStreaming] Baseline related windows for PID {processId}: {seenRelatedHwnds.Count}");
-            }
-            catch (Exception ex)
-            {
-                Msg($"[StartStreaming] Baseline related windows failed for PID {processId}: {ex.Message}");
-            }
-        }
 
         session = new DesktopSession
         {
@@ -265,7 +253,11 @@ public partial class DesktopBuddyMod
             Hwnd = hwnd,
             ProcessId = processId,
             Collider = collider,
+            UseTextureBridge = useTextureBridge,
+            BridgeRegistrationPending = useTextureBridge,
             SharedTextureSlot = sharedTextureSlot,
+            PendingBridgeDisplayIndex = pendingBridgeDisplayIndex,
+            BridgeDisplayIndexApplied = pendingBridgeDisplayIndex < 0,
             LastKnownW = w,
             LastKnownH = h,
             PanelMesh = frontPlaneRef,
@@ -274,6 +266,8 @@ public partial class DesktopBuddyMod
             SeenRelatedHwnds = seenRelatedHwnds,
         };
         ActiveSessions.Add(session);
+        root.Destroyed += _ => CleanupAndRemoveSession(session, "root destroyed");
+        CreateAdaptiveScreenLight(root, session, hwnd, streamer.MonitorHandle);
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
 
@@ -753,6 +747,9 @@ public partial class DesktopBuddyMod
             var tex = topBarBlurMask;
             var blur = topBarBlur;
             var engine = root.Engine;
+            if (tex == null || blur == null || engine?.LocalDB == null)
+                return;
+
             byte[] data = CreateCenteredRoundedMaskPixels(
                 canvasWidthPx,
                 canvasHeightPx,
@@ -771,7 +768,11 @@ public partial class DesktopBuddyMod
                     if (uri == null)
                         return;
 
-                    tex.World.RunInUpdates(0, () =>
+                    var texWorld = tex.World;
+                    if (texWorld == null || tex.IsDestroyed || blur.IsDestroyed)
+                        return;
+
+                    texWorld.RunInUpdates(0, () =>
                     {
                         if (tex.IsDestroyed || blur.IsDestroyed)
                             return;
@@ -982,8 +983,6 @@ public partial class DesktopBuddyMod
             blendMode: BlendMode.Alpha,
             renderQueue: SettingsUiRenderQueue,
             alphaCutoff: 0.01f);
-        topBarBlur = AddCurvedMeshBackdropBlur(topBarStripRef.Slot, topBarStripRef, 64, 0.012f);
-        topBarBlurMask = TextureProviderSettings.ClampWrap(topBarStripRef.Slot.AttachComponent<StaticTexture2D>());
         RegisterTopBarRaycastPortal(topBarStripRef?.Slot, barRenderRoot);
         topBarBackStripRef = AddCurvedRenderPlane(
             root,
@@ -1006,6 +1005,8 @@ public partial class DesktopBuddyMod
             textureOffset: new float2(1f, 0f));
         ApplyPanelCurvature(currentPanelCurvature);
         ApplyBarLayout(barCollapsedW);
+        SetBarExpanded(true);
+        ScheduleCollapseWhenHoverLeaves();
         root.World.RunInUpdates(1, BarUpdateLoop);
 
         Msg("[TopBar] Created bottom hover menu");
@@ -1115,13 +1116,21 @@ public partial class DesktopBuddyMod
             DeviceIndicatorZ(),
             Config?.GetValue(SpatialAudioEnabled) ?? false);
 
-        bool isPrivate = false;
+        bool isPrivate = startPrivate;
         string savedStreamUrl = null;
 
         var rootVis = root.AttachComponent<ValueUserOverride<bool>>();
         rootVis.Target.Target = root.ActiveSelf_Field;
-        rootVis.Default.Value = true;
+        rootVis.Default.Value = !isPrivate;
         rootVis.CreateOverrideOnWrite.Value = false;
+        if (isPrivate)
+            rootVis.SetOverride(root.World.LocalUser, true);
+
+        void ApplyPrivateButtonTint()
+        {
+            var img = privateBtn.Slot.GetComponent<Image>();
+            if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : colorX.Clear;
+        }
 
         privateBtn.LocalPressed += (IButton b, ButtonEventData d) =>
         {
@@ -1144,11 +1153,22 @@ public partial class DesktopBuddyMod
                     SetRemoteStreamUrl(session, new Uri(savedStreamUrl), "private mode restore");
                     Msg($"[Private] Stream restored: {savedStreamUrl}");
                 }
+                else if (session.StreamId > 0)
+                {
+                    var currentUrl = GetSharedStreamUrl(session.Hwnd, session.StreamId);
+                    if (currentUrl != null)
+                    {
+                        SetRemoteStreamUrl(session, currentUrl, "private mode restore");
+                        Msg($"[Private] Stream restored: {currentUrl}");
+                    }
+                }
             }
 
-            var img = privateBtn.Slot.GetComponent<Image>();
-            if (img != null) img.Tint.Value = isPrivate ? new colorX(0.5f, 0.2f, 0.2f, 1f) : colorX.Clear;
+            ApplyPrivateButtonTint();
         };
+        ApplyPrivateButtonTint();
+        if (isPrivate)
+            Msg("[Private] Initial mode: true");
 
         bool isDesktopCapture = hwnd == IntPtr.Zero;
         uint capturedPid = processId;
@@ -1256,6 +1276,7 @@ public partial class DesktopBuddyMod
             if (streamCanvasRef != null && !streamCanvasRef.IsDestroyed)
                 streamCanvasRef.Size.Value = new float2(newW, newH);
 
+            UpdateAdaptiveScreenLightPosition(session);
             ResizeSettingsPanel(session, newW, newH, canvasScale, currentPanelCurvature);
 
             if (keyboardSlot != null && keyboardSlot.ActiveSelf && !keyboardSlot.IsDestroyed)
@@ -1275,21 +1296,35 @@ public partial class DesktopBuddyMod
         ScheduleUpdate(root.World);
 
         root.Tag = "Desktop Buddy";
-        bool focused = WindowInput.FocusWindow(hwnd);
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            Msg($"[StartStreaming] Focus request START hwnd={hwnd} title={title}");
+            bool focused = WindowInput.FocusWindow(hwnd);
+            Msg(focused
+                ? $"[StartStreaming] Window focused, streaming started for: {title}"
+                : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
+        });
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
-        if (useSpatialAudio && !isDesktopCapture && processId != 0 && VBCable.HasCableInputDevice())
+        if (useSpatialAudio && !isDesktopCapture && processId != 0)
         {
-            string cableId = VBCable.FindCableInputDeviceId();
-            if (cableId != null)
+            System.Threading.Tasks.Task.Run(() =>
             {
-                AudioRouter.SetProcessOutputDevice(processId, cableId);
-                session.OwnsAudioRedirect = true;
-            }
+                try
+                {
+                    Msg($"[AudioRouter] Background route START pid={processId}");
+                    if (!VBCable.HasCableInputDevice()) return;
+                    string cableId = VBCable.FindCableInputDeviceId();
+                    if (cableId == null) return;
+                    AudioRouter.SetProcessOutputDevice(processId, cableId);
+                    session.OwnsAudioRedirect = true;
+                    Msg($"[AudioRouter] Background route DONE pid={processId}");
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[AudioRouter] Background route failed for PID {processId}: {ex.Message}");
+                }
+            });
         }
-
-        Msg(focused
-            ? $"[StartStreaming] Window focused, streaming started for: {title}"
-            : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
     }
 }

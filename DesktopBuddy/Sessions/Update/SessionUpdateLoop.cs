@@ -14,6 +14,7 @@ public partial class DesktopBuddyMod
     {
         _updateCount++;
         double dt = world.Time.Delta;
+        bool hasSessionsInWorld = false;
 
         if (world.IsDestroyed)
         {
@@ -34,7 +35,9 @@ public partial class DesktopBuddyMod
 
         try
         {
-            FindLastVirtualDeviceSessionIndexes(world, out int lastVCamIdx, out int lastVMicIdx);
+            ProcessWindowEvents(world);
+            int lastVCamIdx = -1;
+            int lastVMicIdx = -1;
 
             for (int i = ActiveSessions.Count - 1; i >= 0; i--)
             {
@@ -69,7 +72,13 @@ public partial class DesktopBuddyMod
                 }
 
                 if (session.Root.World != world) continue;
+                hasSessionsInWorld = true;
                 if (session.UpdateInProgress) continue;
+
+                if (lastVCamIdx < 0 && session.VCamCamera != null && !session.VCamCamera.IsDestroyed)
+                    lastVCamIdx = i;
+                if (lastVMicIdx < 0 && session.VMicListener != null && !session.VMicListener.IsDestroyed)
+                    lastVMicIdx = i;
 
                 session.TimeSinceValidCheck += dt;
                 if (session.TimeSinceValidCheck >= 0.5)
@@ -107,15 +116,31 @@ public partial class DesktopBuddyMod
                     continue;
                 }
 
-                ProcessWindowEvents(world);
-
                 if (ProcessSessionResizeAndEncoding(world, session))
                     continue;
+
+                if (session.PendingBridgeDisplayIndex >= 0 && !session.BridgeDisplayIndexApplied)
+                {
+                    if (TextureBridgeChannel != null &&
+                        TextureBridgeChannel.IsTextureRunning(session.SharedTextureSlot))
+                    {
+                        session.Texture.DisplayIndex.Value = session.PendingBridgeDisplayIndex;
+                        session.BridgeDisplayIndexApplied = true;
+                        Msg($"[UpdateLoop] Shared texture bridge ready; applying DisplayIndex={session.PendingBridgeDisplayIndex} slot={session.SharedTextureSlot}");
+                        RetriggerDesktopTexture(session.Texture);
+                    }
+                    else
+                    {
+                        if (_updateCount % 30 == 0)
+                            Msg($"[UpdateLoop] Waiting for shared texture bind before applying DisplayIndex={session.PendingBridgeDisplayIndex} slot={session.SharedTextureSlot}");
+                        continue;
+                    }
+                }
 
                 if (!session.Texture.IsAssetAvailable)
                 {
                     if (_updateCount <= 5) Msg("[UpdateLoop] Asset not available yet, waiting...");
-                    if (session.SharedTextureSlot >= 0 && _updateCount % 5 == 0)
+                    if (session.SharedTextureSlot >= 0 && session.BridgeDisplayIndexApplied && _updateCount % 5 == 0)
                     {
                         RetriggerDesktopTexture(session.Texture);
                     }
@@ -131,13 +156,9 @@ public partial class DesktopBuddyMod
         catch (Exception ex)
         {
             Msg($"ERROR in UpdateLoop: {ex}");
+            hasSessionsInWorld = HasSessionsInWorld(world);
         }
 
-        bool hasSessionsInWorld = false;
-        for (int i = 0; i < ActiveSessions.Count; i++)
-        {
-            if (ActiveSessions[i].Root?.World == world) { hasSessionsInWorld = true; break; }
-        }
         if (hasSessionsInWorld)
         {
             world.RunInUpdates(1, () => UpdateLoop(world));
@@ -147,6 +168,16 @@ public partial class DesktopBuddyMod
             Msg("[UpdateLoop] No sessions left for this world, stopping loop");
             _scheduledWorlds.Remove(world);
         }
+    }
+
+    private static bool HasSessionsInWorld(World world)
+    {
+        for (int i = 0; i < ActiveSessions.Count; i++)
+        {
+            if (ActiveSessions[i].Root?.World == world)
+                return true;
+        }
+        return false;
     }
 
 }
