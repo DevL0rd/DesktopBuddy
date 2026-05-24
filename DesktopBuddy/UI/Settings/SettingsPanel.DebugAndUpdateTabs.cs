@@ -17,12 +17,12 @@ public partial class DesktopBuddyMod
     private static void BuildDebugTab(UIBuilder ui, SettingsPanelState state, DesktopSession session)
     {
         AddSectionHeader(ui, "Debug");
-        AddButtonRow(ui, state, "Export combined log", () =>
+        AddButtonRow(ui, state, "Create diagnostics bundle", () =>
         {
-            try { DesktopBuddy.Log.ExportCombinedLog(); }
-            catch (Exception ex) { Msg($"[Log] Combined export failed: {ex.Message}"); }
+            try { DesktopBuddy.Log.ExportDiagnosticsBundle(); }
+            catch (Exception ex) { Msg($"[Log] Diagnostics export failed: {ex.Message}"); }
             RebuildSettingsPanel(state, session);
-        }, buttonLabel: "Export");
+        }, buttonLabel: "Create");
 
         AddSectionHeader(ui, "Debug Log");
         float logHeight = Math.Clamp(state.ModalHeight - 360f, 180f, 340f);

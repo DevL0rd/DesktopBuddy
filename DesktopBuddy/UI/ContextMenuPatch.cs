@@ -18,6 +18,7 @@ public static class ContextMenuPatch
     private const string DesktopIconFileName = "icon_transparent.png";
 
     private static readonly ConcurrentDictionary<IntPtr, Uri> _iconCache = new();
+    private static readonly ConcurrentDictionary<IntPtr, byte> _iconCacheRequests = new();
 
     private static Uri _desktopIconUri;
     private static bool _desktopIconLoaded;
@@ -144,45 +145,37 @@ public static class ContextMenuPatch
     {
         try
         {
-            var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
-
             if (_iconCache.TryGetValue(hwnd, out var cached))
             {
+                var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
                 tex.URL.Value = cached;
                 return tex;
             }
 
-            var iconData = WindowIconExtractor.GetIconRGBA(hwnd, out int w, out int h);
-            if (iconData == null || w <= 0 || h <= 0) return null;
-
-            var capturedData = iconData;
-            var capturedW = w;
-            var capturedH = h;
             var capturedHwnd = hwnd;
-            var capturedTex = tex;
+            if (!_iconCacheRequests.TryAdd(capturedHwnd, 0))
+                return null;
+
             Task.Run(async () =>
             {
                 try
                 {
-                    var bitmap = new Bitmap2D(capturedData, capturedW, capturedH,
+                    var iconData = WindowIconExtractor.GetIconRGBA(capturedHwnd, out int w, out int h);
+                    if (iconData == null || w <= 0 || h <= 0)
+                        return;
+
+                    var bitmap = new Bitmap2D(iconData, w, h,
                         Renderite.Shared.TextureFormat.RGBA32, false, Renderite.Shared.ColorProfile.sRGB, false);
                     var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
                     if (uri != null)
-                    {
                         _iconCache[capturedHwnd] = uri;
-                        capturedTex.World.RunInUpdates(0, () =>
-                        {
-                            if (!capturedTex.IsDestroyed)
-                                capturedTex.URL.Value = uri;
-                        });
-                    }
                 }
                 catch (Exception ex)
                 {
                     DesktopBuddyMod.Msg($"[Icon] Save error: {ex.Message}");
                 }
             });
-            return tex;
+            return null;
         }
         catch (Exception ex)
         {

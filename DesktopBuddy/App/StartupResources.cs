@@ -8,7 +8,7 @@ public partial class DesktopBuddyMod
     private static void PrewarmSharedResources()
     {
         try { WgcCapture.PrewarmSharedDevice(); }
-        catch (Exception ex) { Msg($"[Startup] WGC shared device prewarm failed: {ex.Message}"); }
+        catch (Exception ex) { Msg($"[Startup] WGC adapter prewarm failed: {ex.Message}"); }
 
         try { WgcCapture.PrewarmCaptureFactory(); }
         catch (Exception ex) { Msg($"[Startup] WGC capture factory prewarm failed: {ex.Message}"); }

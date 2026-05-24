@@ -31,6 +31,8 @@ internal static class RuntimeStore
     internal static Thread WindowPollerThread;
     internal static volatile bool WindowPollerRunning;
     internal static readonly ConcurrentQueue<WindowEvent> WindowEvents = new();
+    internal static readonly HashSet<IntPtr> AutoSpawnSeenWindows = new();
+    internal static bool AutoSpawnWindowBaselineInitialized;
 
     internal static string LatestVersion;
     internal static string RemoteVersion;

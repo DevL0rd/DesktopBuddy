@@ -6,10 +6,15 @@ public partial class DesktopBuddyMod
 {
     private static void ProcessWindowEvents(World world)
     {
-        while (_windowEvents.TryDequeue(out var evt))
+        int pending = _windowEvents.Count;
+        for (int processed = 0; processed < pending && _windowEvents.TryDequeue(out var evt); processed++)
         {
             if (evt.Session.Cleaned || evt.Session.Root == null || evt.Session.Root.IsDestroyed) continue;
-            if (evt.Session.Root.World != world) continue;
+            if (evt.Session.Root.World != world)
+            {
+                _windowEvents.Enqueue(evt);
+                continue;
+            }
 
             switch (evt.EventType)
             {
@@ -22,9 +27,15 @@ public partial class DesktopBuddyMod
                     break;
 
                 case WindowEventType.NewTopLevelWindow:
+                    if (!(Config?.GetValue(SpawnNewWindowsInGame) ?? true))
+                    {
+                        Msg($"[WindowPoller] Ignored new window hwnd={evt.WindowHwnd} title='{evt.Title}': automatic new-window spawning disabled");
+                        break;
+                    }
+
                     if (!WindowEnumerator.TryValidateStandaloneProcessWindow(
                             evt.WindowHwnd,
-                            evt.Session.ProcessId,
+                            0,
                             out string currentTitle,
                             out string validationReason))
                     {
@@ -33,8 +44,9 @@ public partial class DesktopBuddyMod
                     }
 
                     var spawnTitle = !string.IsNullOrWhiteSpace(currentTitle) ? currentTitle : evt.Title;
-                    Msg($"[WindowPoller] Detected new top-level window: hwnd={evt.WindowHwnd} title='{spawnTitle}'");
-                    SpawnStreaming(evt.Session.Root.World, evt.WindowHwnd, spawnTitle);
+                    bool spawnPrivate = Config?.GetValue(SpawnNewWindowsPrivate) ?? true;
+                    Msg($"[WindowPoller] Detected new top-level window: hwnd={evt.WindowHwnd} title='{spawnTitle}' private={spawnPrivate}");
+                    SpawnStreaming(evt.Session.Root.World, evt.WindowHwnd, spawnTitle, startPrivate: spawnPrivate);
                     break;
             }
         }

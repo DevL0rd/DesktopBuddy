@@ -25,6 +25,9 @@ static class DesktopTextureProviderPatch
         if (!DesktopBuddyMod.OurProviders.Contains(__instance))
             return true; // Not ours — run original
 
+        if (__instance.DisplayIndex.Value == int.MinValue)
+            return false;
+
         try
         {
             if (!_reflectionCached)

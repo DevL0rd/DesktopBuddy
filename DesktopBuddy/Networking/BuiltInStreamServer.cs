@@ -44,11 +44,11 @@ public sealed class BuiltInStreamServer : IDisposable
 
     public void StopEncoder(int streamId)
     {
-        Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.StopEncoder ENTER stream={streamId}");
+        Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder ENTER stream={streamId}");
         if (!_streams.TryRemove(streamId, out var entry)) return;
-        Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.StopEncoder removed entry stream={streamId}; encoder.Dispose START");
+        Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder removed entry stream={streamId}; encoder.Dispose START");
         entry.Encoder.Dispose();
-        Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.StopEncoder EXIT stream={streamId}");
+        Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder EXIT stream={streamId}");
     }
 
     private async Task ListenLoopAsync()
@@ -202,20 +202,20 @@ public sealed class BuiltInStreamServer : IDisposable
 
     public void Dispose()
     {
-        Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.Dispose ENTER streams={_streams.Count}");
+        Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose ENTER streams={_streams.Count}");
         _running = false;
         foreach (var kvp in _streams)
         {
-            Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose START stream={kvp.Key}");
+            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose START stream={kvp.Key}");
             kvp.Value.Encoder.Dispose();
-            Log.MsgImmediate($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose DONE stream={kvp.Key}");
+            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose DONE stream={kvp.Key}");
         }
         _streams.Clear();
-        Log.MsgImmediate("[CleanupTrace] BuiltInStreamServer.Dispose listener.Stop START");
+        Log.Msg("[CleanupTrace] BuiltInStreamServer.Dispose listener.Stop START");
         try { _listener.Stop(); } catch (Exception ex) { Log.Msg($"[BuiltInStreamServer] Listener stop error: {ex.Message}"); }
-        Log.MsgImmediate("[CleanupTrace] BuiltInStreamServer.Dispose listener.Close START");
+        Log.Msg("[CleanupTrace] BuiltInStreamServer.Dispose listener.Close START");
         try { _listener.Close(); } catch (Exception ex) { Log.Msg($"[BuiltInStreamServer] Listener close error: {ex.Message}"); }
-        Log.MsgImmediate("[CleanupTrace] BuiltInStreamServer.Dispose EXIT");
+        Log.Msg("[CleanupTrace] BuiltInStreamServer.Dispose EXIT");
     }
 
     private sealed class StreamEntry

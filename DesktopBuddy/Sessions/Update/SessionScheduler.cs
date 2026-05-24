@@ -13,7 +13,7 @@ public partial class DesktopBuddyMod
     private static readonly HashSet<World> _scheduledWorlds = new();
     private const int VirtualCameraTargetFps = 60;
 
-    private static void CleanupTrace(string message) => DesktopBuddy.Log.MsgImmediate($"[CleanupTrace] {message}");
+    private static void CleanupTrace(string message) => DesktopBuddy.Log.Msg($"[CleanupTrace] {message}");
 
     private static long TraceStart(string label)
     {

@@ -18,6 +18,8 @@ public partial class DesktopBuddyMod
             Config.Set(CheckForUpdates, Config.GetValue(CheckForUpdates));
             Config.Set(ShowContextMenuItem, Config.GetValue(ShowContextMenuItem));
             Config.Set(ThrowToDestroy, Config.GetValue(ThrowToDestroy));
+            Config.Set(SpawnNewWindowsInGame, Config.GetValue(SpawnNewWindowsInGame));
+            Config.Set(SpawnNewWindowsPrivate, Config.GetValue(SpawnNewWindowsPrivate));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -84,6 +86,8 @@ public partial class DesktopBuddyMod
         Config.Set(CheckForUpdates, CheckForUpdates.DefaultValue);
         Config.Set(ShowContextMenuItem, ShowContextMenuItem.DefaultValue);
         Config.Set(ThrowToDestroy, ThrowToDestroy.DefaultValue);
+        Config.Set(SpawnNewWindowsInGame, SpawnNewWindowsInGame.DefaultValue);
+        Config.Set(SpawnNewWindowsPrivate, SpawnNewWindowsPrivate.DefaultValue);
         Config.Set(Bitrate, Bitrate.DefaultValue);
         Config.Set(StreamFps, StreamFps.DefaultValue);
         Config.Set(MaxStreamResolution, MaxStreamResolution.DefaultValue);
