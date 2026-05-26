@@ -18,6 +18,10 @@ on:
           - Runtime
           - Main
 
+concurrency:
+  group: publish-thunderstore-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   publish:
     runs-on: windows-latest

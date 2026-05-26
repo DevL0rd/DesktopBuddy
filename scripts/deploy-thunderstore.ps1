@@ -93,6 +93,7 @@ function Invoke-TcliPublish {
         $joinedOutput = $output -join "`n"
         if ($joinedOutput -match "Package of the same namespace, name and version already exists") {
             Write-Host "Skipping publish because this exact package version already exists on Thunderstore."
+            $global:LASTEXITCODE = 0
             return
         }
 
