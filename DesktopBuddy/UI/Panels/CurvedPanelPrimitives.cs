@@ -87,13 +87,20 @@ public partial class DesktopBuddyMod
         collider.Mesh.Target = mesh;
         collider.Sidedness.Value = MeshColliderSidedness.DualSided;
 
-        var material = slot.AttachComponent<PBS_DualSidedMetallic>();
-        material.AlbedoColor.Value = new colorX(0.08f, 0.08f, 0.1f, 1f);
-        material.Culling.Value = Culling.Front;
-        material.AlphaHandling.Value = FrooxEngine.AlphaHandling.Opaque;
-        material.Metallic.Value = 0f;
-        material.Smoothness.Value = 0.35f;
-        renderer.Materials.Add(material);
+        PBS_DualSidedMetallic AddBackMaterial(Culling culling)
+        {
+            var material = slot.AttachComponent<PBS_DualSidedMetallic>();
+            material.AlbedoColor.Value = new colorX(0.08f, 0.08f, 0.1f, 1f);
+            material.Culling.Value = culling;
+            material.AlphaHandling.Value = FrooxEngine.AlphaHandling.Opaque;
+            material.Metallic.Value = 0f;
+            material.Smoothness.Value = 0.35f;
+            renderer.Materials.Add(material);
+            return material;
+        }
+
+        AddBackMaterial(Culling.Front);
+        AddBackMaterial(Culling.Back);
 
         return mesh;
     }

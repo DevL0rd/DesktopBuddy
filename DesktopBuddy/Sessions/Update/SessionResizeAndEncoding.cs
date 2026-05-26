@@ -57,8 +57,11 @@ public partial class DesktopBuddyMod
         startAudioForEncoder ??= session.StartStreamAudioCapture ?? GetSharedStreamAudioStart(session.Hwnd);
         var enc = encoder;
         var d3dContextLock = session.Streamer.D3dContextLock;
+        var d3dContext = session.Streamer.D3dContext;
         session.Streamer.OnGpuFrame = (device, texture, fw, fh) =>
         {
+            TryUpdateAdaptiveScreenLightFromGpuFrameNonBlocking(session, device, d3dContext, texture, fw, fh, d3dContextLock);
+
             enc.StartInitializeAsync(device, (uint)fw, (uint)fh, audioForEncoder, startAudioForEncoder, d3dContextLock);
             enc.QueueFrame(texture, (uint)fw, (uint)fh);
         };
@@ -67,11 +70,62 @@ public partial class DesktopBuddyMod
         int latestWidth = session.Streamer.SharedTextureWidth;
         int latestHeight = session.Streamer.SharedTextureHeight;
         IntPtr latestDevice = session.Streamer.D3dDevice;
+        IntPtr latestContext = session.Streamer.D3dContext;
         if (latestTexture != IntPtr.Zero && latestDevice != IntPtr.Zero && latestWidth > 0 && latestHeight > 0)
         {
+            TryUpdateAdaptiveScreenLightFromGpuFrameNonBlocking(session, latestDevice, latestContext, latestTexture, latestWidth, latestHeight, d3dContextLock);
+
+            MarkEncoderInitialSourceSize(session, latestWidth, latestHeight);
             enc.StartInitializeAsync(latestDevice, (uint)latestWidth, (uint)latestHeight, audioForEncoder, startAudioForEncoder, d3dContextLock);
             enc.QueueFrame(latestTexture, (uint)latestWidth, (uint)latestHeight);
             Msg($"[RemoteStream] Seeded encoder from latest captured frame {latestWidth}x{latestHeight}");
         }
+    }
+
+    private static void TryUpdateAdaptiveScreenLightFromGpuFrameNonBlocking(
+        DesktopSession session,
+        IntPtr device,
+        IntPtr context,
+        IntPtr texture,
+        int width,
+        int height,
+        object d3dContextLock)
+    {
+        if (context == IntPtr.Zero) return;
+
+        if (d3dContextLock == null)
+        {
+            TryUpdateAdaptiveScreenLightFromGpuFrame(session, device, context, texture, width, height);
+            return;
+        }
+
+        var lockTaken = false;
+        try
+        {
+            Monitor.TryEnter(d3dContextLock, 0, ref lockTaken);
+            if (!lockTaken) return;
+            TryUpdateAdaptiveScreenLightFromGpuFrame(session, device, context, texture, width, height);
+        }
+        finally
+        {
+            if (lockTaken) Monitor.Exit(d3dContextLock);
+        }
+    }
+
+    private static void MarkEncoderInitialSourceSize(DesktopSession session, int width, int height)
+    {
+        if (session == null || session.StreamId <= 0 || width <= 0 || height <= 0)
+            return;
+
+        if (session.EncoderInitialStreamId == session.StreamId &&
+            session.EncoderInitialSourceW > 0 &&
+            session.EncoderInitialSourceH > 0)
+        {
+            return;
+        }
+
+        session.EncoderInitialStreamId = session.StreamId;
+        session.EncoderInitialSourceW = width;
+        session.EncoderInitialSourceH = height;
     }
 }

@@ -100,32 +100,73 @@ public partial class DesktopBuddyMod
 
     private static void UpdateSessionTunnelUrls()
     {
-        if (TunnelUrl == null || !UseCloudflareTunnel) return;
-        foreach (var session in ActiveSessions)
+        try
         {
-            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && session.StreamId > 0)
+            if (TunnelUrl == null || !UseCloudflareTunnel)
+                return;
+
+            DesktopSession[] sessions;
+            try
             {
-                var newUrl = GetBuiltInStreamUrl(session.StreamId);
-                if (newUrl == null)
-                    continue;
-                var capturedSession = session;
-                var vtp = session.VideoTexture;
-                vtp.World.RunInUpdates(0, () =>
-                {
-                    try
-                    {
-                        if (vtp != null && !vtp.IsDestroyed)
-                        {
-                            Msg($"[Tunnel] Updating session VTP: {vtp.URL.Value} -> {newUrl}");
-                            SetRemoteStreamUrl(capturedSession, newUrl, $"tunnel refresh streamId={capturedSession.StreamId}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Msg($"[Tunnel] VTP update callback error: {ex}");
-                    }
-                });
+                sessions = ActiveSessions.ToArray();
             }
+            catch (Exception ex)
+            {
+                Msg($"[Tunnel] Active session snapshot failed: {ex}");
+                return;
+            }
+
+            foreach (var session in sessions)
+            {
+                try
+                {
+                    if (session == null || session.Cleaned || session.StreamId <= 0)
+                        continue;
+
+                    var vtp = session.VideoTexture;
+                    if (vtp == null || vtp.IsDestroyed)
+                        continue;
+
+                    var world = session.Root?.World ?? vtp.World;
+                    if (world == null)
+                        continue;
+
+                    var newUrl = GetBuiltInStreamUrl(session.StreamId);
+                    if (newUrl == null)
+                        continue;
+
+                    var capturedSession = session;
+                    var capturedStreamId = session.StreamId;
+                    world.RunInUpdates(0, () =>
+                    {
+                        try
+                        {
+                            if (capturedSession == null || capturedSession.Cleaned)
+                                return;
+
+                            var liveVtp = capturedSession.VideoTexture;
+                            if (liveVtp == null || liveVtp.IsDestroyed)
+                                return;
+
+                            Msg($"[Tunnel] Updating session VTP -> {newUrl}");
+                            SetRemoteStreamUrl(capturedSession, newUrl, $"tunnel refresh streamId={capturedStreamId}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Msg($"[Tunnel] VTP update callback error: {ex}");
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Msg($"[Tunnel] Session URL refresh skipped: {ex}");
+                    continue;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Tunnel] URL refresh error: {ex}");
         }
     }
 
@@ -217,7 +258,8 @@ public partial class DesktopBuddyMod
                     if (oldUrl != url)
                     {
                         Msg($"[Tunnel] PUBLIC URL: {TunnelUrl}");
-                        UpdateSessionTunnelUrls();
+                        try { UpdateSessionTunnelUrls(); }
+                        catch (Exception ex) { Msg($"[Tunnel] PUBLIC URL refresh error: {ex}"); }
                     }
                 }
                 else if (ShouldLogCloudflaredLine(e.Data))

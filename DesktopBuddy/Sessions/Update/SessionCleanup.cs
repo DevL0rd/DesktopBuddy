@@ -55,6 +55,8 @@ public partial class DesktopBuddyMod
         }
 
         session.SeenRelatedHwnds.Clear();
+        session.AdaptiveLightSampler?.Dispose();
+        session.AdaptiveLightSampler = null;
 
         if (session.TopBarRenderHost != null && !session.TopBarRenderHost.IsDestroyed)
         {
@@ -114,6 +116,7 @@ public partial class DesktopBuddyMod
             Msg($"[Cleanup] Transferred stream {session.StreamId} encoder driver to hwnd={replacementDriver.Hwnd}");
         }
         int streamId = session.StreamId;
+        bool streamUsesMediaMtx = session.StreamUsesMediaMtx;
         IntPtr hwnd = session.Hwnd;
         session.Streamer = null;
         CleanupTrace($"Session streamer nulled hwnd={hwnd} stream={streamId}");
@@ -169,7 +172,16 @@ public partial class DesktopBuddyMod
                             TraceDone($"FfmpegEncoder.Stop stream={streamId}", stopTicks);
                         }
 
-                        if (StreamServer != null)
+                        if (streamUsesMediaMtx)
+                        {
+                            if (encoderToDispose != null)
+                            {
+                                var disposeTicks = TraceStart($"FfmpegEncoder.Dispose stream={streamId}");
+                                encoderToDispose.Dispose();
+                                TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
+                            }
+                        }
+                        else if (StreamServer != null)
                         {
                             var serverTicks = TraceStart($"BuiltInStreamServer.StopEncoder stream={streamId}");
                             StreamServer.StopEncoder(streamId);
@@ -214,6 +226,18 @@ public partial class DesktopBuddyMod
         CleanupTrace($"QueueUserWorkItem cleanup DONE stream={streamId}");
         Msg($"[Cleanup] === END (bg queued) === stream {streamId}");
         CleanupTrace($"CleanupSession EXIT stream={streamId}");
+    }
+
+    private static void CleanupAndRemoveSession(DesktopSession session, string reason)
+    {
+        if (session == null)
+            return;
+
+        Msg($"[Cleanup] Session cleanup requested: {reason} hwnd={session.Hwnd} streamId={session.StreamId}");
+        if (!session.Cleaned)
+            CleanupSession(session);
+
+        ActiveSessions.Remove(session);
     }
 
 }

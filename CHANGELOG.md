@@ -1,3 +1,36 @@
+## 1.0.18 - 2026-05-24
+
+### Windows 10 support
+- Reworked WGC and D3D11 capture lifecycle handling to avoid Windows 10 freezes during window spawn, resize, and teardown.
+- Moved capture resize recreation and shared texture publishing onto safer lifecycle paths so the game update loop is not blocked by slow Windows graphics calls.
+- Added current-size shared texture publishing so local panels wait for a valid frame/texture size before binding the renderer bridge.
+- Added D3D11 adapter selection and renderer adapter hints so the capture device and renderer device are less likely to land on incompatible GPUs.
+- Improved frame callback draining, shared texture release, and D3D resource cleanup to avoid use-after-release and dispose-while-copying races.
+- Added more targeted logging around WGC frame pool recreation, shared texture creation, D3D device selection, and cleanup stalls.
+
+### Runtime
+- Cleaned up FFmpeg texture lifetime and resize behavior so encoder reinitialization does not reuse released D3D resources.
+- Improved Cloudflare tunnel startup and shutdown handling, including process cleanup during local restart builds.
+- Kept remote stream ownership and URL rebinding stable across resize-driven encoder replacement.
+- Fixed several session cleanup paths so capture, bridge slots, encoders, and streams are released in a more predictable order.
+
+### Shared Texture Bridge
+- Added versioned shared texture bridge protocol messages for start, stop, running, stopped, and renderer device hints.
+- Added generation checks so stale renderer acknowledgements cannot mark an old shared texture slot as running.
+- Added locking around host bridge slot state because the game update path and InterprocessLib callbacks can touch the same slot arrays from different threads.
+- Deferred renderer-side native texture/SRV release for a few frames to avoid Unity/render-thread use-after-free during texture replacement.
+- Removed unused named shared texture plumbing from the WGC side; the bridge now uses shared handles.
+
+### UI And Session Behavior
+- Fixed viewer culling issues and simplified culling so users in no-clip are supported without physics-based checks.
+- Improved quick-menu and settings-panel resize behavior while keeping the menu raycast path compatible with normal Resonite camera portals.
+- Added adaptive screen lighting support for captured panels.
+- Added private-start support for spawned desktop panels and kept private mode restoration stable.
+- Improved window polling and auto-spawn behavior so DesktopBuddy tracks new windows with less work on the game thread.
+
+### Diagnostics And Packaging
+- Added a diagnostics collector script and included it in the package so users can send logs, Windows details, and existing crash dumps without creating huge live process dumps.
+
 ## 1.0.17 - 2026-05-19
 
 ### Build And Packaging

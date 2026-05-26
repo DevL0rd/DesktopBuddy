@@ -145,7 +145,11 @@ public sealed unsafe partial class FfmpegEncoder
 
             using (DesktopBuddyMod.Perf.Time("ffmpeg_get_buffer"))
             {
-                ret = ffmpeg.av_hwframe_get_buffer(_hwFramesCtx, _hwFrame, 0);
+                ret = 0;
+                WithD3dContextLock(() =>
+                {
+                    ret = ffmpeg.av_hwframe_get_buffer(_hwFramesCtx, _hwFrame, 0);
+                });
                 if (ret < 0) { Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_get_buffer failed: {FfmpegError(ret)}"); return; }
             }
 

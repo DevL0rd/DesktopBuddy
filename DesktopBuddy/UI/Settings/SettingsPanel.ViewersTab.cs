@@ -78,9 +78,25 @@ public partial class DesktopBuddyMod
     {
         try
         {
-            var targets = ActiveSessions
+            var candidates = ActiveSessions
                 .Where(s => s != null && !s.Cleaned && s.StreamId > 0 &&
                     (session == null || s == session || s.Root?.World == session.Root?.World))
+                .ToList();
+
+            var targets = candidates
+                .GroupBy(s => s.StreamId)
+                .Select(group =>
+                {
+                    foreach (var candidate in group)
+                    {
+                        var driver = GetSharedStreamDriver(candidate.Hwnd, candidate.StreamId);
+                        if (driver != null && group.Contains(driver))
+                            return driver;
+                    }
+
+                    return group.FirstOrDefault(s => s.Streamer != null) ?? group.First();
+                })
+                .Distinct()
                 .ToList();
 
             foreach (var target in targets)

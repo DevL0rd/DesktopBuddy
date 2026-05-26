@@ -309,25 +309,25 @@ public sealed class AudioCapture : IDisposable
 
     public void Dispose()
     {
-        DesktopBuddy.Log.MsgImmediate($"[CleanupTrace] AudioCapture.Dispose ENTER disposed={_disposed} audioClient=0x{_audioClient:X} captureClient=0x{_captureClient:X}");
+        DesktopBuddy.Log.Msg($"[CleanupTrace] AudioCapture.Dispose ENTER disposed={_disposed} audioClient=0x{_audioClient:X} captureClient=0x{_captureClient:X}");
         if (_disposed) return;
         _disposed = true;
 
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose AudioClientStop START");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose AudioClientStop START");
         if (_audioClient != IntPtr.Zero) try { AudioClientStop(_audioClient); } catch (Exception ex) { DesktopBuddy.Log.Msg($"[AudioCapture] AudioClientStop error: {ex.Message}"); }
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose AudioClientStop DONE");
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose captureThread.Join START");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose AudioClientStop DONE");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose captureThread.Join START");
         _captureThread?.Join(1000);
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose captureThread.Join DONE");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose captureThread.Join DONE");
 
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose COM release START");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose COM release START");
         if (_captureClient != IntPtr.Zero) { Marshal.Release(_captureClient); _captureClient = IntPtr.Zero; }
         if (_audioClient != IntPtr.Zero) { Marshal.Release(_audioClient); _audioClient = IntPtr.Zero; }
         if (_captureEvent != IntPtr.Zero) { CloseHandle(_captureEvent); _captureEvent = IntPtr.Zero; }
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose COM release DONE");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose COM release DONE");
 
         Log("[AudioCapture] Disposed");
-        DesktopBuddy.Log.MsgImmediate("[CleanupTrace] AudioCapture.Dispose EXIT");
+        DesktopBuddy.Log.Msg("[CleanupTrace] AudioCapture.Dispose EXIT");
     }
 
     private static unsafe int AudioClientInitialize(IntPtr client, int shareMode, int streamFlags, long bufferDuration, long periodicity, IntPtr pFormat, IntPtr sessionGuid)

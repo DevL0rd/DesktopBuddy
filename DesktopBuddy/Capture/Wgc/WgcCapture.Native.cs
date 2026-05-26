@@ -33,12 +33,7 @@ public sealed partial class WgcCapture
         public override string ToString() => $"{Name} VendorId=0x{VendorId:X4} VRAM={DedicatedVideoMemoryBytes / 1048576}MB LUID=0x{Luid:X16}";
     }
 
-    private static readonly object _sharedD3dLock = new();
-    private static volatile bool _sharedD3dReady;
-    private static IntPtr _sharedD3dDevice;
-    private static IntPtr _sharedD3dContext;
-    private static uint _sharedD3dAdapterVendorId;
-    private static IDirect3DDevice _sharedWinrtDevice;
+    private static uint _preferredD3dAdapterVendorId;
     private static readonly object _captureInteropLock = new();
     private static IGraphicsCaptureItemInterop _captureInterop;
 
@@ -133,11 +128,15 @@ public sealed partial class WgcCapture
     private static uint _cachedPreferredAdapterVendorId;
     private static long _cachedPreferredAdapterLuid;
     private static bool _adapterCacheReady;
+    private static bool _rendererAdapterHintReady;
+    private static long _rendererAdapterHintLuid;
+    private static uint _rendererAdapterHintVendorId;
+    private static string _rendererAdapterHintDescription;
     private static readonly object _adapterCacheLock = new();
 
     internal static bool SharedD3dDeviceInitialized
     {
-        get { return _sharedD3dReady; }
+        get { return _adapterCacheReady; }
     }
 
     internal static long SharedD3dAdapterLuid
@@ -145,11 +144,55 @@ public sealed partial class WgcCapture
         get { return _cachedPreferredAdapterLuid; }
     }
 
+    internal static bool HasRendererAdapterHint
+    {
+        get
+        {
+            lock (_adapterCacheLock)
+                return _rendererAdapterHintReady && _rendererAdapterHintLuid != 0;
+        }
+    }
+
+    internal static void SetRendererAdapterHint(long adapterLuid, uint vendorId, string description)
+    {
+        if (adapterLuid == 0) return;
+
+        bool changed;
+        lock (_adapterCacheLock)
+        {
+            changed = !_rendererAdapterHintReady || _rendererAdapterHintLuid != adapterLuid;
+            _rendererAdapterHintReady = true;
+            _rendererAdapterHintLuid = adapterLuid;
+            _rendererAdapterHintVendorId = vendorId;
+            _rendererAdapterHintDescription = description;
+
+            if (_adapterCacheReady && _cachedPreferredAdapterLuid != adapterLuid)
+            {
+                if (_cachedPreferredAdapter != IntPtr.Zero)
+                {
+                    try { Marshal.Release(_cachedPreferredAdapter); }
+                    catch { }
+                }
+
+                _cachedPreferredAdapter = IntPtr.Zero;
+                _cachedPreferredAdapterVendorId = 0;
+                _cachedPreferredAdapterLuid = 0;
+                _adapterCacheReady = false;
+                _preferredD3dAdapterVendorId = 0;
+            }
+        }
+
+        if (changed)
+            Log.Msg($"[WgcCapture] Renderer adapter hint: '{description}' VendorId=0x{vendorId:X4} LUID=0x{adapterLuid:X16}");
+    }
+
+    public IntPtr D3dContext => _d3dContext;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame;
 
     private IntPtr _hwnd;
     private bool _isDesktop;
+    private readonly object _d3dLock = new();
     private IDirect3DDevice _winrtDevice;
     private IntPtr _d3dDevice;
     private IntPtr _d3dContext;
@@ -160,7 +203,12 @@ public sealed partial class WgcCapture
 
     private volatile bool _closed;
     private int _framesCaptured;
+    private int _sharedFramesCopied;
     private volatile bool _disposed;
     private volatile bool _needsPoolRecreate;
+    private readonly object _resizeRecreateLock = new();
+    private int _resizeRecreateWorkerRunning;
+    private int _resizeTargetWidth;
+    private int _resizeTargetHeight;
 
 }

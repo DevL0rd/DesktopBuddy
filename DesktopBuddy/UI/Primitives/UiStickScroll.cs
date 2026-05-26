@@ -21,6 +21,7 @@ internal static class UiStickScroll
             return;
 
         int generation = nextGeneration();
+        InteractionHandler cachedHandler = null;
 
         void Tick()
         {
@@ -29,7 +30,7 @@ internal static class UiStickScroll
                 !surfaceSlot.ActiveSelf || generation != currentGeneration())
                 return;
 
-            Process(ownerRoot.World, renderRoot, deadzone, pixelsPerTick);
+            Process(ownerRoot.World, renderRoot, deadzone, pixelsPerTick, ref cachedHandler);
             ownerRoot.World.RunInUpdates(1, Tick);
         }
 
@@ -38,11 +39,20 @@ internal static class UiStickScroll
 
     internal static void Process(World world, Slot renderRoot, float deadzone, float pixelsPerTick)
     {
+        InteractionHandler cachedHandler = null;
+        Process(world, renderRoot, deadzone, pixelsPerTick, ref cachedHandler);
+    }
+
+    private static void Process(World world, Slot renderRoot, float deadzone, float pixelsPerTick, ref InteractionHandler cachedHandler)
+    {
         var localUserRoot = world?.LocalUser?.Root;
         if (world == null || localUserRoot == null || renderRoot == null || renderRoot.IsDestroyed)
             return;
 
-        var handler = localUserRoot.GetRegisteredComponent((InteractionHandler h) => h.Side.Value == Chirality.Right);
+        if (cachedHandler == null || cachedHandler.IsDestroyed || cachedHandler.Side.Value != Chirality.Right)
+            cachedHandler = localUserRoot.GetRegisteredComponent((InteractionHandler h) => h.Side.Value == Chirality.Right);
+
+        var handler = cachedHandler;
         var currentTouchable = handler?.Laser?.CurrentTouchable;
         if (currentTouchable == null || !(currentTouchable is IAxisActionReceiver receiver))
             return;

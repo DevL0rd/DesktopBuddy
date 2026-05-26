@@ -155,6 +155,19 @@ public sealed partial class WgcCapture
                 Log.Msg($"[WgcCapture] Configured GPU LUID 0x{preferredLuid:X16} was not found; falling back to automatic adapter selection");
             }
 
+            if (_rendererAdapterHintReady && _rendererAdapterHintLuid != 0)
+            {
+                IntPtr rendererAdapter = FindAdapterByLuid(_rendererAdapterHintLuid, out DXGI_ADAPTER_DESC rendererDesc);
+                if (rendererAdapter != IntPtr.Zero)
+                {
+                    CacheAdapter(rendererAdapter, rendererDesc);
+                    Log.Msg($"[WgcCapture] Selected renderer adapter: '{AdapterName(rendererDesc)}' VendorId=0x{rendererDesc.VendorId:X4} LUID=0x{rendererDesc.AdapterLuid:X16}");
+                    return rendererAdapter;
+                }
+
+                Log.Msg($"[WgcCapture] Renderer adapter hint 0x{_rendererAdapterHintLuid:X16} was not found; falling back to automatic adapter selection");
+            }
+
             var factory6Guid = new Guid("c1b6694f-ff09-44a9-b03c-77900a0a1d17");
             int hr = CreateDXGIFactory1(ref factory6Guid, out IntPtr factory6);
             if (hr >= 0 && factory6 != IntPtr.Zero)
@@ -277,42 +290,56 @@ public sealed partial class WgcCapture
     {
         get
         {
-            if (_sharedD3dReady)
-                return _sharedD3dAdapterVendorId;
-            EnsureSharedD3dDevice();
-            return _sharedD3dAdapterVendorId;
+            EnsurePreferredAdapterCached();
+            return _preferredD3dAdapterVendorId;
         }
     }
 
-    internal static bool PrewarmSharedDevice() => EnsureSharedD3dDevice();
+    internal static bool PrewarmSharedDevice()
+    {
+        EnsurePreferredAdapterCached();
+        return _adapterCacheReady;
+    }
 
     internal static bool PrewarmCaptureFactory() => EnsureCaptureInterop();
 
-    private static bool EnsureSharedD3dDevice()
+    private static void EnsurePreferredAdapterCached()
     {
-        if (_sharedD3dReady)
+        IntPtr adapter = FindPreferredAdapter();
+        if (adapter != IntPtr.Zero)
+            Marshal.Release(adapter);
+
+        _preferredD3dAdapterVendorId = _cachedPreferredAdapterVendorId;
+    }
+
+    private bool CreateD3dDevice()
+    {
+        if (_d3dDevice != IntPtr.Zero && _d3dContext != IntPtr.Zero && _winrtDevice != null)
             return true;
 
-        lock (_sharedD3dLock)
+        lock (_d3dLock)
         {
-            if (_sharedD3dReady) return true;
+            if (_d3dDevice != IntPtr.Zero && _d3dContext != IntPtr.Zero && _winrtDevice != null)
+                return true;
 
             uint deviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
             IntPtr preferredAdapter = FindPreferredAdapter();
             uint preferredVendorId = _cachedPreferredAdapterVendorId;
+            long preferredLuid = _cachedPreferredAdapterLuid;
             int driverType = preferredAdapter != IntPtr.Zero ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
             int hr = D3D11CreateDevice(preferredAdapter, driverType, IntPtr.Zero,
                 deviceFlags, IntPtr.Zero, 0, 7,
-                out _sharedD3dDevice, out _, out _sharedD3dContext);
+                out _d3dDevice, out _, out _d3dContext);
             if (preferredAdapter != IntPtr.Zero) Marshal.Release(preferredAdapter);
             if (hr < 0)
             {
-                Log.Msg($"[WgcCapture] Shared D3D11CreateDevice failed hr=0x{hr:X8}");
+                Log.Msg($"[WgcCapture] D3D11CreateDevice failed hr=0x{hr:X8}");
+                ReleaseD3dDevice();
                 return false;
             }
 
             var mtGuid = new Guid("9B7E4E00-342C-4106-A19F-4F2704F689F0");
-            if (Marshal.QueryInterface(_sharedD3dDevice, in mtGuid, out IntPtr mtPtr) >= 0)
+            if (Marshal.QueryInterface(_d3dDevice, in mtGuid, out IntPtr mtPtr) >= 0)
             {
                 unsafe
                 {
@@ -321,14 +348,15 @@ public sealed partial class WgcCapture
                     setProtFn(mtPtr, 1, null);
                 }
                 Marshal.Release(mtPtr);
-                Log.Msg("[WgcCapture] Shared D3D11 multithread protection enabled");
+                Log.Msg("[WgcCapture] D3D11 multithread protection enabled");
             }
 
             var dxgiGuid = new Guid("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
-            hr = Marshal.QueryInterface(_sharedD3dDevice, in dxgiGuid, out IntPtr dxgiDevice);
+            hr = Marshal.QueryInterface(_d3dDevice, in dxgiGuid, out IntPtr dxgiDevice);
             if (hr < 0 || dxgiDevice == IntPtr.Zero)
             {
-                Log.Msg($"[WgcCapture] Shared IDXGIDevice QueryInterface failed hr=0x{hr:X8}");
+                Log.Msg($"[WgcCapture] IDXGIDevice QueryInterface failed hr=0x{hr:X8}");
+                ReleaseD3dDevice();
                 return false;
             }
 
@@ -336,16 +364,35 @@ public sealed partial class WgcCapture
             Marshal.Release(dxgiDevice);
             if (hr < 0 || inspectable == IntPtr.Zero)
             {
-                Log.Msg($"[WgcCapture] Shared CreateDirect3D11DeviceFromDXGIDevice failed hr=0x{hr:X8}");
+                Log.Msg($"[WgcCapture] CreateDirect3D11DeviceFromDXGIDevice failed hr=0x{hr:X8}");
+                ReleaseD3dDevice();
                 return false;
             }
 
-            _sharedWinrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
+            _winrtDevice = MarshalInterface<IDirect3DDevice>.FromAbi(inspectable);
             Marshal.Release(inspectable);
-            _sharedD3dAdapterVendorId = preferredVendorId;
-            _sharedD3dReady = true;
-            Log.Msg($"[WgcCapture] Shared D3D11 device ready 0x{_sharedD3dDevice:X} vendor=0x{_sharedD3dAdapterVendorId:X4} LUID=0x{_cachedPreferredAdapterLuid:X16}");
+            _preferredD3dAdapterVendorId = preferredVendorId;
+            Log.Msg($"[WgcCapture] D3D11 device ready 0x{_d3dDevice:X} vendor=0x{preferredVendorId:X4} LUID=0x{preferredLuid:X16}");
             return true;
+        }
+    }
+
+    private void ReleaseD3dDevice()
+    {
+        _winrtDevice = null;
+
+        if (_d3dContext != IntPtr.Zero)
+        {
+            try { Marshal.Release(_d3dContext); }
+            catch { }
+            _d3dContext = IntPtr.Zero;
+        }
+
+        if (_d3dDevice != IntPtr.Zero)
+        {
+            try { Marshal.Release(_d3dDevice); }
+            catch { }
+            _d3dDevice = IntPtr.Zero;
         }
     }
 }

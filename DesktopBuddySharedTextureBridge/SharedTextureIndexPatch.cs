@@ -7,19 +7,21 @@ namespace DesktopBuddySharedTextureBridge
     [HarmonyPatch(typeof(DisplayDriver), "TryGetDisplayTexture")]
     internal static class SharedTextureIndexPatch
     {
-        static void Postfix(int index, ref IDisplayTextureSource __result)
+        static bool Prefix(int index, ref IDisplayTextureSource __result)
         {
             try
             {
-                if (index < SharedTextureBridgeProtocol.MagicIndexBase) return;
+                if (index < SharedTextureBridgeProtocol.MagicIndexBase) return true;
 
                 var textureSlot = SharedTextureBridge.GetSlotForBridgeIndex(index);
-                if (textureSlot != null)
-                    __result = textureSlot;
+                __result = textureSlot;
+                return false;
             }
             catch (System.Exception ex)
             {
-                SharedTextureBridgePlugin.LogError($"[SharedTextureIndexPatch] Postfix failed index={index}", ex);
+                SharedTextureBridgePlugin.LogError($"[SharedTextureIndexPatch] Prefix failed index={index}", ex);
+                __result = null;
+                return false;
             }
         }
     }

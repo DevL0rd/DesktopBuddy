@@ -13,7 +13,11 @@ public class DesktopSession
     public Canvas Canvas;
     public Slot Root;
     public bool UpdateInProgress;
+    public bool UseTextureBridge;
+    public bool BridgeRegistrationPending;
     public int SharedTextureSlot = -1;
+    public int PendingBridgeDisplayIndex = -1;
+    public bool BridgeDisplayIndexApplied;
     public int LastKnownW, LastKnownH;
 
     public Component LastActiveSource;
@@ -56,6 +60,8 @@ public class DesktopSession
     public readonly Dictionary<string, bool> ViewerStreamEnabledByUserId = new(StringComparer.OrdinalIgnoreCase);
     public readonly Dictionary<string, bool> CullingAppliedStreamAllowedByUserId = new(StringComparer.OrdinalIgnoreCase);
     public readonly Dictionary<string, double> CullingOutOfRangeSinceByUserId = new(StringComparer.OrdinalIgnoreCase);
+    public readonly HashSet<string> CullingPresentUserIds = new(StringComparer.OrdinalIgnoreCase);
+    public readonly List<string> CullingStaleUserIds = new();
     public bool LocalPreviewingRemoteStream;
     public int CullingGateGeneration;
     public double CullingOutOfRangeSince = -1;
@@ -63,6 +69,9 @@ public class DesktopSession
     public DesktopKeyboardSource KeyboardSource;
 
     public FfmpegEncoder Encoder;
+    public int EncoderInitialStreamId;
+    public int EncoderInitialSourceW, EncoderInitialSourceH;
+    public bool StreamUsesMediaMtx;
     public AudioCapture StreamAudioCapture;
     public Action StartStreamAudioCapture;
     public VideoTextureProvider VideoTexture;
@@ -80,6 +89,9 @@ public class DesktopSession
     public AudioListener VMicListener;
     public UI_UnlitMaterial VMicIndicator;
     public bool VMicMuted;
+    public Light AdaptiveLight;
+    public D3D11AverageColorSampler AdaptiveLightSampler;
+    public long AdaptiveLightLastSampleTicks;
     public DesktopAudioSource SpatialAudioSource;
     public AudioOutput SpatialAudioOutput;
     public bool OwnsAudioRedirect;
