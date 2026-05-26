@@ -260,6 +260,7 @@ function Build-ManualPackage {
     Add-PackageMetadata -Stage $runtimePackageRoot -PackageName $runtimePackageName -PackageVersion $runtimeVersion -Description $runtimeDescription -Dependencies @() -Icon $runtimeIcon
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll")
     Copy-Item -LiteralPath (Join-Path $Root "icon_transparent.png") -Destination (Join-Path $gamePluginDir "icon_transparent.png")
+    Copy-Item -LiteralPath (Join-Path $Root "scripts\CollectDesktopBuddyDiagnostics.ps1") -Destination (Join-Path $gamePluginDir "CollectDesktopBuddyDiagnostics.ps1")
     $modSha = Join-Path $modOutDir "DesktopBuddy.sha"
     if (Test-Path -LiteralPath $modSha) {
         Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha")
@@ -301,6 +302,7 @@ function Build-MainThunderstorePackage {
     New-Item -ItemType Directory -Force -Path $gamePluginDir, $bridgeTarget | Out-Null
     Copy-Item -LiteralPath (Join-Path $modOutDir "DesktopBuddy.dll") -Destination (Join-Path $gamePluginDir "DesktopBuddy.dll")
     Copy-Item -LiteralPath (Join-Path $Root "icon_transparent.png") -Destination (Join-Path $gamePluginDir "icon_transparent.png")
+    Copy-Item -LiteralPath (Join-Path $Root "scripts\CollectDesktopBuddyDiagnostics.ps1") -Destination (Join-Path $gamePluginDir "CollectDesktopBuddyDiagnostics.ps1")
     $modSha = Join-Path $modOutDir "DesktopBuddy.sha"
     if (Test-Path -LiteralPath $modSha) {
         Copy-Item -LiteralPath $modSha -Destination (Join-Path $gamePluginDir "DesktopBuddy.sha")

@@ -4,7 +4,7 @@ schemaVersion = "0.0.1"
 [package]
 namespace = "DevL0rd"
 name = "DesktopBuddy"
-versionNumber = "1.0.17"
+versionNumber = "1.0.18"
 description = "DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and microphone to integrate windows completly and seemlessly into resonite."
 websiteUrl = "https://github.com/DevL0rd/DesktopBuddy"
 containsNsfwContent = false
@@ -31,6 +31,10 @@ target = "plugins/DesktopBuddy/"
 
 [[build.copy]]
 source = "./icon_transparent.png"
+target = "plugins/DesktopBuddy/"
+
+[[build.copy]]
+source = "./scripts/CollectDesktopBuddyDiagnostics.ps1"
 target = "plugins/DesktopBuddy/"
 
 [[build.copy]]

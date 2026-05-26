@@ -44,6 +44,8 @@ public partial class DesktopBuddyMod
     private static Thread _windowPollerThread { get => RuntimeStore.WindowPollerThread; set => RuntimeStore.WindowPollerThread = value; }
     private static bool _windowPollerRunning { get => RuntimeStore.WindowPollerRunning; set => RuntimeStore.WindowPollerRunning = value; }
     internal static ConcurrentQueue<WindowEvent> _windowEvents => RuntimeStore.WindowEvents;
+    private static HashSet<IntPtr> AutoSpawnSeenWindows => RuntimeStore.AutoSpawnSeenWindows;
+    private static bool AutoSpawnWindowBaselineInitialized { get => RuntimeStore.AutoSpawnWindowBaselineInitialized; set => RuntimeStore.AutoSpawnWindowBaselineInitialized = value; }
 
     private static string _latestVersion { get => RuntimeStore.LatestVersion; set => RuntimeStore.LatestVersion = value; }
     private static string _remoteVersion { get => RuntimeStore.RemoteVersion; set => RuntimeStore.RemoteVersion = value; }

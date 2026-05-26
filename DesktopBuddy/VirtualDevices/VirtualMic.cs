@@ -244,18 +244,18 @@ internal sealed class VirtualMic : IDisposable
 
     public void Dispose()
     {
-        Log.MsgImmediate($"[CleanupTrace] VirtualMic.Dispose ENTER disposed={_disposed}");
+        Log.Msg($"[CleanupTrace] VirtualMic.Dispose ENTER disposed={_disposed}");
         if (_disposed) return;
         _disposed = true;
-        Log.MsgImmediate("[CleanupTrace] VirtualMic.Dispose renderThread.Join START");
+        Log.Msg("[CleanupTrace] VirtualMic.Dispose renderThread.Join START");
         _renderThread?.Join(2000);
-        Log.MsgImmediate("[CleanupTrace] VirtualMic.Dispose renderThread.Join DONE");
-        Log.MsgImmediate("[CleanupTrace] VirtualMic.Dispose Cleanup START");
+        Log.Msg("[CleanupTrace] VirtualMic.Dispose renderThread.Join DONE");
+        Log.Msg("[CleanupTrace] VirtualMic.Dispose Cleanup START");
         Cleanup();
-        Log.MsgImmediate("[CleanupTrace] VirtualMic.Dispose Cleanup DONE");
+        Log.Msg("[CleanupTrace] VirtualMic.Dispose Cleanup DONE");
         _scratch = null;
         _gameAudioRing = null;
         Log.Msg("[VirtualMic] Disposed");
-        Log.MsgImmediate("[CleanupTrace] VirtualMic.Dispose EXIT");
+        Log.Msg("[CleanupTrace] VirtualMic.Dispose EXIT");
     }
 }

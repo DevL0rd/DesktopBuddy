@@ -1,11 +1,67 @@
 using System;
+using System.Linq;
 using System.Threading;
+using DesktopBuddy.Shared;
 using FrooxEngine;
 
 namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
+    private static bool TryPublishCurrentSharedTexture(DesktopSession session)
+    {
+        if (session == null || !session.UseTextureBridge || !session.BridgeRegistrationPending)
+            return true;
+
+        var streamer = session.Streamer;
+        if (streamer == null || TextureBridgeChannel == null || !TextureBridgeChannel.IsOpen)
+            return false;
+
+        if (!streamer.HasCurrentSharedFrame ||
+            streamer.SharedTextureHandle == IntPtr.Zero ||
+            streamer.SharedTextureWidth <= 0 ||
+            streamer.SharedTextureHeight <= 0)
+        {
+            if (_updateCount % 30 == 0)
+                Msg($"[UpdateLoop] Waiting for current shared frame before bridge publish hwnd={session.Hwnd} pendingRecreate={streamer.IsResizeRecreatePending} size={streamer.Width}x{streamer.Height} shared=0x{streamer.SharedTextureHandle.ToInt64():X} sharedSize={streamer.SharedTextureWidth}x{streamer.SharedTextureHeight}");
+            return false;
+        }
+
+        if (session.SharedTextureSlot < 0)
+        {
+            int slot = TextureBridgeChannel.RegisterTexture(
+                streamer.SharedTextureHandle,
+                null,
+                streamer.SharedTextureWidth,
+                streamer.SharedTextureHeight);
+            if (slot < 0)
+            {
+                if (_updateCount % 60 == 0)
+                    Msg($"[UpdateLoop] No free shared texture slots for hwnd={session.Hwnd}");
+                return false;
+            }
+
+            session.SharedTextureSlot = slot;
+            Msg($"[UpdateLoop] Shared texture bridge registered: slot={slot} shared=0x{streamer.SharedTextureHandle.ToInt64():X} {streamer.SharedTextureWidth}x{streamer.SharedTextureHeight}");
+        }
+        else
+        {
+            TextureBridgeChannel.UpdateTexture(
+                session.SharedTextureSlot,
+                streamer.SharedTextureHandle,
+                null,
+                streamer.SharedTextureWidth,
+                streamer.SharedTextureHeight);
+            Msg($"[UpdateLoop] Shared texture bridge updated: slot={session.SharedTextureSlot} shared=0x{streamer.SharedTextureHandle.ToInt64():X} {streamer.SharedTextureWidth}x{streamer.SharedTextureHeight}");
+        }
+
+        session.Texture.DisplayIndex.Value = int.MinValue;
+        session.PendingBridgeDisplayIndex = SharedTextureBridgeProtocol.MagicIndexBase + session.SharedTextureSlot;
+        session.BridgeDisplayIndexApplied = false;
+        session.BridgeRegistrationPending = false;
+        return true;
+    }
+
     private static bool ProcessSessionResizeAndEncoding(World world, DesktopSession session)
     {
         var streamerForResize = session.Streamer;
@@ -14,6 +70,8 @@ public partial class DesktopBuddyMod
             streamerForResize.RecreatePoolIfNeeded();
             int sw = streamerForResize.Width;
             int sh = streamerForResize.Height;
+            if (streamerForResize.IsResizeRecreatePending && _updateCount % 30 == 0)
+                Msg($"[UpdateLoop] Resize recreate still pending hwnd={session.Hwnd} size={sw}x{sh} sharedSize={streamerForResize.SharedTextureWidth}x{streamerForResize.SharedTextureHeight}");
 
             if (sw > 0 && sh > 0 && (session.LastKnownW != sw || session.LastKnownH != sh))
             {
@@ -21,19 +79,9 @@ public partial class DesktopBuddyMod
                 session.LastKnownW = sw;
                 session.LastKnownH = sh;
 
-                if (session.SharedTextureSlot >= 0 && TextureBridgeChannel != null)
+                if (session.UseTextureBridge && TextureBridgeChannel != null)
                 {
-                    TextureBridgeChannel.UpdateTexture(
-                        session.SharedTextureSlot,
-                        streamerForResize.SharedTextureHandle,
-                        streamerForResize.SharedTextureWidth,
-                        streamerForResize.SharedTextureHeight);
-                    RetriggerDesktopTexture(session.Texture);
-                    world.RunInUpdates(2, () =>
-                    {
-                        if (!session.Cleaned && session.Texture != null && !session.Texture.IsDestroyed)
-                            RetriggerDesktopTexture(session.Texture);
-                    });
+                    session.BridgeRegistrationPending = true;
                 }
                 else
                 {
@@ -48,6 +96,9 @@ public partial class DesktopBuddyMod
                 Msg($"[UpdateLoop] Resize pending: visual={sw}x{sh} encoder debounce=150ms");
                 return true;
             }
+
+            if (session.BridgeRegistrationPending && !TryPublishCurrentSharedTexture(session))
+                return true;
         }
 
         if (session.PendingVisualResizeW > 0 && session.PendingVisualResizeH > 0)
@@ -66,7 +117,7 @@ public partial class DesktopBuddyMod
             }
             else
             {
-                if (_updateCount % 5 == 0)
+                if (session.BridgeDisplayIndexApplied && _updateCount % 5 == 0)
                     RetriggerDesktopTexture(session.Texture);
                 if (_updateCount % 30 == 0)
                     Msg($"[UpdateLoop] Waiting for shared texture bind before visual resize {visualW}x{visualH}");
@@ -82,6 +133,18 @@ public partial class DesktopBuddyMod
             if (session.StreamId <= 0)
             {
                 Msg($"[UpdateLoop] Resize debounce expired for local-only panel {rw}x{rh}, no encoder reinit");
+                session.PendingResizeW = 0;
+                session.PendingResizeH = 0;
+                return true;
+            }
+
+            if (session.EncoderInitialStreamId == session.StreamId &&
+                session.EncoderInitialSourceW == rw &&
+                session.EncoderInitialSourceH == rh)
+            {
+                Msg($"[UpdateLoop] Resize debounce expired, encoder already initialized for {rw}x{rh}; skipping reinit");
+                session.PendingResizeW = 0;
+                session.PendingResizeH = 0;
                 return true;
             }
 
@@ -90,6 +153,7 @@ public partial class DesktopBuddyMod
             if (session.Streamer != null) session.Streamer.OnGpuFrame = null;
 
             var oldStreamId = session.StreamId;
+            bool oldUsesMediaMtx = session.StreamUsesMediaMtx;
             int newStreamId = NextStreamId();
             bool useMediaMtx = IsMediaMtxEnabled;
             FfmpegEncoder newEncoder;
@@ -106,7 +170,6 @@ public partial class DesktopBuddyMod
                 newEncoder = StreamServer?.CreateEncoder(newStreamId);
                 newUrl = StreamServer != null ? GetBuiltInStreamUrl(newStreamId) : null;
             }
-            session.StreamId = newStreamId;
 
             FfmpegEncoder oldEncoder = session.Encoder;
             if (oldEncoder == null)
@@ -118,27 +181,55 @@ public partial class DesktopBuddyMod
                 try
                 {
                     oldEncoder?.Stop();
-                    if (!useMediaMtx)
-                        StreamServer?.StopEncoder(oldStreamId);
-                    else
+                    if (oldUsesMediaMtx)
+                    {
                         oldEncoder?.Dispose();
+                    }
+                    else if (StreamServer != null)
+                    {
+                        StreamServer?.StopEncoder(oldStreamId);
+                    }
+                    else
+                    {
+                        oldEncoder?.Dispose();
+                    }
                     oldStreamer?.FlushD3dContext();
                 }
                 catch (Exception ex) { Msg($"[Resize:BG] Old encoder cleanup error: {ex.Message}"); }
             });
 
-            UpdateSharedStreamAfterResize(session.Hwnd, newStreamId, newEncoder, newUrl);
+            UpdateSharedStreamAfterResize(session.Hwnd, newStreamId, newEncoder, newUrl, useMediaMtx);
 
-            session.Encoder = newEncoder;
+            var sharingSessions = ActiveSessions
+                .Where(s => s != null && !s.Cleaned && s.StreamId == oldStreamId)
+                .ToList();
+            if (!sharingSessions.Contains(session))
+                sharingSessions.Add(session);
+
+            foreach (var sharingSession in sharingSessions)
+            {
+                sharingSession.StreamId = newStreamId;
+                sharingSession.Encoder = newEncoder;
+                sharingSession.EncoderInitialStreamId = 0;
+                sharingSession.EncoderInitialSourceW = 0;
+                sharingSession.EncoderInitialSourceH = 0;
+                sharingSession.StreamUsesMediaMtx = useMediaMtx;
+            }
+
             ConnectEncoder(session, newEncoder);
 
-            if (session.VideoTexture != null && !session.VideoTexture.IsDestroyed && newUrl != null)
+            foreach (var sharingSession in sharingSessions)
             {
-                Msg($"[UpdateLoop] Updating VTP URL: {session.VideoTexture.URL.Value} -> {newUrl}");
-                SetRemoteStreamUrl(session, newUrl, $"encoder resize streamId={newStreamId}");
+                if (sharingSession.VideoTexture != null && !sharingSession.VideoTexture.IsDestroyed && newUrl != null)
+                {
+                    Msg($"[UpdateLoop] Updating VTP URL: {sharingSession.VideoTexture.URL.Value} -> {newUrl}");
+                    SetRemoteStreamUrl(sharingSession, newUrl, $"encoder resize streamId={newStreamId}");
+                }
             }
 
             Msg($"[UpdateLoop] New encoder {newStreamId} created and connected for {rw}x{rh}");
+            session.PendingResizeW = 0;
+            session.PendingResizeH = 0;
         }
 
         return false;

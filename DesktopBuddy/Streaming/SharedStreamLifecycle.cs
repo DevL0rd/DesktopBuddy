@@ -41,6 +41,7 @@ public partial class DesktopBuddyMod
             {
                 StreamId = streamId,
                 Encoder = encoder,
+                UsesMediaMtx = useMediaMtx,
                 Audio = audio,
                 StartAudio = startAudio,
                 StreamUrl = url,
@@ -98,6 +99,33 @@ public partial class DesktopBuddyMod
         lock (_sharedStreams)
         {
             return _sharedStreams.TryGetValue(hwnd, out var shared) ? shared.Encoder : null;
+        }
+    }
+
+    private static Uri GetSharedStreamUrl(IntPtr hwnd, int streamId)
+    {
+        lock (_sharedStreams)
+        {
+            if (_sharedStreams.TryGetValue(hwnd, out var shared) && shared.StreamId == streamId)
+                return shared.StreamUrl;
+            return null;
+        }
+    }
+
+    private static DesktopSession GetSharedStreamDriver(IntPtr hwnd, int streamId)
+    {
+        lock (_sharedStreams)
+        {
+            if (_sharedStreams.TryGetValue(hwnd, out var shared) &&
+                shared.StreamId == streamId &&
+                shared.DriverSession != null &&
+                !shared.DriverSession.Cleaned &&
+                shared.DriverSession.Streamer != null)
+            {
+                return shared.DriverSession;
+            }
+
+            return null;
         }
     }
 
@@ -159,7 +187,7 @@ public partial class DesktopBuddyMod
         return false;
     }
 
-    private static void UpdateSharedStreamAfterResize(IntPtr hwnd, int newStreamId, FfmpegEncoder newEncoder, Uri newUrl)
+    private static void UpdateSharedStreamAfterResize(IntPtr hwnd, int newStreamId, FfmpegEncoder newEncoder, Uri newUrl, bool useMediaMtx)
     {
         lock (_sharedStreams)
         {
@@ -167,6 +195,7 @@ public partial class DesktopBuddyMod
             {
                 shared.StreamId = newStreamId;
                 shared.Encoder = newEncoder;
+                shared.UsesMediaMtx = useMediaMtx;
                 if (newUrl != null)
                     shared.StreamUrl = newUrl;
             }

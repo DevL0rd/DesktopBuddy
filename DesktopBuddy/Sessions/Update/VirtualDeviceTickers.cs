@@ -8,18 +8,9 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-    private static void FindLastVirtualDeviceSessionIndexes(World world, out int lastVCamIdx, out int lastVMicIdx)
-    {
-        lastVCamIdx = -1;
-        lastVMicIdx = -1;
-        for (int k = 0; k < ActiveSessions.Count; k++)
-        {
-            var s = ActiveSessions[k];
-            if (s.Root?.World != world) continue;
-            if (s.VCamCamera != null && !s.VCamCamera.IsDestroyed) lastVCamIdx = k;
-            if (s.VMicListener != null && !s.VMicListener.IsDestroyed) lastVMicIdx = k;
-        }
-    }
+    private const double VBCableInputCheckIntervalSeconds = 5.0;
+    private static long _lastVBCableInputCheckTicks;
+    private static bool _lastVBCableInputPresent;
 
     private static void TickVirtualCamera(DesktopSession session, int sessionIndex, int lastVCamIdx)
     {
@@ -85,8 +76,9 @@ public partial class DesktopBuddyMod
 
     private static void TickVirtualMic(DesktopSession session, int sessionIndex, int lastVMicIdx)
     {
-        if ((VMic == null || !VMic.IsActive) && VBCable.HasCableInputDevice() &&
-            session.VMicListener != null && !session.VMicListener.IsDestroyed)
+        if ((VMic == null || !VMic.IsActive) &&
+            session.VMicListener != null && !session.VMicListener.IsDestroyed &&
+            HasCachedVBCableInputDevice())
         {
             if (sessionIndex == lastVMicIdx)
             {
@@ -127,5 +119,19 @@ public partial class DesktopBuddyMod
 
         if (VMic != null)
             VMic.Muted = session.VMicMuted;
+    }
+
+    private static bool HasCachedVBCableInputDevice()
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long last = System.Threading.Interlocked.Read(ref _lastVBCableInputCheckTicks);
+        long intervalTicks = (long)(System.Diagnostics.Stopwatch.Frequency * VBCableInputCheckIntervalSeconds);
+        if (last != 0 && now - last < intervalTicks)
+            return _lastVBCableInputPresent;
+
+        bool present = VBCable.HasCableInputDevice();
+        _lastVBCableInputPresent = present;
+        System.Threading.Interlocked.Exchange(ref _lastVBCableInputCheckTicks, now);
+        return present;
     }
 }
