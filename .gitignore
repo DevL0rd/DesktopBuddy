@@ -7,11 +7,16 @@ obj/
 *.lscache
 *.log
 .env
+.tools/
 build/
 packages/
+target/
+DesktopBuddyLinuxNative/target/
+DesktopBuddyLinuxBridge/bin/
 *.ts
 DesktopBuddy*.zip
 DesktopBuddy*.exe
 .tmp_ilspy*/
 research/
 CODE_ORGANIZATION.md
+proof/

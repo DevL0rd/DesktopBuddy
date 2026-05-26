@@ -80,6 +80,8 @@ function Invoke-TcliPublish {
         throw "Package zip not found: $ZipPath"
     }
 
+    Assert-ThunderstorePackageZip -ZipPath $ZipPath
+
     $token = $env:TCLI_AUTH_TOKEN
     if ([string]::IsNullOrWhiteSpace($token)) {
         throw "TCLI_AUTH_TOKEN is empty. Add it as a repository secret, or attach the GitHub environment that contains it to this workflow job."
@@ -95,6 +97,31 @@ function Invoke-TcliPublish {
         }
 
         throw "Thunderstore publish failed: $ZipPath"
+    }
+}
+
+function Assert-ThunderstorePackageZip {
+    param([Parameter(Mandatory)][string]$ZipPath)
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName })
+        $rootEntries = @($entries | Where-Object { $_ -notmatch '/' } | Sort-Object)
+
+        Write-Host "Thunderstore package root entries in ${ZipPath}:"
+        $rootEntries | ForEach-Object { Write-Host "  $_" }
+
+        foreach ($required in @("manifest.json", "README.md", "icon.png")) {
+            if ($entries -notcontains $required) {
+                throw "Thunderstore package is missing root $required`: $ZipPath"
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
     }
 }
 
