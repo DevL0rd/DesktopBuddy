@@ -69,6 +69,7 @@ public class DesktopSession
     public DesktopKeyboardSource KeyboardSource;
 
     public FfmpegEncoder Encoder;
+    internal ILiveStreamSource StreamSource;
     public int EncoderInitialStreamId;
     public int EncoderInitialSourceW, EncoderInitialSourceH;
     public bool StreamUsesMediaMtx;

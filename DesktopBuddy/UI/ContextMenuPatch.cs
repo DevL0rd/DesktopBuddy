@@ -185,6 +185,12 @@ public static class ContextMenuPatch
     }
     private static void ShowPickerPage(ContextMenu menu, int page)
     {
+        if (DesktopBuddyPlatform.IsLinuxProton)
+        {
+            ShowLinuxPickerPage(menu);
+            return;
+        }
+
         DesktopBuddyMod.Msg($"[ContextMenu] ShowPickerPage page={page}");
         ClearMenu(menu);
         var world = menu.World;
@@ -261,6 +267,49 @@ public static class ContextMenuPatch
         }
     }
 
+    private static void ShowLinuxPickerPage(ContextMenu menu)
+    {
+        DesktopBuddyMod.Msg("[ContextMenu] Showing Linux Proton picker actions");
+        ClearMenu(menu);
+
+        LocaleString pickerLabel = "Open Desktop Picker";
+        colorX? pickerColor = new colorX(0.1f, 0.35f, 0.35f, 1f);
+        var picker = menu.AddItem(in pickerLabel, (Uri)null!, in pickerColor);
+        picker.Button.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            menu.Close();
+            OpenLinuxPortalPickerThenSpawn(menu.World);
+        };
+    }
+
+    private static void OpenLinuxPortalPickerThenSpawn(World world)
+    {
+        DesktopBuddyMod.Msg("[ContextMenu] Opening Linux portal picker before spawning DesktopBuddy");
+        Task.Run(() =>
+        {
+            try
+            {
+                using var bridge = new LinuxNativeBridge();
+                int status = bridge.SelectStream(out var selection);
+                if (status != 0 || selection.Status != 0 || selection.NodeId == 0)
+                {
+                    DesktopBuddyMod.Msg($"[ContextMenu] Linux portal selection failed status={status} selectionStatus={selection.Status} node={selection.NodeId}");
+                    return;
+                }
+
+                int width = selection.Width > 0 ? checked((int)selection.Width) : 1280;
+                int height = selection.Height > 0 ? checked((int)selection.Height) : 720;
+                LinuxPortalSelectionStore.Set(new LinuxPortalSelection(selection.NodeId, width, height));
+                DesktopBuddyMod.Msg($"[ContextMenu] Linux portal selected node={selection.NodeId} size={width}x{height}");
+                world.RunInUpdates(0, () => DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, "Linux Desktop"));
+            }
+            catch (Exception ex)
+            {
+                DesktopBuddyMod.Msg($"[ContextMenu] Linux portal picker error: {ex}");
+            }
+        });
+    }
+
 
     [HarmonyPatch(typeof(InteractionHandler), "OpenContextMenu")]
     private class ContextMenuOpenMenuPatch
@@ -305,8 +354,17 @@ public static class ContextMenuPatch
                                 return;
                             }
 
-                            DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
-                            ShowPickerPage(ctx, 0);
+                            if (DesktopBuddyPlatform.IsLinuxProton)
+                            {
+                                DesktopBuddyMod.Msg("[ContextMenu] Linux Desktop item pressed, opening portal picker");
+                                ctx.Close();
+                                OpenLinuxPortalPickerThenSpawn(__instance.World);
+                            }
+                            else
+                            {
+                                DesktopBuddyMod.Msg("[ContextMenu] Desktop item pressed, showing picker");
+                                ShowPickerPage(ctx, 0);
+                            }
                         }
                         catch (Exception ex)
                         {

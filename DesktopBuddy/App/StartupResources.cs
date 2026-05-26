@@ -7,23 +7,36 @@ public partial class DesktopBuddyMod
 
     private static void PrewarmSharedResources()
     {
-        try { WgcCapture.PrewarmSharedDevice(); }
-        catch (Exception ex) { Msg($"[Startup] WGC adapter prewarm failed: {ex.Message}"); }
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+        {
+            try { WgcCapture.PrewarmSharedDevice(); }
+            catch (Exception ex) { Msg($"[Startup] WGC adapter prewarm failed: {ex.Message}"); }
 
-        try { WgcCapture.PrewarmCaptureFactory(); }
-        catch (Exception ex) { Msg($"[Startup] WGC capture factory prewarm failed: {ex.Message}"); }
+            try { WgcCapture.PrewarmCaptureFactory(); }
+            catch (Exception ex) { Msg($"[Startup] WGC capture factory prewarm failed: {ex.Message}"); }
+        }
+        else
+        {
+            Msg("[Startup] Linux runtime detected; skipping WGC prewarm");
+        }
 
         try { FfmpegEncoder.SetFfmpegPath(); }
         catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
 
-        try { WindowInput.PrewarmTouchInjection(); }
-        catch (Exception ex) { Msg($"[Startup] Touch injection prewarm failed: {ex.Message}"); }
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+        {
+            try { WindowInput.PrewarmTouchInjection(); }
+            catch (Exception ex) { Msg($"[Startup] Touch injection prewarm failed: {ex.Message}"); }
+        }
 
         try { DesktopTextureProviderPatch.PrewarmReflection(); }
         catch (Exception ex) { Msg($"[Startup] DesktopTexture reflection prewarm failed: {ex.Message}"); }
 
-        try { AudioRouter.PrewarmFactory(); }
-        catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+        {
+            try { AudioRouter.PrewarmFactory(); }
+            catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }
+        }
     }
 
     private static void OpenSharedTextureBridge()

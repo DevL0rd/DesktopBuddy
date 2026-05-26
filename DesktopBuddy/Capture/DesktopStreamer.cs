@@ -6,27 +6,28 @@ public sealed class DesktopStreamer : IDisposable
 {
     private readonly IntPtr _hwnd;
     private readonly IntPtr _monitorHandle;
-    private WgcCapture _wgc;
+    private IDesktopCaptureBackend _backend;
     private int _disposed;
 
     public IntPtr MonitorHandle => _monitorHandle;
     public int Width { get; private set; }
     public int Height { get; private set; }
-    public bool IsValid => _wgc?.IsValid ?? false;
-    public object D3dContextLock => _wgc?.D3dContextLock;
-    public IntPtr D3dDevice => _wgc?.D3dDevice ?? IntPtr.Zero;
-    public IntPtr D3dContext => _wgc?.D3dContext ?? IntPtr.Zero;
-    public IntPtr SharedTexture => _wgc?.SharedTexture ?? IntPtr.Zero;
-    public IntPtr SharedTextureHandle => _wgc?.SharedTextureHandle ?? IntPtr.Zero;
-    public int SharedTextureWidth => _wgc?.SharedTextureWidth ?? 0;
-    public int SharedTextureHeight => _wgc?.SharedTextureHeight ?? 0;
-    public bool HasCurrentSharedFrame => _wgc?.HasCurrentSharedFrame ?? false;
-    public bool IsResizeRecreatePending => _wgc?.IsResizeRecreatePending ?? false;
+    public bool IsValid => _backend?.IsValid ?? false;
+    public object D3dContextLock => _backend?.D3dContextLock;
+    public IntPtr D3dDevice => _backend?.D3dDevice ?? IntPtr.Zero;
+    public IntPtr D3dContext => _backend?.D3dContext ?? IntPtr.Zero;
+    public IntPtr SharedTexture => _backend?.SharedTexture ?? IntPtr.Zero;
+    public IntPtr SharedTextureHandle => _backend?.SharedTextureHandle ?? IntPtr.Zero;
+    public int SharedTextureWidth => _backend?.SharedTextureWidth ?? 0;
+    public int SharedTextureHeight => _backend?.SharedTextureHeight ?? 0;
+    public bool HasCurrentSharedFrame => _backend?.HasCurrentSharedFrame ?? false;
+    public bool IsResizeRecreatePending => _backend?.IsResizeRecreatePending ?? false;
+    public uint LinuxPipeWireNodeId => _backend is ILinuxPipeWireSelection linux ? linux.PipeWireNodeId : 0;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame
     {
-        get => _wgc?.OnGpuFrame;
-        set { if (_wgc != null) _wgc.OnGpuFrame = value; }
+        get => _backend?.OnGpuFrame;
+        set { if (_backend != null) _backend.OnGpuFrame = value; }
     }
 
     public DesktopStreamer(IntPtr hwnd, IntPtr monitorHandle = default)
@@ -37,49 +38,50 @@ public sealed class DesktopStreamer : IDisposable
 
     public bool TryInitialCapture()
     {
-        Log.Msg($"[DesktopStreamer] Initial capture starting hwnd={_hwnd} monitor=0x{_monitorHandle:X}");
-        var wgc = new WgcCapture();
-        bool success = false;
+        _backend = CreateBackend();
+        Log.Msg($"[DesktopStreamer] Initial capture starting backend={_backend.GetType().Name} hwnd={_hwnd} monitor=0x{_monitorHandle:X}");
 
-        try { success = wgc.Init(_hwnd, _monitorHandle); }
-        catch (Exception ex)
-        {
-            Log.Msg($"[DesktopStreamer] WGC init exception: {ex.Message}");
-        }
-
+        bool success = _backend.TryInitialCapture();
         if (!success)
         {
             Log.Msg($"[DesktopStreamer] Initial capture failed hwnd={_hwnd} monitor=0x{_monitorHandle:X}");
-            wgc.Dispose();
+            _backend.Dispose();
+            _backend = null;
             return false;
         }
 
-        _wgc = wgc;
-        Width = _wgc.Width;
-        Height = _wgc.Height;
-        Log.Msg($"[DesktopStreamer] WGC capture initialized ({Width}x{Height})");
+        Width = _backend.Width;
+        Height = _backend.Height;
+        Log.Msg($"[DesktopStreamer] Capture initialized ({Width}x{Height})");
         return true;
+    }
+
+    private IDesktopCaptureBackend CreateBackend()
+    {
+        return DesktopBuddyPlatform.IsLinuxProton
+            ? new LinuxPortalCaptureBackend()
+            : new WgcCaptureBackend(_hwnd, _monitorHandle);
     }
 
     public void RecreatePoolIfNeeded()
     {
-        if (_wgc == null) return;
-        _wgc.RecreatePoolIfNeeded();
-        Width = _wgc.Width;
-        Height = _wgc.Height;
+        if (_backend == null) return;
+        _backend.RecreatePoolIfNeeded();
+        Width = _backend.Width;
+        Height = _backend.Height;
     }
 
-    public void FlushD3dContext() => _wgc?.FlushD3dContext();
+    public void FlushD3dContext() => _backend?.FlushD3dContext();
 
     public void StopCapture()
     {
-        _wgc?.StopCapture();
+        _backend?.StopCapture();
     }
 
     public void Dispose()
     {
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _wgc?.Dispose();
-        _wgc = null;
+        _backend?.Dispose();
+        _backend = null;
     }
 }

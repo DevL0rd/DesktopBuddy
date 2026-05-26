@@ -96,6 +96,43 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
         return slot;
     }
 
+    internal int RegisterLinuxCapture(int widthHint, int heightHint, uint pipeWireNodeId)
+    {
+        if (_messenger == null)
+            throw new InvalidOperationException("Channel not open");
+
+        int slot = -1;
+        int generation;
+        lock (_slotStateLock)
+        {
+            for (int i = 0; i < SharedTextureBridgeProtocol.MaxTextureSlots; i++)
+            {
+                if (!_usedSlots.Contains(i) && !_slotStopping[i])
+                {
+                    slot = i;
+                    break;
+                }
+            }
+
+            if (slot < 0)
+            {
+                Log.Msg("[SharedTextureBridgeChannel] No free texture slots available for Linux capture");
+                return -1;
+            }
+
+            _usedSlots.Add(slot);
+            generation = ++_slotGenerations[slot];
+            _slotStopping[slot] = false;
+            _slotRunning[slot] = false;
+            _slotWidths[slot] = 0;
+            _slotHeights[slot] = 0;
+        }
+
+        QueueStart(slot, generation, new IntPtr(-1), $"DesktopBuddyLinuxCapture:{pipeWireNodeId}", widthHint, heightHint);
+        Log.Msg($"[SharedTextureBridgeChannel] Registered Linux capture slot={slot} gen={generation} node={pipeWireNodeId} hint={widthHint}x{heightHint}");
+        return slot;
+    }
+
     internal void StopTexture(int slot)
     {
         Log.Msg($"[CleanupTrace] SharedTextureBridgeChannel.StopTexture ENTER slot={slot} disposed={_disposed} messenger={_messenger != null}");
@@ -152,6 +189,23 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
             return _slotRunning[slot];
     }
 
+    internal bool TryGetTextureSize(int slot, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (slot < 0 || slot >= SharedTextureBridgeProtocol.MaxTextureSlots)
+            return false;
+
+        lock (_slotStateLock)
+        {
+            if (!_slotRunning[slot])
+                return false;
+            width = _slotWidths[slot];
+            height = _slotHeights[slot];
+            return width > 0 && height > 0;
+        }
+    }
+
     internal bool IsTextureRunning(int slot, int width, int height)
     {
         if (slot < 0 || slot >= SharedTextureBridgeProtocol.MaxTextureSlots)
@@ -190,6 +244,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
             }
         });
     }
+
 
     private void QueueStop(int slot, int generation)
     {

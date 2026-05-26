@@ -27,6 +27,8 @@ internal static class DesktopBuddyFirstRunSetup
 
     internal sealed class SetupState
     {
+        internal static readonly SetupState Ok = new();
+
         internal IReadOnlyList<SetupItem> Items { get; init; } = Array.Empty<SetupItem>();
         internal IReadOnlyList<SetupAction> RequiredActions { get; init; } = Array.Empty<SetupAction>();
         internal bool HasIssues => Items.Any(item => !item.IsOk);

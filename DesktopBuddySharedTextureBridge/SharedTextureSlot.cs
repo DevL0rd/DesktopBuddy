@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace DesktopBuddySharedTextureBridge
 {
-    internal sealed class SharedTextureSlot : IDisplayTextureSource, IDisposable
+    internal sealed class SharedTextureSlot : IBridgeTextureSlot
     {
         private const int ID3D11Device_OpenSharedResource = 28;
         private const int ID3D11Device_CreateShaderResourceView = 7;
@@ -94,6 +94,8 @@ namespace DesktopBuddySharedTextureBridge
                 return false;
             }
         }
+
+        public void Tick() { }
 
         public void RegisterRequest(Action onTextureChanged)
         {

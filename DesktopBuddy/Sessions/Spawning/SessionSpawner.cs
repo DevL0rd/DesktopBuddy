@@ -80,7 +80,8 @@ public partial class DesktopBuddyMod
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd} monitorIndex={monitorIndex})");
 
-        WindowInput.RestoreIfMinimized(hwnd);
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+            WindowInput.RestoreIfMinimized(hwnd);
 
         var streamer = new DesktopStreamer(hwnd, monitorHandle);
         var world = root.World;
@@ -145,7 +146,7 @@ public partial class DesktopBuddyMod
         int h = streamer.Height;
         Grabbable grabbable = null;
 
-        Msg($"[StartStreaming] Window size: {w}x{h}, WGC event-driven capture");
+        Msg($"[StartStreaming] Capture size: {w}x{h}");
 
         float canvasScale = 0.0005f;
         float worldHalfH = h / 2f * canvasScale;
@@ -201,7 +202,7 @@ public partial class DesktopBuddyMod
         int sharedTextureSlot = -1;
         int pendingBridgeDisplayIndex = -1;
         bool useTextureBridge = TextureBridgeChannel != null && TextureBridgeChannel.IsOpen &&
-            (hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
+            (DesktopBuddyPlatform.IsLinuxProton || hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
         if (useTextureBridge)
         {
             Msg("[StartStreaming] Shared texture bridge registration deferred until first current-size frame");
@@ -239,7 +240,9 @@ public partial class DesktopBuddyMod
         frontPlaneRef = AddCurvedTexturePlane(displaySlot, "FrontCurvedPlane", w, h, 1f, procTex, 0f, flipY: true, offsetUnits: 100f);
         ApplyPanelCurvature(currentPanelCurvature);
 
-        WindowEnumerator.GetWindowThreadProcessId(hwnd, out uint processId);
+        uint processId = 0;
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+            WindowEnumerator.GetWindowThreadProcessId(hwnd, out processId);
         Msg($"[StartStreaming] Process ID: {processId}");
 
         var seenRelatedHwnds = new HashSet<IntPtr>();
@@ -271,7 +274,10 @@ public partial class DesktopBuddyMod
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
 
-        DesktopInputWiring.Wire(root, hwnd, streamer, session, frontPlaneRef, () => grabbable);
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+            DesktopInputWiring.Wire(root, hwnd, streamer, session, frontPlaneRef, () => grabbable);
+        else
+            Msg("[StartStreaming] Linux capture: Win32 input wiring disabled");
 
         float barH = 60f;
         float barMarginBottom = 12f * canvasScale;
@@ -1296,17 +1302,20 @@ public partial class DesktopBuddyMod
         ScheduleUpdate(root.World);
 
         root.Tag = "Desktop Buddy";
-        System.Threading.Tasks.Task.Run(() =>
+        if (!DesktopBuddyPlatform.IsLinuxProton)
         {
-            Msg($"[StartStreaming] Focus request START hwnd={hwnd} title={title}");
-            bool focused = WindowInput.FocusWindow(hwnd);
-            Msg(focused
-                ? $"[StartStreaming] Window focused, streaming started for: {title}"
-                : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
-        });
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                Msg($"[StartStreaming] Focus request START hwnd={hwnd} title={title}");
+                bool focused = WindowInput.FocusWindow(hwnd);
+                Msg(focused
+                    ? $"[StartStreaming] Window focused, streaming started for: {title}"
+                    : $"[StartStreaming] Streaming started, but Windows did not foreground the window yet: {title}");
+            });
+        }
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
-        if (useSpatialAudio && !isDesktopCapture && processId != 0)
+        if (!DesktopBuddyPlatform.IsLinuxProton && useSpatialAudio && !isDesktopCapture && processId != 0)
         {
             System.Threading.Tasks.Task.Run(() =>
             {

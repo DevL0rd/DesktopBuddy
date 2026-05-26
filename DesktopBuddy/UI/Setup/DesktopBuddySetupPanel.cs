@@ -35,6 +35,12 @@ public partial class DesktopBuddyMod
 
     internal static bool ShowSetupNoticeFromDesktopClick(World world)
     {
+        if (DesktopBuddyPlatform.IsLinuxProton)
+        {
+            EnsureDependencyRuntimeStarted();
+            return false;
+        }
+
         if (_setupNoticeDismissed)
         {
             EnsureDependencyRuntimeStarted();

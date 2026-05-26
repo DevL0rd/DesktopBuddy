@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using BepInEx.Logging;
 using DesktopBuddy.Shared;
 using InterprocessLib;
+using Renderite.Unity;
 using UnityEngine;
 
 namespace DesktopBuddySharedTextureBridge
@@ -18,10 +19,10 @@ namespace DesktopBuddySharedTextureBridge
         private const float ConnectRetryInterval = 1f;
         private const float ConnectLogInterval = 5f;
 
-        private readonly Dictionary<int, SharedTextureSlot> _activeSlots = new Dictionary<int, SharedTextureSlot>();
+        private readonly Dictionary<int, IBridgeTextureSlot> _activeSlots = new Dictionary<int, IBridgeTextureSlot>();
         private readonly Dictionary<int, int> _activeGenerations = new Dictionary<int, int>();
-        private static readonly ConcurrentDictionary<int, SharedTextureSlot> _bridgeIndexToSlot = new ConcurrentDictionary<int, SharedTextureSlot>();
-        private readonly List<(int slot, int generation, SharedTextureSlot textureSlot)> _pendingBinds = new List<(int, int, SharedTextureSlot)>();
+        private static readonly ConcurrentDictionary<int, IDisplayTextureSource> _bridgeIndexToSlot = new ConcurrentDictionary<int, IDisplayTextureSource>();
+        private readonly List<(int slot, int generation, IBridgeTextureSlot textureSlot)> _pendingBinds = new List<(int, int, IBridgeTextureSlot)>();
         private bool _rendererDevicePublished;
 
         internal SharedTextureBridge(ManualLogSource log)
@@ -30,7 +31,7 @@ namespace DesktopBuddySharedTextureBridge
             SharedTextureBridgePlugin.LogInfo("[SharedTextureBridge] Constructed");
         }
 
-        internal static SharedTextureSlot GetSlotForBridgeIndex(int bridgeIndex)
+        internal static IDisplayTextureSource GetSlotForBridgeIndex(int bridgeIndex)
         {
             _bridgeIndexToSlot.TryGetValue(bridgeIndex, out var textureSlot);
             return textureSlot;
@@ -59,6 +60,12 @@ namespace DesktopBuddySharedTextureBridge
             {
                 try { action(); }
                 catch (Exception ex) { SharedTextureBridgePlugin.LogError("IPC action failed", ex); }
+            }
+
+            foreach (var slot in _activeSlots.Values)
+            {
+                try { slot.Tick(); }
+                catch (Exception ex) { SharedTextureBridgePlugin.LogError("Texture slot tick failed", ex); }
             }
 
             for (int i = _pendingBinds.Count - 1; i >= 0; i--)
@@ -207,6 +214,12 @@ namespace DesktopBuddySharedTextureBridge
 
         private void StartSharedTexture(int slot, int generation, long sharedTextureHandleRaw, string sharedTextureName, int sharedTextureWidth, int sharedTextureHeight)
         {
+            if (sharedTextureHandleRaw == -1 && TryParseLinuxCaptureName(sharedTextureName, out uint pipeWireNodeId))
+            {
+                StartLinuxCapture(slot, generation, pipeWireNodeId, sharedTextureWidth, sharedTextureHeight);
+                return;
+            }
+
             if (_activeSlots.ContainsKey(slot))
                 StopSharedTexture(slot, _activeGenerations.TryGetValue(slot, out int oldGeneration) ? oldGeneration : 0, false);
 
@@ -290,7 +303,44 @@ namespace DesktopBuddySharedTextureBridge
             SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Stop complete slot={slot}");
         }
 
-        private void WriteRunning(int slot, int generation, SharedTextureSlot textureSlot)
+        private static bool TryParseLinuxCaptureName(string name, out uint pipeWireNodeId)
+        {
+            pipeWireNodeId = 0;
+            const string prefix = "DesktopBuddyLinuxCapture:";
+            if (string.IsNullOrEmpty(name) || !name.StartsWith(prefix, StringComparison.Ordinal))
+                return false;
+
+            return uint.TryParse(name.Substring(prefix.Length), out pipeWireNodeId) && pipeWireNodeId != 0;
+        }
+
+        private void StartLinuxCapture(int slot, int generation, uint pipeWireNodeId, int widthHint, int heightHint)
+        {
+            StopSharedTexture(slot, _activeGenerations.TryGetValue(slot, out int oldGeneration) ? oldGeneration : 0, false);
+
+            try
+            {
+                var textureSlot = new LinuxCaptureTextureSlot(pipeWireNodeId, widthHint, heightHint, _log);
+                _activeSlots[slot] = textureSlot;
+                _activeGenerations[slot] = generation;
+                _bridgeIndexToSlot[SharedTextureBridgeProtocol.MagicIndexBase + slot] = textureSlot;
+                if (textureSlot.TryBind())
+                {
+                    WriteRunning(slot, generation, textureSlot);
+                    SharedTextureBridgePlugin.LogInfo($"[SharedTextureBridge] Linux capture slot={slot} gen={generation} node={pipeWireNodeId} running {textureSlot.Width}x{textureSlot.Height}");
+                }
+                else
+                {
+                    _pendingBinds.Add((slot, generation, textureSlot));
+                    SharedTextureBridgePlugin.LogWarning($"[SharedTextureBridge] Linux capture slot={slot} node={pipeWireNodeId} pending bind");
+                }
+            }
+            catch (Exception ex)
+            {
+                SharedTextureBridgePlugin.LogError($"[SharedTextureBridge] Linux capture start failed slot={slot} gen={generation}", ex);
+            }
+        }
+
+        private void WriteRunning(int slot, int generation, IBridgeTextureSlot textureSlot)
         {
             try
             {

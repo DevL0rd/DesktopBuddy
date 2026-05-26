@@ -38,9 +38,20 @@ public partial class DesktopBuddyMod : BasePlugin
     private void OnEngineReady()
     {
         DesktopBuddy.Log.StartSession();
-        var setupState = DesktopBuddyFirstRunSetup.Check();
-        if (setupState.HasIssues)
-            Msg("[Setup] Local setup has missing or outdated items; dependency runtime deferred until setup notice is dismissed");
+        Msg($"[Startup] Runtime platform: {DesktopBuddyPlatform.RuntimeLabel}");
+
+        DesktopBuddyFirstRunSetup.SetupState setupState;
+        if (DesktopBuddyPlatform.IsLinuxProton)
+        {
+            setupState = DesktopBuddyFirstRunSetup.SetupState.Ok;
+            Msg("[Setup] Linux Proton detected; skipping Windows-only first-run setup");
+        }
+        else
+        {
+            setupState = DesktopBuddyFirstRunSetup.Check();
+            if (setupState.HasIssues)
+                Msg("[Setup] Local setup has missing or outdated items; dependency runtime deferred until setup notice is dismissed");
+        }
 
         InitializeCore();
         if (!setupState.HasIssues)
@@ -66,7 +77,10 @@ public partial class DesktopBuddyMod : BasePlugin
             e.SetObserved();
         };
 
-        InstallNativeCrashHandler();
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+            InstallNativeCrashHandler();
+        else
+            Msg("[NativeCrash] Linux runtime detected; skipping Windows native crash handler");
 
         Harmony harmony = new("com.desktopbuddy.mod");
         harmony.PatchAll();
@@ -112,34 +126,48 @@ public partial class DesktopBuddyMod : BasePlugin
             }
         }
 
-        System.Threading.Tasks.Task.Run(() =>
+        if (!DesktopBuddyPlatform.IsLinuxProton)
         {
-            try
+            System.Threading.Tasks.Task.Run(() =>
             {
-                if (SoftCam.IsFilterRegistered())
+                try
                 {
-                    VCam = new VirtualCamera();
-                    VCam.StartIdle();
+                    if (SoftCam.IsFilterRegistered())
+                    {
+                        VCam = new VirtualCamera();
+                        VCam.StartIdle();
+                    }
+                    else
+                    {
+                        Msg("[VirtualCamera] DirectShow filter not registered, virtual camera unavailable");
+                    }
                 }
-                else
+                catch (Exception ex) { Msg($"[VirtualCamera] Setup error: {ex.Message}"); }
+
+                try
                 {
-                    Msg("[VirtualCamera] DirectShow filter not registered, virtual camera unavailable");
+                    if (!VBCable.HasCableInputDevice())
+                        Msg("[VirtualMic] VB-Cable not installed, virtual mic unavailable");
                 }
-            }
-            catch (Exception ex) { Msg($"[VirtualCamera] Setup error: {ex.Message}"); }
+                catch (Exception ex) { Msg($"[VirtualMic] Setup error: {ex.Message}"); }
+            });
+        }
+        else
+        {
+            Msg("[Startup] Linux Proton detected; skipping Windows virtual camera, VB-Cable, and audio-routing setup");
+        }
 
-            try
-            {
-                if (!VBCable.HasCableInputDevice())
-                    Msg("[VirtualMic] VB-Cable not installed, virtual mic unavailable");
-            }
-            catch (Exception ex) { Msg($"[VirtualMic] Setup error: {ex.Message}"); }
-        });
-
-        _windowPollerRunning = true;
-        _windowPollerThread = new Thread(WindowPollerLoop)
-        { Name = "DesktopBuddy:WindowPoller", IsBackground = true };
-        _windowPollerThread.Start();
+        if (!DesktopBuddyPlatform.IsLinuxProton)
+        {
+            _windowPollerRunning = true;
+            _windowPollerThread = new Thread(WindowPollerLoop)
+            { Name = "DesktopBuddy:WindowPoller", IsBackground = true };
+            _windowPollerThread.Start();
+        }
+        else
+        {
+            Msg("[Startup] Linux Proton detected; skipping Win32 window poller");
+        }
 
         Msg("DesktopBuddy dependency runtime initialized!");
 
@@ -153,8 +181,13 @@ public partial class DesktopBuddyMod : BasePlugin
             var resetPids = new HashSet<uint>();
             foreach (var session in ActiveSessions)
             {
-                if (session.OwnsAudioRedirect && session.ProcessId != 0 && resetPids.Add(session.ProcessId))
+                if (!DesktopBuddyPlatform.IsLinuxProton &&
+                    session.OwnsAudioRedirect &&
+                    session.ProcessId != 0 &&
+                    resetPids.Add(session.ProcessId))
+                {
                     AudioRouter.ResetProcessToDefault(session.ProcessId);
+                }
             }
             KillTunnel();
             RemovePortForwardNatMapping();

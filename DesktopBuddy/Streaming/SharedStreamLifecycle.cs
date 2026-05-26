@@ -17,30 +17,34 @@ public partial class DesktopBuddyMod
             }
 
             int streamId = NextStreamId();
-            FfmpegEncoder encoder;
+            FfmpegEncoder encoder = null;
+            ILiveStreamSource source;
             Uri url;
 
             if (useMediaMtx)
             {
                 var rtspUrl = GetMediaMtxRtspUrl(streamId);
                 encoder = new FfmpegEncoder(streamId, rtspUrl);
+                source = encoder;
                 url = new Uri(rtspUrl);
                 Msg($"[RemoteStream] Using MediaMTX RTSP: {rtspUrl}");
             }
             else
             {
                 encoder = StreamServer.CreateEncoder(streamId);
+                source = encoder;
                 url = GetBuiltInStreamUrl(streamId);
                 Msg($"[RemoteStream] Using built-in HTTP stream: {url}");
             }
 
-            var audio = new AudioCapture();
-            var startAudio = CreateAudioStartAction(audio, hwnd);
+            var audio = DesktopBuddyPlatform.IsLinuxProton ? null : new AudioCapture();
+            var startAudio = audio != null ? CreateAudioStartAction(audio, hwnd) : null;
 
             shared = new SharedStream
             {
                 StreamId = streamId,
                 Encoder = encoder,
+                Source = source,
                 UsesMediaMtx = useMediaMtx,
                 Audio = audio,
                 StartAudio = startAudio,

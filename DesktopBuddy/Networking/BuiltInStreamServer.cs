@@ -42,12 +42,19 @@ public sealed class BuiltInStreamServer : IDisposable
         return encoder;
     }
 
+    public void RegisterSource(int streamId, ILiveStreamSource source)
+    {
+        if (source == null) throw new ArgumentNullException(nameof(source));
+        _streams[streamId] = new StreamEntry(source);
+        Log.Msg($"[BuiltInStreamServer] Registered source {source.GetType().Name} for stream {streamId}");
+    }
+
     public void StopEncoder(int streamId)
     {
         Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder ENTER stream={streamId}");
         if (!_streams.TryRemove(streamId, out var entry)) return;
-        Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder removed entry stream={streamId}; encoder.Dispose START");
-        entry.Encoder.Dispose();
+        Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder removed entry stream={streamId}; source.Dispose START");
+        entry.Source.Dispose();
         Log.Msg($"[CleanupTrace] BuiltInStreamServer.StopEncoder EXIT stream={streamId}");
     }
 
@@ -104,7 +111,7 @@ public sealed class BuiltInStreamServer : IDisposable
             return;
         }
 
-        var encoder = entry.Encoder;
+        var encoder = entry.Source;
         int waitCount = 0;
         while (!encoder.IsRunning && waitCount < 50)
         {
@@ -206,9 +213,9 @@ public sealed class BuiltInStreamServer : IDisposable
         _running = false;
         foreach (var kvp in _streams)
         {
-            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose START stream={kvp.Key}");
-            kvp.Value.Encoder.Dispose();
-            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose encoder.Dispose DONE stream={kvp.Key}");
+            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose source.Dispose START stream={kvp.Key}");
+            kvp.Value.Source.Dispose();
+            Log.Msg($"[CleanupTrace] BuiltInStreamServer.Dispose source.Dispose DONE stream={kvp.Key}");
         }
         _streams.Clear();
         Log.Msg("[CleanupTrace] BuiltInStreamServer.Dispose listener.Stop START");
@@ -220,12 +227,12 @@ public sealed class BuiltInStreamServer : IDisposable
 
     private sealed class StreamEntry
     {
-        public readonly FfmpegEncoder Encoder;
+        public readonly ILiveStreamSource Source;
         private int _clientCount;
 
-        public StreamEntry(FfmpegEncoder encoder)
+        public StreamEntry(ILiveStreamSource source)
         {
-            Encoder = encoder;
+            Source = source;
         }
 
         public int AddClient()

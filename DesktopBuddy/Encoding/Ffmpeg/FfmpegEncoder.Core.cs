@@ -7,7 +7,7 @@ using FFmpeg.AutoGen;
 
 namespace DesktopBuddy;
 
-public sealed unsafe partial class FfmpegEncoder
+public sealed unsafe partial class FfmpegEncoder : ILiveStreamSource
 {
 
     private readonly int _streamId;

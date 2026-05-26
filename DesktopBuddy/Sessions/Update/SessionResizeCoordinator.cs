@@ -17,6 +17,28 @@ public partial class DesktopBuddyMod
         if (streamer == null || TextureBridgeChannel == null || !TextureBridgeChannel.IsOpen)
             return false;
 
+        if (DesktopBuddyPlatform.IsLinuxProton)
+        {
+            if (session.SharedTextureSlot < 0)
+            {
+                int slot = TextureBridgeChannel.RegisterLinuxCapture(
+                    streamer.Width > 0 ? streamer.Width : session.LastKnownW,
+                    streamer.Height > 0 ? streamer.Height : session.LastKnownH,
+                    streamer.LinuxPipeWireNodeId);
+                if (slot < 0)
+                    return false;
+
+                session.SharedTextureSlot = slot;
+                Msg($"[UpdateLoop] Linux capture bridge registered: slot={slot} {streamer.Width}x{streamer.Height}");
+            }
+
+            session.Texture.DisplayIndex.Value = int.MinValue;
+            session.PendingBridgeDisplayIndex = SharedTextureBridgeProtocol.MagicIndexBase + session.SharedTextureSlot;
+            session.BridgeDisplayIndexApplied = false;
+            session.BridgeRegistrationPending = false;
+            return true;
+        }
+
         if (!streamer.HasCurrentSharedFrame ||
             streamer.SharedTextureHandle == IntPtr.Zero ||
             streamer.SharedTextureWidth <= 0 ||
@@ -70,6 +92,26 @@ public partial class DesktopBuddyMod
             streamerForResize.RecreatePoolIfNeeded();
             int sw = streamerForResize.Width;
             int sh = streamerForResize.Height;
+            if (DesktopBuddyPlatform.IsLinuxProton && session.UseTextureBridge)
+            {
+                if (session.BridgeRegistrationPending && !TryPublishCurrentSharedTexture(session))
+                    return true;
+
+                if (session.SharedTextureSlot >= 0 &&
+                    TextureBridgeChannel != null &&
+                    TextureBridgeChannel.TryGetTextureSize(session.SharedTextureSlot, out int bridgeW, out int bridgeH) &&
+                    bridgeW > 0 && bridgeH > 0 &&
+                    (session.LastKnownW != bridgeW || session.LastKnownH != bridgeH))
+                {
+                    Msg($"[UpdateLoop] Linux renderer resize {session.LastKnownW}x{session.LastKnownH} -> {bridgeW}x{bridgeH}");
+                    session.LastKnownW = bridgeW;
+                    session.LastKnownH = bridgeH;
+                    ApplySessionVisualResize(session, bridgeW, bridgeH);
+                }
+
+                return false;
+            }
+
             if (streamerForResize.IsResizeRecreatePending && _updateCount % 30 == 0)
                 Msg($"[UpdateLoop] Resize recreate still pending hwnd={session.Hwnd} size={sw}x{sh} sharedSize={streamerForResize.SharedTextureWidth}x{streamerForResize.SharedTextureHeight}");
 

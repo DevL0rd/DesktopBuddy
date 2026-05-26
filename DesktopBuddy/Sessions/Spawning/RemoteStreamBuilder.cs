@@ -34,6 +34,12 @@ public partial class DesktopBuddyMod
     {
         var root = context.Root;
         var session = context.Session;
+        if (DesktopBuddyPlatform.IsLinuxProton)
+        {
+            Msg("[RemoteStream] Skipped on Linux: DesktopBuddy uses DesktopTextureProvider/shared texture bridge for desktop control");
+            return null;
+        }
+
         bool allowRemoteStream = context.UseMediaMtx || StreamServer != null;
         if (!allowRemoteStream)
         {
@@ -46,9 +52,12 @@ public partial class DesktopBuddyMod
             SharedStream shared = AcquireSharedStream(context.Hwnd, context.UseMediaMtx);
             session.StreamId = shared.StreamId;
             session.Encoder = shared.Encoder;
+            session.StreamSource = shared.Source;
+            session.StreamUsesMediaMtx = shared.UsesMediaMtx;
             session.StreamAudioCapture = shared.Audio;
             session.StartStreamAudioCapture = shared.StartAudio;
             var nvEncoder = shared.Encoder;
+            var streamSource = shared.Source;
 
             if (session.SpatialAudioSource != null && shared.Audio != null)
                 session.SpatialAudioSource.SetAudioCapture(shared.Audio);
@@ -147,7 +156,7 @@ public partial class DesktopBuddyMod
 
             Msg($"[RemoteStream] Created, URL={streamUrl}, streamId={shared.StreamId}, refs={shared.RefCount}");
 
-            ScheduleRemoteStreamBinding(root, session, videoTex, nvEncoder, streamUrl, shared.StreamId, context.IsPrivate);
+            ScheduleRemoteStreamBinding(root, session, videoTex, streamSource, streamUrl, shared.StreamId, context.IsPrivate);
             ScheduleRemoteStreamPlaybackWatch(root, session, videoTex, shared.StreamId);
 
             return new RemoteStreamVisual
@@ -168,7 +177,7 @@ public partial class DesktopBuddyMod
         Slot root,
         DesktopSession session,
         VideoTextureProvider videoTex,
-        FfmpegEncoder encoder,
+        ILiveStreamSource streamSource,
         Uri streamUrl,
         int streamId,
         Func<bool> isPrivate)
@@ -181,25 +190,25 @@ public partial class DesktopBuddyMod
         {
             if (videoTex == null || videoTex.IsDestroyed || root.IsDestroyed) return;
 
-            bool ready = encoder.IsRunning;
+            bool ready = streamSource?.IsRunning ?? false;
             bool privateNow = isPrivate();
             Uri effectiveUrl = streamUrl ?? GetBuiltInStreamUrl(streamId);
 
             if (ready && !privateNow && effectiveUrl != null)
             {
                 SetRemoteStreamUrl(session, effectiveUrl, $"initial bind streamId={streamId}");
-                Msg($"[RemoteStream] URL bound after encoder readiness: attempt={attempt} streamId={streamId} {encoder.ReadableStreamState}");
+                Msg($"[RemoteStream] URL bound after stream readiness: attempt={attempt} streamId={streamId} {streamSource.ReadableStreamState}");
                 return;
             }
 
             if (attempt >= StreamBindMaxAttempts)
             {
-                Msg($"[RemoteStream] URL not bound: ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, streamId={streamId}, {encoder.ReadableStreamState}");
+                Msg($"[RemoteStream] URL not bound: ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, streamId={streamId}, {streamSource?.ReadableStreamState ?? "no source"}");
                 return;
             }
 
             if (attempt == 0 || attempt % 30 == 0)
-                Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, {encoder.ReadableStreamState}");
+                Msg($"[RemoteStream] Waiting before URL bind: attempt={attempt}, ready={ready}, urlReady={effectiveUrl != null}, private={privateNow}, {streamSource?.ReadableStreamState ?? "no source"}");
 
             root.World.RunInUpdates(StreamBindRetryUpdates, () => BindStreamUrlWhenReady(attempt + 1));
         }

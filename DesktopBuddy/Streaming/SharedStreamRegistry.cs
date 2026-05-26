@@ -8,6 +8,7 @@ internal sealed class SharedStream
 {
     public int StreamId;
     public FfmpegEncoder Encoder;
+    public ILiveStreamSource Source;
     public bool UsesMediaMtx;
     public AudioCapture Audio;
     public Action StartAudio;
