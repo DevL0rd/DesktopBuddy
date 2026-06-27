@@ -23,6 +23,7 @@ public sealed class DesktopStreamer : IDisposable
     public bool HasCurrentSharedFrame => _backend?.HasCurrentSharedFrame ?? false;
     public bool IsResizeRecreatePending => _backend?.IsResizeRecreatePending ?? false;
     public uint LinuxPipeWireNodeId => _backend is ILinuxPipeWireSelection linux ? linux.PipeWireNodeId : 0;
+    public ulong LinuxInputSessionId => _backend is ILinuxPipeWireSelection linux ? linux.InputSessionId : 0;
 
     public Action<IntPtr, IntPtr, int, int> OnGpuFrame
     {
@@ -58,7 +59,7 @@ public sealed class DesktopStreamer : IDisposable
 
     private IDesktopCaptureBackend CreateBackend()
     {
-        return DesktopBuddyPlatform.IsLinuxProton
+        return DesktopBuddyPlatform.IsLinux
             ? new LinuxPortalCaptureBackend()
             : new WgcCaptureBackend(_hwnd, _monitorHandle);
     }

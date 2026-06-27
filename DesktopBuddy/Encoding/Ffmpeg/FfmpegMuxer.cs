@@ -136,7 +136,6 @@ public sealed unsafe partial class FfmpegEncoder
         }
     }
 
-
     private static int WriteCallback(void* opaque, byte* buf, int buf_size)
     {
         var handle = GCHandle.FromIntPtr((IntPtr)opaque);

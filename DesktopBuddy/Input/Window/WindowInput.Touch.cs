@@ -10,12 +10,14 @@ public static partial class WindowInput
 
     public static void SendHover(IntPtr hWnd, float u, float v, int clientW, int clientH, IntPtr monitorHandle = default)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxMove(u, v); return; }
         var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);
         SetCursorPos(pt.X, pt.Y);
     }
 
     public static void SendTouchDown(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxButtonAt(u, v, true); return; }
         lock (_sendLock)
         {
             if (!EnsureTouchInit()) return;
@@ -55,6 +57,7 @@ public static partial class WindowInput
 
     public static void SendTouchMove(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxMove(u, v); return; }
         lock (_sendLock)
         {
             if (!_touchInitialized) return;
@@ -90,6 +93,7 @@ public static partial class WindowInput
 
     public static void SendTouchUp(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxButton(false); return; }
         lock (_sendLock)
         {
             if (!_touchInitialized) return;
@@ -116,6 +120,7 @@ public static partial class WindowInput
 
     public static void SendScroll(IntPtr hWnd, float u, float v, int clientW, int clientH, int wheelDelta, IntPtr monitorHandle = default)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxMove(u, v); LinuxScroll(wheelDelta); return; }
         lock (_sendLock)
         {
             var pt = UvToScreen(hWnd, u, v, clientW, clientH, monitorHandle);

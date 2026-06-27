@@ -56,7 +56,6 @@ public sealed unsafe partial class FfmpegEncoder
         Log.Msg($"[FfmpegEnc:{_streamId}] Audio encode thread launched after muxer header");
     }
 
-
     private static int GetStreamFps()
     {
         int configured = DesktopBuddyMod.RuntimeStreamFps;

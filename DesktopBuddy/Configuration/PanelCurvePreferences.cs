@@ -7,7 +7,6 @@ namespace DesktopBuddy;
 public partial class DesktopBuddyMod
 {
 
-
     private static string _mediaMtxStreamBase;
 
     internal static string GetMediaMtxRtspUrl(int streamId)

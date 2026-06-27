@@ -135,7 +135,6 @@ public sealed unsafe partial class FfmpegEncoder
         return Math.Max(1, (int)Math.Ceiling(1000.0 / GetKeepAliveFps()));
     }
 
-
     private void EncodeFrameInternalLocked(IntPtr srcTexture, uint width, uint height, bool keepAliveFrame)
     {
         int ret;
@@ -269,7 +268,6 @@ public sealed unsafe partial class FfmpegEncoder
         _totalFrames++;
         if (keepAliveFrame) _keepAliveFramesEncoded++;
     }
-
 
     private static void CopyTextureToFrame(IntPtr deviceContext, IntPtr dstTexture, int dstArrayIndex, IntPtr srcTexture, int width, int height)
     {

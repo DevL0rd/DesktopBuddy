@@ -8,7 +8,6 @@ namespace DesktopBuddy;
 public static partial class WindowInput
 {
 
-
     [DllImport("user32.dll")]
     private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 

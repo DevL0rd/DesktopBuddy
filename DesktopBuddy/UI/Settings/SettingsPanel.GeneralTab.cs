@@ -24,15 +24,25 @@ public partial class DesktopBuddyMod
         {
             SaveConfigValue(ThrowToDestroy, value);
         });
+        AddCheckbox(ui, state, "Dynamic lights", Config?.GetValue(DynamicLightsEnabled) ?? false, value =>
+        {
+            SaveConfigValue(DynamicLightsEnabled, value);
+        });
 
-        AddSectionHeader(ui, "Window Spawning");
-        AddCheckbox(ui, state, "Spawn New Windows in game", Config?.GetValue(SpawnNewWindowsInGame) ?? true, value =>
+        AddSectionHeader(ui, "Auto-Spawned Windows");
+        AddCheckbox(ui, state, "Auto-open new app windows", Config?.GetValue(SpawnNewWindowsInGame) ?? true, value =>
         {
             SaveConfigValue(SpawnNewWindowsInGame, value);
         });
-        AddCheckbox(ui, state, "Spawn private", Config?.GetValue(SpawnNewWindowsPrivate) ?? true, value =>
+        AddCheckbox(ui, state, "Auto-opened windows start private", Config?.GetValue(SpawnNewWindowsPrivate) ?? true, value =>
         {
             SaveConfigValue(SpawnNewWindowsPrivate, value);
+        });
+
+        AddSectionHeader(ui, "Manually Spawned Windows");
+        AddCheckbox(ui, state, "Windows I open start private", Config?.GetValue(NewWindowsStartPrivate) ?? true, value =>
+        {
+            SaveConfigValue(NewWindowsStartPrivate, value);
         });
 
         AddSectionHeader(ui, "Audio");

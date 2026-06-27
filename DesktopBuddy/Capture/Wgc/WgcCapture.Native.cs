@@ -153,6 +153,15 @@ public sealed partial class WgcCapture
         }
     }
 
+    internal static uint RendererAdapterHintVendorId
+    {
+        get
+        {
+            lock (_adapterCacheLock)
+                return _rendererAdapterHintReady ? _rendererAdapterHintVendorId : 0;
+        }
+    }
+
     internal static void SetRendererAdapterHint(long adapterLuid, uint vendorId, string description)
     {
         if (adapterLuid == 0) return;

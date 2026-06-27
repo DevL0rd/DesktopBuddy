@@ -36,7 +36,7 @@ public sealed unsafe partial class FfmpegEncoder
         framesCtx->sw_format = swFormat;
         framesCtx->width = (int)_width;
         framesCtx->height = (int)_height;
-        // Some AMD drivers reject preallocated D3D11/NV12 pools; lazy allocation is slower to start but much more compatible.
+
         framesCtx->initial_pool_size = 0;
 
         Log.Msg($"[FfmpegEnc:{_streamId}] av_hwframe_ctx_init: calling...");

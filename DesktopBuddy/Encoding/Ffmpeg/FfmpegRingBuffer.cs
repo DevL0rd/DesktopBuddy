@@ -75,7 +75,6 @@ public sealed unsafe partial class FfmpegEncoder
         }
     }
 
-
     private static long GetMaxHttpLiveBacklogBytes()
     {
         long bitrate = Math.Max(1, DesktopBuddyMod.RuntimeBitrateMbps) * 1_000_000L;
@@ -98,7 +97,6 @@ public sealed unsafe partial class FfmpegEncoder
         Interlocked.Exchange(ref _readerLastCatchupLogTicks, nowTicks);
         Log.Msg($"[FfmpegEnc:{_streamId}] Reader live catch-up summary: dropped={droppedBytes}B remaining={remainingBytes}B max={maxBacklogBytes}B events={events}");
     }
-
 
     private void RecordReaderOverrun(long readPos, long liveWritePos, long backlogBytes)
     {

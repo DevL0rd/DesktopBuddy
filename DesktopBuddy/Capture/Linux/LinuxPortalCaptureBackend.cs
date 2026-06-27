@@ -5,16 +5,17 @@ namespace DesktopBuddy;
 internal interface ILinuxPipeWireSelection
 {
     uint PipeWireNodeId { get; }
+    ulong InputSessionId { get; }
 }
 
 internal sealed class LinuxPortalCaptureBackend : IDesktopCaptureBackend, ILinuxPipeWireSelection
 {
-    private readonly LinuxNativeBridge _bridge = new();
     private bool _running;
 
     public int Width { get; private set; }
     public int Height { get; private set; }
     public uint PipeWireNodeId { get; private set; }
+    public ulong InputSessionId { get; private set; }
     public bool IsValid => _running;
     public object D3dContextLock => null;
     public IntPtr D3dDevice => IntPtr.Zero;
@@ -36,10 +37,11 @@ internal sealed class LinuxPortalCaptureBackend : IDesktopCaptureBackend, ILinux
         }
 
         PipeWireNodeId = selection.NodeId;
+        InputSessionId = selection.InputSessionId;
         Width = selection.Width > 0 ? selection.Width : 1280;
         Height = selection.Height > 0 ? selection.Height : 720;
         _running = true;
-        Log.Msg($"[LinuxPortalCapture] Using selected PipeWire node={PipeWireNodeId} size={Width}x{Height}");
+        Log.Msg($"[LinuxPortalCapture] Using selected PipeWire node={PipeWireNodeId} size={Width}x{Height} inputSession={InputSessionId}");
         return true;
     }
 
@@ -54,6 +56,5 @@ internal sealed class LinuxPortalCaptureBackend : IDesktopCaptureBackend, ILinux
     public void Dispose()
     {
         _running = false;
-        _bridge.Dispose();
     }
 }

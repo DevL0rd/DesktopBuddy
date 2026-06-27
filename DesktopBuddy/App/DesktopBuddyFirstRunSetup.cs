@@ -619,7 +619,7 @@ internal static class DesktopBuddyFirstRunSetup
         }
         catch
         {
-            // Process enumeration is best-effort only; setup should never fail because of it.
+
         }
 
         return running.ToArray();

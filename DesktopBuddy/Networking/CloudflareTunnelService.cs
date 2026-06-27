@@ -61,27 +61,187 @@ public partial class DesktopBuddyMod
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(SafeFileHandle hJob, IntPtr hProcess);
 
-    private static string FindCloudflared()
+    private static string CloudflaredFileName =>
+        DesktopBuddyPlatform.IsLinux ? "cloudflared" : "cloudflared.exe";
+
+    private const string LaunchClientName = "steam-runtime-launch-client";
+    private static string _launchClientPath;
+    private static bool _launchClientResolved;
+
+    private static string LaunchClientPath()
     {
-        string path = DesktopBuddyRuntimePaths.FindFile("cloudflared.exe");
+        if (_launchClientResolved)
+            return _launchClientPath;
+        _launchClientResolved = true;
+        _launchClientPath = DesktopBuddyPlatform.IsLinux ? ResolveLaunchClient() : null;
+        if (_launchClientPath != null)
+            Msg($"[Tunnel] In Steam container; cloudflared will run on the host via {_launchClientPath}");
+        return _launchClientPath;
+    }
+
+    private static string ResolveLaunchClient()
+    {
         try
         {
-            if (System.IO.File.Exists(path))
-            {
-                var p = Process.Start(new ProcessStartInfo
-                {
-                    FileName = path, Arguments = "version",
-                    RedirectStandardOutput = true, RedirectStandardError = true,
-                    UseShellExecute = false, CreateNoWindow = true
-                });
-                p?.WaitForExit(3000);
-                if (p?.ExitCode == 0) { Msg($"[Tunnel] Found cloudflared: {path}"); return path; }
-            }
-        }
-        catch (Exception ex) { Msg($"[Tunnel] cloudflared probe failed for {path}: {ex.Message}"); }
 
-        Msg($"[Tunnel] cloudflared missing at {path}");
+            bool inContainer = System.IO.File.Exists("/run/host/container-manager")
+                               || System.IO.Directory.Exists("/run/pressure-vessel");
+            if (!inContainer)
+                return null;
+
+            foreach (var candidate in new[]
+            {
+                "/usr/bin/" + LaunchClientName,
+                "/usr/lib/pressure-vessel/from-host/bin/" + LaunchClientName,
+            })
+            {
+                if (System.IO.File.Exists(candidate))
+                    return candidate;
+            }
+
+            return LaunchClientName;
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Tunnel] Launch-client probe failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    internal static string RunOnHostCapture(string exe, string args, int timeoutMs)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            string launchClient = LaunchClientPath();
+            if (launchClient != null)
+            {
+                psi.FileName = launchClient;
+                psi.Arguments = $"--alongside-steam -- {exe} {args}";
+            }
+            else
+            {
+                psi.FileName = exe;
+                psi.Arguments = args;
+            }
+
+            var p = Process.Start(psi);
+            if (p == null) return null;
+            string output = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(timeoutMs))
+            {
+                try { p.Kill(); } catch { }
+                return null;
+            }
+            return output?.Trim();
+        }
+        catch (Exception ex)
+        {
+            Msg($"[HostCmd] {exe} failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static ProcessStartInfo MakeCloudflaredPsi(string exe, string args)
+    {
+        var psi = new ProcessStartInfo
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        string launchClient = LaunchClientPath();
+        if (launchClient != null)
+        {
+            psi.FileName = launchClient;
+            psi.Arguments = $"--alongside-steam -- \"{exe}\" {args}";
+        }
+        else
+        {
+            psi.FileName = exe;
+            psi.Arguments = args;
+        }
+        return psi;
+    }
+
+    private static void EnsureExecutable(string path)
+    {
+        if (!DesktopBuddyPlatform.IsLinux)
+            return;
+        try
+        {
+
+#pragma warning disable CA1416
+            var mode = System.IO.File.GetUnixFileMode(path);
+            var desired = mode | System.IO.UnixFileMode.UserExecute
+                               | System.IO.UnixFileMode.GroupExecute
+                               | System.IO.UnixFileMode.OtherExecute;
+            if (mode != desired)
+                System.IO.File.SetUnixFileMode(path, desired);
+#pragma warning restore CA1416
+        }
+        catch (Exception ex) { Msg($"[Tunnel] Could not set exec bit on {path}: {ex.Message}"); }
+    }
+
+    private static string FindCloudflared()
+    {
+
+        string bundled = DesktopBuddyRuntimePaths.FindFile(CloudflaredFileName);
+        if (ProbeCloudflared(bundled, isPath: true))
+            return bundled;
+
+        if (DesktopBuddyPlatform.IsLinux && ProbeCloudflared("cloudflared", isPath: false))
+            return "cloudflared";
+
+        Msg($"[Tunnel] cloudflared not usable (bundled='{bundled}')");
         return null;
+    }
+
+    private static bool ProbeCloudflared(string fileName, bool isPath)
+    {
+        try
+        {
+            if (isPath && !System.IO.File.Exists(fileName))
+            {
+                Msg($"[Tunnel] cloudflared not present at {fileName}");
+                return false;
+            }
+            if (isPath)
+                EnsureExecutable(fileName);
+
+            var p = Process.Start(MakeCloudflaredPsi(fileName, "version"));
+            if (p == null)
+            {
+                Msg($"[Tunnel] cloudflared probe: Process.Start returned null for {fileName}");
+                return false;
+            }
+
+            string version = p.StandardOutput.ReadToEnd();
+            string err = p.StandardError.ReadToEnd();
+            p.WaitForExit(5000);
+            if (p.HasExited && p.ExitCode == 0)
+            {
+                Msg($"[Tunnel] Found cloudflared: {fileName} ({version.Trim()})");
+                return true;
+            }
+
+            string detail = p.HasExited ? $"exit={p.ExitCode}" : "did not exit in 5s";
+            Msg($"[Tunnel] cloudflared probe {detail} for {fileName}{(string.IsNullOrWhiteSpace(err) ? "" : $" err={err.Trim()}")}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Msg($"[Tunnel] cloudflared probe failed for {fileName}: {ex.Message}");
+            return false;
+        }
     }
 
     private static void KillTunnel()
@@ -212,28 +372,24 @@ public partial class DesktopBuddyMod
                 }
             }
             Msg($"[Tunnel] Starting cloudflared tunnel: {_cfPath}");
-            var psi = new ProcessStartInfo
-            {
-                FileName = _cfPath,
-                Arguments = $"tunnel --config NUL" +
-                    $" --url http://localhost:{STREAM_PORT}" +
-                    $" --proxy-keepalive-timeout 5m" +
-                    $" --proxy-keepalive-connections 100" +
-                    $" --proxy-tcp-keepalive 15s" +
-                    $" --proxy-connect-timeout 30s" +
-                    $" --compression-quality 0" +
-                    $" --grace-period 30s" +
-                    $" --no-autoupdate" +
-                    $" --edge-ip-version 4",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            _tunnelProcess = Process.Start(psi);
+
+            string nullConfig = DesktopBuddyPlatform.IsLinux ? "/dev/null" : "NUL";
+            string tunnelArgs = $"tunnel --config {nullConfig}" +
+                $" --url http://localhost:{STREAM_PORT}" +
+                $" --proxy-keepalive-timeout 5m" +
+                $" --proxy-keepalive-connections 100" +
+                $" --proxy-tcp-keepalive 15s" +
+                $" --proxy-connect-timeout 30s" +
+                $" --compression-quality 0" +
+                $" --grace-period 30s" +
+                $" --no-autoupdate" +
+                $" --edge-ip-version 4";
+            _tunnelProcess = Process.Start(MakeCloudflaredPsi(_cfPath, tunnelArgs));
             if (_tunnelProcess == null) { Msg("[Tunnel] Failed to start cloudflared"); return; }
             var proc = _tunnelProcess;
-            AttachTunnelToKillJob(proc);
+
+            if (!DesktopBuddyPlatform.IsLinux)
+                AttachTunnelToKillJob(proc);
             proc.EnableRaisingEvents = true;
             proc.Exited += (s, e) =>
             {

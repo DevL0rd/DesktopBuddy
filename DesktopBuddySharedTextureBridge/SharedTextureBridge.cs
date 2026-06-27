@@ -160,8 +160,7 @@ namespace DesktopBuddySharedTextureBridge
 
         private void RegisterMessages()
         {
-            // Keep this order identical to the host side; InterprocessLib decodes
-            // polymorphic wrapper payloads through a shared type index table.
+
             _messenger.ReceiveObject<SharedTextureStartMessage>(
                 SharedTextureBridgeProtocol.StartMessageId,
                 msg =>

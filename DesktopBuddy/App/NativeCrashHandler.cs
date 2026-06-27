@@ -7,7 +7,6 @@ namespace DesktopBuddy;
 public partial class DesktopBuddyMod
 {
 
-
     [DllImport("kernel32.dll")]
     private static extern IntPtr SetUnhandledExceptionFilter(IntPtr lpTopLevelExceptionFilter);
 

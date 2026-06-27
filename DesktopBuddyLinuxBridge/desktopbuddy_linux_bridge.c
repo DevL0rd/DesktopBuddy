@@ -98,34 +98,36 @@ typedef struct DbLinuxFrame {
   uint32_t fourcc;
   uint32_t offset;
   int32_t stride;
-  uint64_t modifier;
-  uint32_t has_modifier;
-  uint32_t plane_count;
-  uint32_t mouse_valid;
-  float mouse_x;
-  float mouse_y;
 } DbLinuxFrame;
 
 typedef struct DbLinuxBridgeCall {
   uint32_t op;
   int32_t status;
-  uint64_t modifiers;
-  uint32_t modifier_count;
-  uint32_t reserved;
+  uint64_t arg0;
   DbLinuxFrame frame;
   uint64_t buffer;
 } DbLinuxBridgeCall;
 
-typedef int32_t (*db_linux_capture_start_fn)(const uint64_t *modifiers, uintptr_t modifier_count);
-typedef int32_t (*db_linux_capture_start_node_fn)(uint32_t node_id, const uint64_t *modifiers, uintptr_t modifier_count);
-typedef int32_t (*db_linux_capture_poll_fn)(DbLinuxFrame *frame);
-typedef void (*db_linux_capture_stop_fn)(void);
+enum {
+  OP_POLL = 2,
+  OP_STOP = 3,
+  OP_START_NODE = 6,
+  OP_COPY_FRAME = 7,
+  OP_CLOSE_FRAME = 8,
+};
+
+typedef int32_t (*db_linux_capture_start_node_fn)(uint32_t node_id, uint64_t *capture_id);
+typedef int32_t (*db_linux_capture_poll_fn)(uint64_t capture_id, DbLinuxFrame *frame);
+typedef void (*db_linux_capture_stop_fn)(uint64_t capture_id);
+typedef int32_t (*db_linux_frame_copy_and_close_fn)(DbLinuxFrame *frame, uint8_t *dest, size_t dest_size);
+typedef void (*db_linux_frame_close_fn)(DbLinuxFrame *frame);
 
 static void *g_native;
-static db_linux_capture_start_fn g_start;
 static db_linux_capture_start_node_fn g_start_node;
 static db_linux_capture_poll_fn g_poll;
 static db_linux_capture_stop_fn g_stop;
+static db_linux_frame_copy_and_close_fn g_copy_close;
+static db_linux_frame_close_fn g_close;
 
 static int32_t load_native(void) {
   if (g_native)
@@ -151,12 +153,17 @@ static int32_t load_native(void) {
   if (!g_native)
     return -103;
 
-  g_start = (db_linux_capture_start_fn)dlsym(g_native, "db_linux_capture_start");
   g_start_node = (db_linux_capture_start_node_fn)dlsym(g_native, "db_linux_capture_start_node");
   g_poll = (db_linux_capture_poll_fn)dlsym(g_native, "db_linux_capture_poll");
   g_stop = (db_linux_capture_stop_fn)dlsym(g_native, "db_linux_capture_stop");
-  if (!g_start || !g_start_node || !g_poll || !g_stop)
+  g_copy_close = (db_linux_frame_copy_and_close_fn)dlsym(g_native, "db_linux_frame_copy_and_close");
+  g_close = (db_linux_frame_close_fn)dlsym(g_native, "db_linux_frame_close");
+
+  if (!g_start_node || !g_poll || !g_stop) {
+    dlclose(g_native);
+    g_native = NULL;
     return -104;
+  }
 
   return 0;
 }
@@ -172,29 +179,36 @@ int32_t DesktopBuddyLinuxBridgeCall(DbLinuxBridgeCall *call) {
     return status;
   }
 
-  if (call->op == 1) {
-    const uint64_t *modifiers = (const uint64_t *)(uintptr_t)call->modifiers;
-    call->status = g_start(modifiers, call->modifier_count);
-    return call->status;
-  }
-
-  if (call->op == 2) {
+  if (call->op == OP_POLL) {
     memset(&call->frame, 0, sizeof(call->frame));
     call->frame.fd = -1;
-    call->status = g_poll(&call->frame);
+    call->status = g_poll(call->arg0, &call->frame);
     return call->status;
   }
 
-  if (call->op == 3) {
-    g_stop();
+  if (call->op == OP_STOP) {
+    g_stop(call->arg0);
     call->status = 0;
     return 0;
   }
 
-  if (call->op == 6) {
-    const uint64_t *modifiers = (const uint64_t *)(uintptr_t)call->modifiers;
-    call->status = g_start_node((uint32_t)call->buffer, modifiers, call->modifier_count);
+  if (call->op == OP_START_NODE) {
+    uint64_t capture_id = 0;
+    call->status = g_start_node((uint32_t)call->arg0, &capture_id);
+    if (call->status == 0)
+      call->arg0 = capture_id;
     return call->status;
+  }
+
+  if (call->op == OP_COPY_FRAME) {
+    call->status = g_copy_close ? g_copy_close(&call->frame, (uint8_t *)(uintptr_t)call->buffer, call->arg0) : -1;
+    return call->status;
+  }
+
+  if (call->op == OP_CLOSE_FRAME) {
+    if (g_close) g_close(&call->frame);
+    call->status = 0;
+    return 0;
   }
 
   call->status = -2;

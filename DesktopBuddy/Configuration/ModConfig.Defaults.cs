@@ -20,6 +20,8 @@ public partial class DesktopBuddyMod
             Config.Set(ThrowToDestroy, Config.GetValue(ThrowToDestroy));
             Config.Set(SpawnNewWindowsInGame, Config.GetValue(SpawnNewWindowsInGame));
             Config.Set(SpawnNewWindowsPrivate, Config.GetValue(SpawnNewWindowsPrivate));
+            Config.Set(NewWindowsStartPrivate, Config.GetValue(NewWindowsStartPrivate));
+            Config.Set(DynamicLightsEnabled, Config.GetValue(DynamicLightsEnabled));
             Config.Set(UseMediaMtx, Config.GetValue(UseMediaMtx));
             Config.Set(MediaMtxHost, Config.GetValue(MediaMtxHost));
             Config.Set(MediaMtxPort, Config.GetValue(MediaMtxPort));
@@ -30,6 +32,7 @@ public partial class DesktopBuddyMod
             Config.Set(PortForwardHost, Config.GetValue(PortForwardHost)?.Trim() ?? "");
             Config.Set(PortForwardUseNat, Config.GetValue(PortForwardUseNat));
             Config.Set(PanelCurvePreferences, Config.GetValue(PanelCurvePreferences) ?? "");
+            Config.Set(LinuxSharedSources, Config.GetValue(LinuxSharedSources) ?? "");
             Config.Set(ViewerCullingMode, NormalizeViewerCullingMode(Config.GetValue(ViewerCullingMode)));
             Config.Set(ViewerCullingPreview, Config.GetValue(ViewerCullingPreview));
             float viewerFrustumAngle = Config.GetValue(ViewerFrustumWidth);
@@ -88,6 +91,8 @@ public partial class DesktopBuddyMod
         Config.Set(ThrowToDestroy, ThrowToDestroy.DefaultValue);
         Config.Set(SpawnNewWindowsInGame, SpawnNewWindowsInGame.DefaultValue);
         Config.Set(SpawnNewWindowsPrivate, SpawnNewWindowsPrivate.DefaultValue);
+        Config.Set(NewWindowsStartPrivate, NewWindowsStartPrivate.DefaultValue);
+        Config.Set(DynamicLightsEnabled, DynamicLightsEnabled.DefaultValue);
         Config.Set(Bitrate, Bitrate.DefaultValue);
         Config.Set(StreamFps, StreamFps.DefaultValue);
         Config.Set(MaxStreamResolution, MaxStreamResolution.DefaultValue);
@@ -101,6 +106,7 @@ public partial class DesktopBuddyMod
         Config.Set(PortForwardHost, PortForwardHost.DefaultValue);
         Config.Set(PortForwardUseNat, PortForwardUseNat.DefaultValue);
         Config.Set(PanelCurvePreferences, PanelCurvePreferences.DefaultValue);
+        Config.Set(LinuxSharedSources, LinuxSharedSources.DefaultValue);
         Config.Set(ViewerCullingMode, ViewerCullingMode.DefaultValue);
         Config.Set(ViewerCullingPreview, ViewerCullingPreview.DefaultValue);
         Config.Set(ViewerFrustumWidth, ViewerFrustumWidth.DefaultValue);

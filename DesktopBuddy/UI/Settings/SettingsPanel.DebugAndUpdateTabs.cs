@@ -21,6 +21,8 @@ public partial class DesktopBuddyMod
         {
             try { DesktopBuddy.Log.ExportDiagnosticsBundle(); }
             catch (Exception ex) { Msg($"[Log] Diagnostics export failed: {ex.Message}"); }
+            try { SpawnDiagnosticsLogInWorld(session, state); }
+            catch (Exception ex) { Msg($"[Log] Diagnostics in-world spawn failed: {ex.Message}"); }
             RebuildSettingsPanel(state, session);
         }, buttonLabel: "Create");
 
@@ -50,6 +52,36 @@ public partial class DesktopBuddyMod
                 state.DebugLogScroll.MoveToBottom();
         });
         ScheduleDebugLogRefresh(state, session);
+    }
+
+    private static void SpawnDiagnosticsLogInWorld(DesktopSession session, SettingsPanelState state)
+    {
+        var root = session?.Root ?? state?.OwnerRoot;
+        var world = root?.World;
+        if (root == null || root.IsDestroyed || world == null)
+        {
+            Msg("[Log] Diagnostics in-world spawn skipped: no panel root");
+            return;
+        }
+
+        string path = DesktopBuddy.Log.ExportCombinedLog();
+        if (string.IsNullOrWhiteSpace(path) || !System.IO.File.Exists(path))
+        {
+            Msg("[Log] Diagnostics in-world spawn skipped: combined log not written");
+            return;
+        }
+
+        float3 position = root.GlobalPosition + (root.GlobalRotation * float3.Forward) * 0.35f;
+        floatQ rotation = root.GlobalRotation;
+        world.RunSynchronously(() =>
+        {
+            try
+            {
+                FrooxEngine.UniversalImporter.Import(path, world, position, rotation, false, false);
+                Msg($"[Log] Importing diagnostics log into world: {path}");
+            }
+            catch (Exception ex) { Msg($"[Log] In-world import failed: {ex.Message}"); }
+        });
     }
 
     private static void BuildUpdateInfoTab(UIBuilder ui, SettingsPanelState state, DesktopSession session)

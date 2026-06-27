@@ -5,7 +5,7 @@ namespace DesktopBuddy;
 
 public partial class DesktopBuddyMod
 {
-    private static SharedStream AcquireSharedStream(IntPtr hwnd, bool useMediaMtx)
+    private static SharedStream AcquireSharedStream(IntPtr hwnd, bool useMediaMtx, uint linuxPipeWireNodeId = 0, int width = 0, int height = 0)
     {
         lock (_sharedStreams)
         {
@@ -21,7 +21,24 @@ public partial class DesktopBuddyMod
             ILiveStreamSource source;
             Uri url;
 
-            if (useMediaMtx)
+            if (DesktopBuddyPlatform.IsLinux)
+            {
+                string rtspUrl = useMediaMtx ? GetMediaMtxRtspUrl(streamId) : null;
+                var linuxSource = new LinuxNativeStreamSource(streamId, rtspUrl);
+                source = linuxSource;
+                url = rtspUrl != null ? new Uri(rtspUrl) : GetBuiltInStreamUrl(streamId);
+
+                if (!useMediaMtx)
+                    StreamServer?.RegisterSource(streamId, linuxSource);
+
+                if (!linuxSource.Start(linuxPipeWireNodeId))
+                    Msg($"[RemoteStream] Linux native stream did not start stream={streamId} node={linuxPipeWireNodeId}");
+                else if (useMediaMtx)
+                    Msg($"[RemoteStream] Using Linux native MediaMTX RTSP: {rtspUrl}");
+                else
+                    Msg($"[RemoteStream] Using Linux native built-in HTTP stream: {url}");
+            }
+            else if (useMediaMtx)
             {
                 var rtspUrl = GetMediaMtxRtspUrl(streamId);
                 encoder = new FfmpegEncoder(streamId, rtspUrl);
@@ -37,7 +54,7 @@ public partial class DesktopBuddyMod
                 Msg($"[RemoteStream] Using built-in HTTP stream: {url}");
             }
 
-            var audio = DesktopBuddyPlatform.IsLinuxProton ? null : new AudioCapture();
+            var audio = DesktopBuddyPlatform.IsLinux ? null : new AudioCapture();
             var startAudio = audio != null ? CreateAudioStartAction(audio, hwnd) : null;
 
             shared = new SharedStream
@@ -211,10 +228,12 @@ public partial class DesktopBuddyMod
         int streamId,
         DesktopSession session,
         out AudioCapture audioToDispose,
-        out FfmpegEncoder encoderToDispose)
+        out FfmpegEncoder encoderToDispose,
+        out ILiveStreamSource sourceToDispose)
     {
         audioToDispose = null;
         encoderToDispose = null;
+        sourceToDispose = null;
 
         lock (_sharedStreams)
         {
@@ -227,6 +246,7 @@ public partial class DesktopBuddyMod
                     _sharedStreams.Remove(hwnd);
                     audioToDispose = shared.Audio;
                     encoderToDispose = shared.Encoder;
+                    sourceToDispose = shared.Source;
                     return true;
                 }
 
@@ -236,6 +256,7 @@ public partial class DesktopBuddyMod
             }
 
             encoderToDispose = session.Encoder;
+            sourceToDispose = session.StreamSource;
             return true;
         }
     }

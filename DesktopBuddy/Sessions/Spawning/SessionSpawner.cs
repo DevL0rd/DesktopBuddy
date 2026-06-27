@@ -80,7 +80,7 @@ public partial class DesktopBuddyMod
     {
         Msg($"[StartStreaming] Window: {title} (hwnd={hwnd} monitorIndex={monitorIndex})");
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
             WindowInput.RestoreIfMinimized(hwnd);
 
         var streamer = new DesktopStreamer(hwnd, monitorHandle);
@@ -202,7 +202,7 @@ public partial class DesktopBuddyMod
         int sharedTextureSlot = -1;
         int pendingBridgeDisplayIndex = -1;
         bool useTextureBridge = TextureBridgeChannel != null && TextureBridgeChannel.IsOpen &&
-            (DesktopBuddyPlatform.IsLinuxProton || hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
+            (DesktopBuddyPlatform.IsLinux || hwnd != IntPtr.Zero || streamer.MonitorHandle != IntPtr.Zero || monitorIndex >= 0);
         if (useTextureBridge)
         {
             Msg("[StartStreaming] Shared texture bridge registration deferred until first current-size frame");
@@ -241,7 +241,7 @@ public partial class DesktopBuddyMod
         ApplyPanelCurvature(currentPanelCurvature);
 
         uint processId = 0;
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
             WindowEnumerator.GetWindowThreadProcessId(hwnd, out processId);
         Msg($"[StartStreaming] Process ID: {processId}");
 
@@ -250,6 +250,7 @@ public partial class DesktopBuddyMod
         session = new DesktopSession
         {
             Streamer = streamer,
+            LinuxInputSessionId = streamer.LinuxInputSessionId,
             Texture = procTex,
             Canvas = ui.Canvas,
             Root = root,
@@ -270,14 +271,12 @@ public partial class DesktopBuddyMod
         };
         ActiveSessions.Add(session);
         root.Destroyed += _ => CleanupAndRemoveSession(session, "root destroyed");
-        CreateAdaptiveScreenLight(root, session, hwnd, streamer.MonitorHandle);
+        if (Config?.GetValue(DynamicLightsEnabled) ?? false)
+            CreateAdaptiveScreenLight(root, session, hwnd, streamer.MonitorHandle);
         DesktopCanvasIds.Add(ui.Canvas.ReferenceID);
         Msg($"[StartStreaming] Registered canvas {ui.Canvas.ReferenceID} for locomotion suppression");
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
-            DesktopInputWiring.Wire(root, hwnd, streamer, session, frontPlaneRef, () => grabbable);
-        else
-            Msg("[StartStreaming] Linux capture: Win32 input wiring disabled");
+        DesktopInputWiring.Wire(root, hwnd, streamer, session, frontPlaneRef, () => grabbable);
 
         float barH = 60f;
         float barMarginBottom = 12f * canvasScale;
@@ -1154,18 +1153,24 @@ public partial class DesktopBuddyMod
                     ClearRemoteStreamUrl(session, "private mode");
                     Msg("[Private] Stream disconnected");
                 }
-                else if (savedStreamUrl != null)
+                else
                 {
-                    SetRemoteStreamUrl(session, new Uri(savedStreamUrl), "private mode restore");
-                    Msg($"[Private] Stream restored: {savedStreamUrl}");
-                }
-                else if (session.StreamId > 0)
-                {
-                    var currentUrl = GetSharedStreamUrl(session.Hwnd, session.StreamId);
+
+                    Uri currentUrl = null;
+                    if (savedStreamUrl != null)
+                        currentUrl = new Uri(savedStreamUrl);
+                    else if (session.StreamId > 0)
+                        currentUrl = GetSharedStreamUrl(session.Hwnd, session.StreamId)
+                                     ?? GetBuiltInStreamUrl(session.StreamId);
+
                     if (currentUrl != null)
                     {
                         SetRemoteStreamUrl(session, currentUrl, "private mode restore");
                         Msg($"[Private] Stream restored: {currentUrl}");
+                    }
+                    else
+                    {
+                        Msg($"[Private] Going public but no stream URL available yet (streamId={session.StreamId})");
                     }
                 }
             }
@@ -1234,7 +1239,8 @@ public partial class DesktopBuddyMod
                 VolumeSlider = volSlider,
                 StreamOutputVolume = streamOutputVolume,
                 IsPrivate = () => isPrivate,
-                CurrentPanelCurvature = () => currentPanelCurvature
+                CurrentPanelCurvature = () => currentPanelCurvature,
+                LinuxPipeWireNodeId = streamer.LinuxPipeWireNodeId
             });
             if (remoteStream != null)
             {
@@ -1302,7 +1308,7 @@ public partial class DesktopBuddyMod
         ScheduleUpdate(root.World);
 
         root.Tag = "Desktop Buddy";
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -1315,7 +1321,7 @@ public partial class DesktopBuddyMod
         }
 
         bool useSpatialAudio = Config?.GetValue(SpatialAudioEnabled) ?? false;
-        if (!DesktopBuddyPlatform.IsLinuxProton && useSpatialAudio && !isDesktopCapture && processId != 0)
+        if (!DesktopBuddyPlatform.IsLinux && useSpatialAudio && !isDesktopCapture && processId != 0)
         {
             System.Threading.Tasks.Task.Run(() =>
             {

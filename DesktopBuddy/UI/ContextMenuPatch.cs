@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using HarmonyLib;
 using FrooxEngine;
@@ -16,6 +17,7 @@ public static class ContextMenuPatch
 {
     private const int PAGE_SIZE = 8;
     private const string DesktopIconFileName = "icon_transparent.png";
+    private const string PlusIconFileName = "plus.png";
 
     private static readonly ConcurrentDictionary<IntPtr, Uri> _iconCache = new();
     private static readonly ConcurrentDictionary<IntPtr, byte> _iconCacheRequests = new();
@@ -185,7 +187,7 @@ public static class ContextMenuPatch
     }
     private static void ShowPickerPage(ContextMenu menu, int page)
     {
-        if (DesktopBuddyPlatform.IsLinuxProton)
+        if (DesktopBuddyPlatform.IsLinux)
         {
             ShowLinuxPickerPage(menu);
             return;
@@ -206,7 +208,7 @@ public static class ContextMenuPatch
             int idx = i;
             entries.Add(($"Monitor {idx + 1} ({mon.Width}x{mon.Height})",
                 new colorX(0.1f, 0.25f, 0.4f, 1f),
-                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, $"Monitor {idx + 1}", mon.Handle, monitorIndex: idx); },
+                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, $"Monitor {idx + 1}", mon.Handle, monitorIndex: idx, startPrivate: DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.NewWindowsStartPrivate) ?? true); },
                 IntPtr.Zero));
         }
 
@@ -220,7 +222,7 @@ public static class ContextMenuPatch
             string display = title.Length > 30 ? title[..27] + "..." : title;
             entries.Add((display,
                 new colorX(0.15f, 0.15f, 0.25f, 1f),
-                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, handle, title); },
+                () => { menu.Close(); DesktopBuddyMod.SpawnStreaming(world, handle, title, startPrivate: DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.NewWindowsStartPrivate) ?? true); },
                 handle));
         }
 
@@ -267,30 +269,273 @@ public static class ContextMenuPatch
         }
     }
 
-    private static void ShowLinuxPickerPage(ContextMenu menu)
+    private sealed class LinuxSharedSource
     {
-        DesktopBuddyMod.Msg("[ContextMenu] Showing Linux Proton picker actions");
-        ClearMenu(menu);
-
-        LocaleString pickerLabel = "Open Desktop Picker";
-        colorX? pickerColor = new colorX(0.1f, 0.35f, 0.35f, 1f);
-        var picker = menu.AddItem(in pickerLabel, (Uri)null!, in pickerColor);
-        picker.Button.LocalPressed += (IButton b, ButtonEventData d) =>
-        {
-            menu.Close();
-            OpenLinuxPortalPickerThenSpawn(menu.World);
-        };
+        public string Label;
+        public string RestoreToken;
+        public bool IsMonitor;
+        public string IconPath;
     }
 
-    private static void OpenLinuxPortalPickerThenSpawn(World world)
+    private static readonly object _linuxSourcesLock = new();
+    private static readonly List<LinuxSharedSource> _linuxSources = new();
+    private static bool _linuxSourcesLoaded;
+    private static readonly ConcurrentDictionary<string, Uri> _fileIconUris = new();
+
+    private static string ModDataDir()
     {
-        DesktopBuddyMod.Msg("[ContextMenu] Opening Linux portal picker before spawning DesktopBuddy");
+        var dir = Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? string.Empty;
+        return dir;
+    }
+
+    private static string IconCacheDir()
+    {
+        var dir = Path.Combine(ModDataDir(), "app-icons");
+        try { Directory.CreateDirectory(dir); } catch { }
+        return dir;
+    }
+
+    private static string B64(string s) => Convert.ToBase64String(Encoding.UTF8.GetBytes(s ?? string.Empty));
+    private static string UnB64(string s)
+    {
+        try { return Encoding.UTF8.GetString(Convert.FromBase64String(s)); }
+        catch { return string.Empty; }
+    }
+
+    private static void LoadLinuxSourcesOnce()
+    {
+        if (_linuxSourcesLoaded) return;
+        _linuxSourcesLoaded = true;
+        try
+        {
+            string serialized = DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.LinuxSharedSources);
+            if (string.IsNullOrWhiteSpace(serialized)) return;
+            lock (_linuxSourcesLock)
+            {
+                _linuxSources.Clear();
+                foreach (var line in serialized.Split('\n'))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var parts = line.Split('|');
+                    if (parts.Length < 3) continue;
+                    string token = UnB64(parts[2]);
+                    if (string.IsNullOrEmpty(token)) continue;
+                    _linuxSources.Add(new LinuxSharedSource
+                    {
+                        IsMonitor = parts[0] == "1",
+                        Label = UnB64(parts[1]),
+                        RestoreToken = token,
+                        IconPath = parts.Length > 3 ? UnB64(parts[3]) : null,
+                    });
+                }
+            }
+            DesktopBuddyMod.Msg($"[ContextMenu] Loaded {_linuxSources.Count} saved Linux source(s)");
+        }
+        catch (Exception ex) { DesktopBuddyMod.Msg($"[ContextMenu] Load sources error: {ex.Message}"); }
+    }
+
+    private static void SaveLinuxSources()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            lock (_linuxSourcesLock)
+            {
+                foreach (var s in _linuxSources)
+                {
+                    if (sb.Length > 0) sb.Append('\n');
+                    sb.Append(s.IsMonitor ? '1' : '0').Append('|')
+                      .Append(B64(s.Label)).Append('|')
+                      .Append(B64(s.RestoreToken)).Append('|')
+                      .Append(B64(s.IconPath ?? string.Empty));
+                }
+            }
+            DesktopBuddyMod.Config?.Set(DesktopBuddyMod.LinuxSharedSources, sb.ToString());
+        }
+        catch (Exception ex) { DesktopBuddyMod.Msg($"[ContextMenu] Save sources error: {ex.Message}"); }
+    }
+
+    private const string IconResolveScript = @"#!/usr/bin/env bash
+title=""$1""; cache=""$2""
+mkdir -p ""$cache""
+command -v kdotool >/dev/null 2>&1 || exit 0
+esc=$(printf '%s' ""$title"" | sed -e 's/[][(){}.*+?^$|\\]/\\&/g')
+wid=$(kdotool search --name ""$esc"" 2>/dev/null | head -1)
+[ -n ""$wid"" ] || exit 0
+cls=$(kdotool getwindowclassname ""$wid"" 2>/dev/null)
+[ -n ""$cls"" ] || exit 0
+safe=$(printf '%s' ""$cls"" | tr -c 'A-Za-z0-9._-' '_')
+out=""$cache/$safe.png""
+[ -f ""$out"" ] && { printf '%s' ""$out""; exit 0; }
+lc=$(printf '%s' ""$cls"" | tr 'A-Z' 'a-z')
+d=""""
+for dir in ""$HOME/.local/share/applications"" /usr/share/applications /usr/local/share/applications /var/lib/flatpak/exports/share/applications; do
+  [ -d ""$dir"" ] || continue
+  for cand in ""$dir/$cls.desktop"" ""$dir/$lc.desktop""; do [ -f ""$cand"" ] && { d=""$cand""; break; }; done
+  [ -n ""$d"" ] && break
+  m=$(grep -rilE ""^StartupWMClass=$cls\$"" ""$dir"" 2>/dev/null | head -1); [ -n ""$m"" ] && { d=""$m""; break; }
+done
+icon=""$cls""
+if [ -n ""$d"" ]; then i=$(grep -m1 '^Icon=' ""$d"" | cut -d= -f2-); [ -n ""$i"" ] && icon=""$i""; fi
+src=""""
+if [ -f ""$icon"" ]; then src=""$icon""; else
+  for sz in 256x256 512x512 192x192 128x128 96x96 64x64 48x48; do
+    f=$(find ""$HOME/.local/share/icons"" /usr/share/icons -type f -path ""*/$sz/*"" -name ""$icon.png"" 2>/dev/null | head -1)
+    [ -n ""$f"" ] && { src=""$f""; break; }
+  done
+  [ -z ""$src"" ] && src=$(find ""$HOME/.local/share/icons"" /usr/share/icons /usr/share/pixmaps -type f -name ""$icon.png"" 2>/dev/null | head -1)
+fi
+[ -n ""$src"" ] || exit 0
+cp -f ""$src"" ""$out"" 2>/dev/null && printf '%s' ""$out""
+";
+
+    private static string EnsureIconScript(string cacheDir)
+    {
+        try
+        {
+            string path = Path.Combine(cacheDir, "resolve-icon.sh");
+            File.WriteAllText(path, IconResolveScript);
+#pragma warning disable CA1416
+            var mode = File.GetUnixFileMode(path);
+            File.SetUnixFileMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+#pragma warning restore CA1416
+            return path;
+        }
+        catch (Exception ex) { DesktopBuddyMod.Msg($"[ContextMenu] Icon script write error: {ex.Message}"); return null; }
+    }
+
+    private static void ResolveWindowIconAsync(LinuxSharedSource src, string title)
+    {
+        if (src == null || string.IsNullOrWhiteSpace(title) || src.IsMonitor) return;
+        if (!string.IsNullOrEmpty(src.IconPath) && File.Exists(src.IconPath)) return;
+        Task.Run(() =>
+        {
+            try
+            {
+                string cacheDir = IconCacheDir();
+                string script = EnsureIconScript(cacheDir);
+                if (script == null) return;
+                string safeTitle = title.Replace("\"", string.Empty);
+                string outPath = DesktopBuddyMod.RunOnHostCapture("bash", $"\"{script}\" \"{safeTitle}\" \"{cacheDir}\"", 8000);
+                if (!string.IsNullOrWhiteSpace(outPath) && File.Exists(outPath))
+                {
+                    src.IconPath = outPath;
+                    SaveLinuxSources();
+                    DesktopBuddyMod.Msg($"[ContextMenu] Resolved app icon for '{title}': {outPath}");
+                }
+                else
+                {
+                    DesktopBuddyMod.Msg($"[ContextMenu] No app icon resolved for '{title}'");
+                }
+            }
+            catch (Exception ex) { DesktopBuddyMod.Msg($"[ContextMenu] Icon resolve error: {ex.Message}"); }
+        });
+    }
+
+    private static StaticTexture2D GetFileIconTexture(Engine engine, Slot slot, string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+            var tex = TextureProviderSettings.ClampWrap(slot.AttachComponent<StaticTexture2D>());
+            if (_fileIconUris.TryGetValue(path, out var cached))
+            {
+                tex.URL.Value = cached;
+                return tex;
+            }
+
+            var capturedTex = tex;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var bitmap = Bitmap2D.Load(path, false);
+                    var uri = await engine.LocalDB.SaveAssetAsync(bitmap).ConfigureAwait(false);
+                    if (uri != null)
+                    {
+                        _fileIconUris[path] = uri;
+                        capturedTex.World.RunInUpdates(0, () =>
+                        {
+                            if (!capturedTex.IsDestroyed)
+                                capturedTex.URL.Value = uri;
+                        });
+                    }
+                }
+                catch (Exception ex) { DesktopBuddyMod.Msg($"[Icon] App icon load error: {ex.Message}"); }
+            });
+            return tex;
+        }
+        catch (Exception ex) { DesktopBuddyMod.Msg($"[Icon] App icon error: {ex.Message}"); return null; }
+    }
+
+    private static void ShowLinuxPickerPage(ContextMenu menu)
+    {
+        DesktopBuddyMod.Msg("[ContextMenu] Showing Linux source list");
+        LoadLinuxSourcesOnce();
+        ClearMenu(menu);
+
+        var engine = menu.World.Engine;
+
+        LocaleString addLabel = "Share a desktop or window";
+        colorX? addColor = new colorX(0.1f, 0.35f, 0.35f, 1f);
+        string plusPath = Path.Combine(Path.GetDirectoryName(typeof(DesktopBuddyMod).Assembly.Location) ?? string.Empty, PlusIconFileName);
+        StaticTexture2D addIcon = GetFileIconTexture(engine, menu.Slot, plusPath);
+        var add = addIcon != null
+            ? menu.AddItem(in addLabel, (IAssetProvider<ITexture2D>)addIcon, in addColor)
+            : menu.AddItem(in addLabel, (Uri)null!, in addColor);
+        add.Button.LocalPressed += (IButton b, ButtonEventData d) =>
+        {
+            menu.Close();
+            OpenLinuxPortalPickerThenSpawn(menu.World, null);
+        };
+
+        List<LinuxSharedSource> sources;
+        lock (_linuxSourcesLock)
+            sources = new List<LinuxSharedSource>(_linuxSources);
+
+        foreach (var source in sources)
+        {
+            LocaleString lbl = source.Label;
+            colorX? c = source.IsMonitor
+                ? new colorX(0.1f, 0.25f, 0.4f, 1f)
+                : new colorX(0.15f, 0.15f, 0.25f, 1f);
+
+            StaticTexture2D iconTex;
+            if (source.IsMonitor)
+                iconTex = GetDesktopIconTexture(engine, menu.Slot);
+            else if (!string.IsNullOrEmpty(source.IconPath) && File.Exists(source.IconPath))
+                iconTex = GetFileIconTexture(engine, menu.Slot, source.IconPath);
+            else
+            {
+                ResolveWindowIconAsync(source, source.Label);
+                iconTex = GetDesktopIconTexture(engine, menu.Slot);
+            }
+
+            ContextMenuItem item = iconTex != null
+                ? menu.AddItem(in lbl, (IAssetProvider<ITexture2D>)iconTex, in c)
+                : menu.AddItem(in lbl, (Uri)null!, in c);
+
+            var captured = source;
+            item.Button.LocalPressed += (IButton b, ButtonEventData d) =>
+            {
+                menu.Close();
+                OpenLinuxPortalPickerThenSpawn(menu.World, captured);
+            };
+        }
+    }
+
+    private static void OpenLinuxPortalPickerThenSpawn(World world, LinuxSharedSource reshare)
+    {
+        string tokenIn = reshare?.RestoreToken;
+        DesktopBuddyMod.Msg(tokenIn == null
+            ? "[ContextMenu] Opening Linux portal picker"
+            : "[ContextMenu] Re-sharing saved Linux source (no dialog)");
         Task.Run(() =>
         {
             try
             {
                 using var bridge = new LinuxNativeBridge();
-                int status = bridge.SelectStream(out var selection);
+                int status = bridge.SelectStream(tokenIn, out var selection, out var newToken, out var sourceName, out var isMonitor);
                 if (status != 0 || selection.Status != 0 || selection.NodeId == 0)
                 {
                     DesktopBuddyMod.Msg($"[ContextMenu] Linux portal selection failed status={status} selectionStatus={selection.Status} node={selection.NodeId}");
@@ -299,9 +544,14 @@ public static class ContextMenuPatch
 
                 int width = selection.Width > 0 ? checked((int)selection.Width) : 1280;
                 int height = selection.Height > 0 ? checked((int)selection.Height) : 720;
-                LinuxPortalSelectionStore.Set(new LinuxPortalSelection(selection.NodeId, width, height));
-                DesktopBuddyMod.Msg($"[ContextMenu] Linux portal selected node={selection.NodeId} size={width}x{height}");
-                world.RunInUpdates(0, () => DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, "Linux Desktop"));
+
+                ulong inputSession = bridge.InputStart(newToken ?? tokenIn);
+                DesktopBuddyMod.Msg($"[ContextMenu] Linux input session={inputSession} (0=unavailable)");
+
+                string title = RememberLinuxSource(reshare, newToken, sourceName, isMonitor, width, height);
+                LinuxPortalSelectionStore.Set(new LinuxPortalSelection(selection.NodeId, width, height, inputSession));
+                DesktopBuddyMod.Msg($"[ContextMenu] Linux portal selected node={selection.NodeId} size={width}x{height} name='{sourceName}' monitor={isMonitor} token={(newToken != null ? "yes" : "no")}");
+                world.RunInUpdates(0, () => DesktopBuddyMod.SpawnStreaming(world, IntPtr.Zero, title, startPrivate: DesktopBuddyMod.Config?.GetValue(DesktopBuddyMod.NewWindowsStartPrivate) ?? false));
             }
             catch (Exception ex)
             {
@@ -310,6 +560,43 @@ public static class ContextMenuPatch
         });
     }
 
+    private static string RememberLinuxSource(LinuxSharedSource existing, string token, string name, bool isMonitor, int width, int height)
+    {
+        string label = !string.IsNullOrWhiteSpace(name)
+            ? name
+            : (isMonitor ? $"Desktop ({width}×{height})" : $"Window ({width}×{height})");
+
+        if (string.IsNullOrEmpty(token))
+            return existing?.Label ?? label;
+
+        LinuxSharedSource entry;
+        lock (_linuxSourcesLock)
+        {
+            entry = (existing != null && _linuxSources.Contains(existing)) ? existing : null;
+            if (entry == null)
+            {
+                foreach (var s in _linuxSources)
+                    if (s.RestoreToken == token) { entry = s; break; }
+            }
+
+            if (entry != null)
+            {
+                entry.RestoreToken = token;
+                entry.Label = label;
+                entry.IsMonitor = isMonitor;
+            }
+            else
+            {
+                entry = new LinuxSharedSource { Label = label, RestoreToken = token, IsMonitor = isMonitor };
+                _linuxSources.Add(entry);
+            }
+        }
+
+        SaveLinuxSources();
+
+        ResolveWindowIconAsync(entry, label);
+        return label;
+    }
 
     [HarmonyPatch(typeof(InteractionHandler), "OpenContextMenu")]
     private class ContextMenuOpenMenuPatch
@@ -347,6 +634,7 @@ public static class ContextMenuPatch
                     {
                         try
                         {
+                            DesktopBuddyMod.Msg("[ContextMenu] Desktop item LocalPressed entered");
                             if (DesktopBuddyMod.ShowSetupNoticeFromDesktopClick(__instance.World))
                             {
                                 DesktopBuddyMod.Msg("[ContextMenu] Setup notice shown from Desktop item");
@@ -354,11 +642,10 @@ public static class ContextMenuPatch
                                 return;
                             }
 
-                            if (DesktopBuddyPlatform.IsLinuxProton)
+                            if (DesktopBuddyPlatform.IsLinux)
                             {
-                                DesktopBuddyMod.Msg("[ContextMenu] Linux Desktop item pressed, opening portal picker");
-                                ctx.Close();
-                                OpenLinuxPortalPickerThenSpawn(__instance.World);
+                                DesktopBuddyMod.Msg("[ContextMenu] Linux Desktop item pressed, showing source list");
+                                ShowLinuxPickerPage(ctx);
                             }
                             else
                             {

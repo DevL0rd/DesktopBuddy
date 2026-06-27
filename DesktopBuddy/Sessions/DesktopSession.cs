@@ -68,6 +68,8 @@ public class DesktopSession
 
     public DesktopKeyboardSource KeyboardSource;
 
+    public ulong LinuxInputSessionId;
+
     public FfmpegEncoder Encoder;
     internal ILiveStreamSource StreamSource;
     public int EncoderInitialStreamId;

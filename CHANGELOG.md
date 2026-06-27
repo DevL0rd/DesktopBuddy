@@ -1,3 +1,16 @@
+## 1.0.20 - 2026-06-26
+
+### Linux support
+- Cloudflare tunnel now runs on native Linux (bundled native `cloudflared` binary, `/dev/null` config, exec-bit re-asserted; skips the Windows-only kill-job).
+- Renamed the internal `IsLinuxProton` platform check to `IsLinux` (modern Resonite runs natively on Linux, not under Proton).
+- Linux desktop audio: the native stream now carries audio (AAC) captured via PipeWire, excluding Resonite's own output.
+- Linux virtual camera via v4l2loopback ("DesktopBuddy - Camera"), with a setup action to install/load the module.
+
+### General
+- New General-tab toggles: Dynamic lights (default off) and "New windows start private".
+- Stream audio now defaults to muted (0) so viewers opt in.
+- Diagnostics button can also upload the log and spawn it in-game.
+
 ## 1.0.18 - 2026-05-24
 
 ### Windows 10 support

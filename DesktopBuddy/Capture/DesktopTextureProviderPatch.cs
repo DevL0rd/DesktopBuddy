@@ -3,16 +3,10 @@ using FrooxEngine;
 
 namespace DesktopBuddy;
 
-/// <summary>
-/// Patches DesktopTextureProvider.UpdateAsset to remove the 
-///   if (base.World != Userspace.UserspaceWorld) return;
-/// check. This allows DesktopTextureProvider to work in any world,
-/// not just Userspace — needed so our magic DisplayIndex gets sent to Renderite.
-/// </summary>
 [HarmonyPatch(typeof(DesktopTextureProvider), "UpdateAsset")]
 static class DesktopTextureProviderPatch
 {
-    // Cache reflection lookups — these never change at runtime
+
     private static System.Reflection.FieldInfo _assetField;
     private static System.Reflection.PropertyInfo _assetMgrProp;
     private static System.Reflection.MethodInfo _initMethod;
@@ -21,9 +15,9 @@ static class DesktopTextureProviderPatch
     private static bool _reflectionValid;
     static bool Prefix(DesktopTextureProvider __instance)
     {
-        // Only bypass the world check for our instances (both magic indices and real monitor indices).
+
         if (!DesktopBuddyMod.OurProviders.Contains(__instance))
-            return true; // Not ours — run original
+            return true;
 
         if (__instance.DisplayIndex.Value == int.MinValue)
             return false;
@@ -37,7 +31,7 @@ static class DesktopTextureProviderPatch
             }
 
             if (!_reflectionValid)
-                return true; // Reflection failed — fall back to original
+                return true;
 
             var desktopTex = _assetField.GetValue(__instance) as DesktopTexture;
 
@@ -60,10 +54,10 @@ static class DesktopTextureProviderPatch
         catch (System.Exception ex)
         {
             Log.Msg($"[DesktopTextureProviderPatch] Error: {ex}");
-            return true; // Fallback
+            return true;
         }
 
-        return false; // Skip original
+        return false;
     }
 
     internal static void PrewarmReflection()
@@ -80,7 +74,6 @@ static class DesktopTextureProviderPatch
         _assetField = type.GetField("_desktopTex",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
-        // Walk the full type hierarchy to find AssetManager (declared on AssetProvider<T>).
         for (var t = type; t != null && _assetMgrProp == null; t = t.BaseType)
         {
             _assetMgrProp = t.GetProperty("AssetManager",

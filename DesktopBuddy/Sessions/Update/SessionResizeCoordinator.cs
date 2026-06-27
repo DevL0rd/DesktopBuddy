@@ -17,7 +17,7 @@ public partial class DesktopBuddyMod
         if (streamer == null || TextureBridgeChannel == null || !TextureBridgeChannel.IsOpen)
             return false;
 
-        if (DesktopBuddyPlatform.IsLinuxProton)
+        if (DesktopBuddyPlatform.IsLinux)
         {
             if (session.SharedTextureSlot < 0)
             {
@@ -92,7 +92,7 @@ public partial class DesktopBuddyMod
             streamerForResize.RecreatePoolIfNeeded();
             int sw = streamerForResize.Width;
             int sh = streamerForResize.Height;
-            if (DesktopBuddyPlatform.IsLinuxProton && session.UseTextureBridge)
+            if (DesktopBuddyPlatform.IsLinux && session.UseTextureBridge)
             {
                 if (session.BridgeRegistrationPending && !TryPublishCurrentSharedTexture(session))
                     return true;

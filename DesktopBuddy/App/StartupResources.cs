@@ -7,7 +7,7 @@ public partial class DesktopBuddyMod
 
     private static void PrewarmSharedResources()
     {
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             try { WgcCapture.PrewarmSharedDevice(); }
             catch (Exception ex) { Msg($"[Startup] WGC adapter prewarm failed: {ex.Message}"); }
@@ -23,7 +23,7 @@ public partial class DesktopBuddyMod
         try { FfmpegEncoder.SetFfmpegPath(); }
         catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             try { WindowInput.PrewarmTouchInjection(); }
             catch (Exception ex) { Msg($"[Startup] Touch injection prewarm failed: {ex.Message}"); }
@@ -32,7 +32,7 @@ public partial class DesktopBuddyMod
         try { DesktopTextureProviderPatch.PrewarmReflection(); }
         catch (Exception ex) { Msg($"[Startup] DesktopTexture reflection prewarm failed: {ex.Message}"); }
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             try { AudioRouter.PrewarmFactory(); }
             catch (Exception ex) { Msg($"[Startup] Audio router prewarm failed: {ex.Message}"); }

@@ -6,72 +6,107 @@ namespace DesktopBuddySharedTextureBridge
 {
     internal sealed class LinuxNativeBridgeRenderer : IDisposable
     {
-        private IntPtr _module;
+        private const uint OpPoll = 2;
+        private const uint OpStop = 3;
+        private const uint OpStartNode = 6;
+        private const uint OpCopyFrame = 7;
+        private const uint OpCloseFrame = 8;
+
+        private static readonly object LoadLock = new object();
+        private static IntPtr SharedModule;
+        private static DesktopBuddyLinuxBridgeCallDelegate SharedCall;
+
         private DesktopBuddyLinuxBridgeCallDelegate _call;
+        private ulong _captureId;
 
         internal bool TryLoad()
         {
             if (_call != null) return true;
 
-            string path = ResolveBridgePath();
-            _module = LoadLibraryA(path);
-            if (_module == IntPtr.Zero)
+            lock (LoadLock)
             {
-                SharedTextureBridgePlugin.LogWarning($"[LinuxBridge] LoadLibrary failed path={path} err=0x{Marshal.GetLastWin32Error():X8}");
-                return false;
-            }
+                if (SharedCall == null)
+                {
+                    string path = ResolveBridgePath();
+                    SharedModule = LoadLibraryA(path);
+                    if (SharedModule == IntPtr.Zero)
+                    {
+                        SharedTextureBridgePlugin.LogWarning($"[LinuxBridge] LoadLibrary failed path={path} err=0x{Marshal.GetLastWin32Error():X8}");
+                        return false;
+                    }
 
-            IntPtr proc = GetProcAddress(_module, "DesktopBuddyLinuxBridgeCall");
-            if (proc == IntPtr.Zero)
-            {
-                SharedTextureBridgePlugin.LogWarning($"[LinuxBridge] GetProcAddress failed err=0x{Marshal.GetLastWin32Error():X8}");
-                return false;
-            }
+                    IntPtr proc = GetProcAddress(SharedModule, "DesktopBuddyLinuxBridgeCall");
+                    if (proc == IntPtr.Zero)
+                    {
+                        SharedTextureBridgePlugin.LogWarning($"[LinuxBridge] GetProcAddress failed err=0x{Marshal.GetLastWin32Error():X8}");
+                        FreeSharedModule();
+                        return false;
+                    }
 
-            _call = (DesktopBuddyLinuxBridgeCallDelegate)Marshal.GetDelegateForFunctionPointer(proc, typeof(DesktopBuddyLinuxBridgeCallDelegate));
-            SharedTextureBridgePlugin.LogInfo($"[LinuxBridge] Loaded {path}");
+                    SharedCall = (DesktopBuddyLinuxBridgeCallDelegate)Marshal.GetDelegateForFunctionPointer(proc, typeof(DesktopBuddyLinuxBridgeCallDelegate));
+                    SharedTextureBridgePlugin.LogInfo($"[LinuxBridge] Loaded {path}");
+                }
+
+                _call = SharedCall;
+            }
             return true;
         }
 
-        internal int StartGpu(uint nodeId, ulong[] modifiers)
+        internal int StartCapture(uint nodeId)
         {
             if (!TryLoad()) return -1;
-            if (modifiers == null || modifiers.Length == 0)
-            {
-                var call = new DbLinuxBridgeCall { Op = 6, Buffer = nodeId };
-                return _call(ref call);
-            }
+            var call = new DbLinuxBridgeCall { Op = OpStartNode, Arg0 = nodeId };
+            int status = _call(ref call);
+            if (status == 0)
+                _captureId = call.Arg0;
+            return status;
+        }
 
-            var handle = GCHandle.Alloc(modifiers, GCHandleType.Pinned);
+        internal int PollFrame(out DbLinuxFrame frame)
+        {
+            frame = default;
+            if (_call == null || _captureId == 0) return -1;
+            var call = new DbLinuxBridgeCall { Op = OpPoll, Arg0 = _captureId };
+            int status = _call(ref call);
+            frame = call.Frame;
+            return status;
+        }
+
+        internal int CopyFrameBytes(DbLinuxFrame frame, byte[] destination)
+        {
+            if (_call == null || destination == null || destination.Length == 0)
+                return -1;
+
+            var handle = GCHandle.Alloc(destination, GCHandleType.Pinned);
             try
             {
                 var call = new DbLinuxBridgeCall
                 {
-                    Op = 6,
-                    Modifiers = (ulong)handle.AddrOfPinnedObject().ToInt64(),
-                    ModifierCount = checked((uint)modifiers.Length),
-                    Buffer = nodeId
+                    Op = OpCopyFrame,
+                    Arg0 = checked((ulong)destination.LongLength),
+                    Frame = frame,
+                    Buffer = (ulong)handle.AddrOfPinnedObject().ToInt64()
                 };
                 return _call(ref call);
             }
             finally { handle.Free(); }
         }
 
-        internal int PollFrame(out DbLinuxFrame frame)
+        internal void DiscardFrame(DbLinuxFrame frame)
         {
-            frame = default;
-            if (_call == null) return -1;
-            var call = new DbLinuxBridgeCall { Op = 2 };
-            int status = _call(ref call);
-            frame = call.Frame;
-            return status;
+            if (_call == null || frame.Fd < 0)
+                return;
+
+            var call = new DbLinuxBridgeCall { Op = OpCloseFrame, Frame = frame };
+            _call(ref call);
         }
 
         internal void Stop()
         {
-            if (_call == null) return;
-            var call = new DbLinuxBridgeCall { Op = 3 };
+            if (_call == null || _captureId == 0) return;
+            var call = new DbLinuxBridgeCall { Op = OpStop, Arg0 = _captureId };
             _call(ref call);
+            _captureId = 0;
         }
 
         private static string ResolveBridgePath()
@@ -84,11 +119,16 @@ namespace DesktopBuddySharedTextureBridge
         {
             Stop();
             _call = null;
-            if (_module != IntPtr.Zero)
-            {
-                FreeLibrary(_module);
-                _module = IntPtr.Zero;
-            }
+        }
+
+        private static void FreeSharedModule()
+        {
+            if (SharedModule == IntPtr.Zero)
+                return;
+
+            FreeLibrary(SharedModule);
+            SharedModule = IntPtr.Zero;
+            SharedCall = null;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -114,12 +154,6 @@ namespace DesktopBuddySharedTextureBridge
         public uint Fourcc;
         public uint Offset;
         public int Stride;
-        public ulong Modifier;
-        public uint HasModifier;
-        public uint PlaneCount;
-        public uint MouseValid;
-        public float MouseX;
-        public float MouseY;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -127,9 +161,7 @@ namespace DesktopBuddySharedTextureBridge
     {
         public uint Op;
         public int Status;
-        public ulong Modifiers;
-        public uint ModifierCount;
-        public uint Reserved;
+        public ulong Arg0;
         public DbLinuxFrame Frame;
         public ulong Buffer;
     }

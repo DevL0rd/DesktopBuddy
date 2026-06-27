@@ -19,7 +19,6 @@ public sealed unsafe partial class FfmpegEncoder : IDisposable
 
     private readonly string _rtspUrl;
 
-
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposeGuard, 1) != 0) return;

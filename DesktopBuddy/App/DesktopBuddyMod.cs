@@ -10,7 +10,6 @@ using HarmonyLib;
 
 namespace DesktopBuddy;
 
-// ReSharper disable once ClassNeverInstantiated.Global - constructed by BepInEx.
 [ResonitePlugin(PluginGuid, PluginName, DesktopBuddyVersion, PluginAuthor, PluginUrl)]
 [BepInPlugin(PluginGuid, PluginName, DesktopBuddyVersion)]
 [BepInDependency(BepInExResoniteShim.PluginMetadata.GUID, BepInDependency.DependencyFlags.HardDependency)]
@@ -41,10 +40,10 @@ public partial class DesktopBuddyMod : BasePlugin
         Msg($"[Startup] Runtime platform: {DesktopBuddyPlatform.RuntimeLabel}");
 
         DesktopBuddyFirstRunSetup.SetupState setupState;
-        if (DesktopBuddyPlatform.IsLinuxProton)
+        if (DesktopBuddyPlatform.IsLinux)
         {
             setupState = DesktopBuddyFirstRunSetup.SetupState.Ok;
-            Msg("[Setup] Linux Proton detected; skipping Windows-only first-run setup");
+            Msg("[Setup] Linux detected; skipping Windows-only first-run setup");
         }
         else
         {
@@ -54,6 +53,7 @@ public partial class DesktopBuddyMod : BasePlugin
         }
 
         InitializeCore();
+        EyeManagerEnabledDiagnostic.Install();
         if (!setupState.HasIssues)
             EnsureDependencyRuntimeStarted();
     }
@@ -77,7 +77,7 @@ public partial class DesktopBuddyMod : BasePlugin
             e.SetObserved();
         };
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
             InstallNativeCrashHandler();
         else
             Msg("[NativeCrash] Linux runtime detected; skipping Windows native crash handler");
@@ -126,7 +126,7 @@ public partial class DesktopBuddyMod : BasePlugin
             }
         }
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -154,10 +154,28 @@ public partial class DesktopBuddyMod : BasePlugin
         }
         else
         {
-            Msg("[Startup] Linux Proton detected; skipping Windows virtual camera, VB-Cable, and audio-routing setup");
+            Msg("[Startup] Linux detected; skipping Windows VB-Cable and audio-routing setup");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    var cam = new VirtualCamera();
+                    if (cam.StartIdle())
+                    {
+                        VCam = cam;
+                        Msg("[VirtualCamera] Linux v4l2 virtual camera ready");
+                    }
+                    else
+                    {
+                        cam.Dispose();
+                        Msg("[VirtualCamera] Linux virtual camera unavailable; run setup in the Devices tab");
+                    }
+                }
+                catch (Exception ex) { Msg($"[VirtualCamera] Linux setup error: {ex.Message}"); }
+            });
         }
 
-        if (!DesktopBuddyPlatform.IsLinuxProton)
+        if (!DesktopBuddyPlatform.IsLinux)
         {
             _windowPollerRunning = true;
             _windowPollerThread = new Thread(WindowPollerLoop)
@@ -166,7 +184,7 @@ public partial class DesktopBuddyMod : BasePlugin
         }
         else
         {
-            Msg("[Startup] Linux Proton detected; skipping Win32 window poller");
+            Msg("[Startup] Linux detected; skipping Win32 window poller");
         }
 
         Msg("DesktopBuddy dependency runtime initialized!");
@@ -181,7 +199,7 @@ public partial class DesktopBuddyMod : BasePlugin
             var resetPids = new HashSet<uint>();
             foreach (var session in ActiveSessions)
             {
-                if (!DesktopBuddyPlatform.IsLinuxProton &&
+                if (!DesktopBuddyPlatform.IsLinux &&
                     session.OwnsAudioRedirect &&
                     session.ProcessId != 0 &&
                     resetPids.Add(session.ProcessId))

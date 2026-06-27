@@ -164,6 +164,9 @@
     <Content Include="..\icon_transparent.png" Link="icon_transparent.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\plus.png" Link="plus.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\scripts\CollectDesktopBuddyDiagnostics.ps1" Link="CollectDesktopBuddyDiagnostics.ps1">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -185,6 +188,7 @@
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)DesktopBuddy.sha" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)icon_transparent.png" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
+    <Copy SourceFiles="$(OutputPath)plus.png" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="$(OutputPath)CollectDesktopBuddyDiagnostics.ps1" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddy\DesktopBuddy" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyRuntime)" DestinationFiles="@(DesktopBuddyRuntime->'$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime\%(RecursiveDir)%(Filename)%(Extension)')" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />
     <Copy SourceFiles="@(DesktopBuddyManagedDependency)" DestinationFolder="$(ResonitePath)\BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime" ContinueOnError="true" Retries="0" RetryDelayMilliseconds="0" />

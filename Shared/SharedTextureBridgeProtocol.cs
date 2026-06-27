@@ -132,7 +132,6 @@ namespace DesktopBuddy.Shared
         }
     }
 
-
     internal sealed class SharedTextureStopMessage : IMemoryPackable
     {
         public int SlotId;

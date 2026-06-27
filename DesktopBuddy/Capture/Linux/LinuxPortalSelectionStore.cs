@@ -6,11 +6,14 @@ internal readonly struct LinuxPortalSelection
     public readonly int Width;
     public readonly int Height;
 
-    public LinuxPortalSelection(uint nodeId, int width, int height)
+    public readonly ulong InputSessionId;
+
+    public LinuxPortalSelection(uint nodeId, int width, int height, ulong inputSessionId = 0)
     {
         NodeId = nodeId;
         Width = width;
         Height = height;
+        InputSessionId = inputSessionId;
     }
 }
 

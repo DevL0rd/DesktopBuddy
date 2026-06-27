@@ -85,7 +85,6 @@ public partial class DesktopBuddyMod
         return string.Join(" ", (name ?? "Unnamed GPU").Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
     }
 
-
     private static int NormalizeStreamResolution(int value)
     {
         return StreamResolutionOptions

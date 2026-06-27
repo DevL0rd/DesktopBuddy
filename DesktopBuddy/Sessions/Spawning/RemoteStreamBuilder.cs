@@ -19,6 +19,7 @@ internal sealed class RemoteStreamBuildContext
     public float StreamOutputVolume;
     public Func<bool> IsPrivate;
     public Func<float> CurrentPanelCurvature;
+    public uint LinuxPipeWireNodeId;
 }
 
 internal sealed class RemoteStreamVisual
@@ -34,11 +35,6 @@ public partial class DesktopBuddyMod
     {
         var root = context.Root;
         var session = context.Session;
-        if (DesktopBuddyPlatform.IsLinuxProton)
-        {
-            Msg("[RemoteStream] Skipped on Linux: DesktopBuddy uses DesktopTextureProvider/shared texture bridge for desktop control");
-            return null;
-        }
 
         bool allowRemoteStream = context.UseMediaMtx || StreamServer != null;
         if (!allowRemoteStream)
@@ -49,25 +45,34 @@ public partial class DesktopBuddyMod
 
         try
         {
-            SharedStream shared = AcquireSharedStream(context.Hwnd, context.UseMediaMtx);
+            SharedStream shared = AcquireSharedStream(
+                context.Hwnd,
+                context.UseMediaMtx,
+                context.LinuxPipeWireNodeId,
+                context.Width,
+                context.Height);
             session.StreamId = shared.StreamId;
             session.Encoder = shared.Encoder;
             session.StreamSource = shared.Source;
             session.StreamUsesMediaMtx = shared.UsesMediaMtx;
             session.StreamAudioCapture = shared.Audio;
             session.StartStreamAudioCapture = shared.StartAudio;
-            var nvEncoder = shared.Encoder;
+            var encoder = shared.Encoder;
             var streamSource = shared.Source;
 
             if (session.SpatialAudioSource != null && shared.Audio != null)
                 session.SpatialAudioSource.SetAudioCapture(shared.Audio);
 
-            bool shouldDriveEncoder = TryClaimSharedStreamDriver(context.Hwnd, shared.StreamId, session);
+            bool shouldDriveEncoder = encoder != null && TryClaimSharedStreamDriver(context.Hwnd, shared.StreamId, session);
 
             if (shouldDriveEncoder)
             {
-                ConnectEncoder(session, nvEncoder, shared.Audio, shared.StartAudio);
+                ConnectEncoder(session, encoder, shared.Audio, shared.StartAudio);
                 Msg($"[RemoteStream] This panel drives the encoder for stream {shared.StreamId}");
+            }
+            else if (DesktopBuddyPlatform.IsLinux)
+            {
+                Msg($"[RemoteStream] Linux native stream owns capture for stream {shared.StreamId}");
             }
             else
             {

@@ -20,6 +20,20 @@ public partial class DesktopBuddyMod
         session.ActiveTouchIds.Clear();
         CleanupTrace($"ActiveTouchIds cleared hwnd={session.Hwnd} streamId={session.StreamId}");
 
+        if (session.LinuxInputSessionId != 0)
+        {
+            try
+            {
+                using var inputBridge = new LinuxNativeBridge();
+                inputBridge.InputStop(session.LinuxInputSessionId);
+                Msg($"[Cleanup] Stopped Linux input session {session.LinuxInputSessionId}");
+            }
+            catch (Exception ex) { Msg($"[Cleanup] Linux input stop error: {ex.Message}"); }
+            if (WindowInput.LinuxInputSession == session.LinuxInputSessionId)
+                WindowInput.LinuxInputSession = 0;
+            session.LinuxInputSessionId = 0;
+        }
+
         if (VMic != null && session.VMicListener != null)
         {
             Msg("[Cleanup] Disposing VMic (listener destroyed)");
@@ -132,6 +146,7 @@ public partial class DesktopBuddyMod
 
                 AudioCapture audioToDispose = null;
                 FfmpegEncoder encoderToDispose = null;
+                ILiveStreamSource sourceToDispose = null;
                 bool shouldStopEncoder = false;
 
                 if (streamer != null)
@@ -159,7 +174,7 @@ public partial class DesktopBuddyMod
                 if (streamId > 0)
                 {
                     CleanupTrace($"BG shared stream release START stream={streamId}");
-                    shouldStopEncoder = ReleaseSharedStreamReference(hwnd, streamId, session, out audioToDispose, out encoderToDispose);
+                    shouldStopEncoder = ReleaseSharedStreamReference(hwnd, streamId, session, out audioToDispose, out encoderToDispose, out sourceToDispose);
                     CleanupTrace($"BG shared stream release DONE stream={streamId} shouldStopEncoder={shouldStopEncoder}");
 
                     if (shouldStopEncoder)
@@ -179,6 +194,12 @@ public partial class DesktopBuddyMod
                                 var disposeTicks = TraceStart($"FfmpegEncoder.Dispose stream={streamId}");
                                 encoderToDispose.Dispose();
                                 TraceDone($"FfmpegEncoder.Dispose stream={streamId}", disposeTicks);
+                            }
+                            else if (sourceToDispose != null)
+                            {
+                                var disposeTicks = TraceStart($"StreamSource.Dispose stream={streamId}");
+                                sourceToDispose.Dispose();
+                                TraceDone($"StreamSource.Dispose stream={streamId}", disposeTicks);
                             }
                         }
                         else if (StreamServer != null)

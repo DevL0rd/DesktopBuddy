@@ -58,8 +58,15 @@ internal static class DesktopInputWiring
             return (grabbable != null && grabbable.IsGrabbed) || DesktopBuddyMod.IsDesktopMode(root.World);
         }
 
+        void TargetLinuxInput()
+        {
+            if (DesktopBuddyPlatform.IsLinux)
+                WindowInput.LinuxInputSession = session.LinuxInputSessionId;
+        }
+
         void SendDesktopPressed(Component source, float2 point)
         {
+            TargetLinuxInput();
             if (ShouldIgnoreDesktopInput()) return;
             ClaimSource(source);
             float u = point.x;
@@ -79,6 +86,7 @@ internal static class DesktopInputWiring
 
         void SendDesktopPressing(Component source, float2 point)
         {
+            TargetLinuxInput();
             if (ShouldIgnoreDesktopInput()) return;
             uint touchId = GetTouchId(source);
             if (!session.ActiveTouchIds.Contains(touchId)) return;
@@ -97,6 +105,7 @@ internal static class DesktopInputWiring
 
         void SendDesktopReleased(Component source, float2 point)
         {
+            TargetLinuxInput();
             if (ShouldIgnoreDesktopInput()) return;
             uint touchId = GetTouchId(source);
             float u = point.x;
@@ -115,6 +124,7 @@ internal static class DesktopInputWiring
 
         void SendDesktopHovering(Component source, float2 point)
         {
+            TargetLinuxInput();
             if (ShouldIgnoreDesktopInput()) return;
             float hu = point.x;
             float hv = point.y;

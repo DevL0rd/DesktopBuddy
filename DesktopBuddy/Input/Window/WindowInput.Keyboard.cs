@@ -41,6 +41,7 @@ public static partial class WindowInput
     public static void SendString(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
+        if (DesktopBuddyPlatform.IsLinux) { LinuxTypeString(text); return; }
         Log.Msg($"[Keyboard] SendString: \"{text}\"");
         var inputs = new INPUT[text.Length * 2];
         int idx = 0;
@@ -83,6 +84,7 @@ public static partial class WindowInput
 
     public static void SendVirtualKey(ushort vk)
     {
+        if (DesktopBuddyPlatform.IsLinux) { LinuxTapKey(vk); return; }
         var inputs = new INPUT[]
         {
             new INPUT { type = INPUT_KEYBOARD, u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk } } },
@@ -102,6 +104,7 @@ public static partial class WindowInput
     {
         if (_heldModifiers.Contains(vk)) return;
         _heldModifiers.Add(vk);
+        if (DesktopBuddyPlatform.IsLinux) { LinuxKey(vk, true); return; }
         var inputs = new INPUT[]
         {
             new INPUT { type = INPUT_KEYBOARD, u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk } } },
@@ -111,6 +114,14 @@ public static partial class WindowInput
 
     public static void SendPaste()
     {
+        if (DesktopBuddyPlatform.IsLinux)
+        {
+
+            LinuxKey(0xA2, true);
+            LinuxTapKey(0x56);
+            LinuxKey(0xA2, false);
+            return;
+        }
         Log.Msg("[Keyboard] Sending Ctrl+V (paste)");
         const ushort VK_CONTROL = 0xA2;
         const ushort VK_V = 0x56;
@@ -129,6 +140,13 @@ public static partial class WindowInput
     public static void ReleaseAllModifiers()
     {
         if (_heldModifiers.Count == 0) return;
+        if (DesktopBuddyPlatform.IsLinux)
+        {
+            foreach (var vk in _heldModifiers)
+                LinuxKey(vk, false);
+            _heldModifiers.Clear();
+            return;
+        }
         var inputs = new INPUT[_heldModifiers.Count];
         int i = 0;
         foreach (var vk in _heldModifiers)

@@ -84,7 +84,10 @@ public partial class DesktopBuddyMod
                 if (session.TimeSinceValidCheck >= 0.5)
                 {
                     session.TimeSinceValidCheck = 0;
-                    session.LastValidState = session.Streamer == null || session.Streamer.IsValid;
+                    bool streamerValid = session.Streamer == null || session.Streamer.IsValid;
+
+                    bool sourceAlive = session.StreamSource == null || session.StreamSource.IsSourceAlive;
+                    session.LastValidState = streamerValid && sourceAlive;
                 }
                 if (session.Streamer != null && !session.LastValidState)
                 {

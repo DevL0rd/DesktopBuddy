@@ -40,8 +40,7 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
 
     private void RegisterMessages()
     {
-        // InterprocessLib's wrapper commands use type indexes, so both endpoints must
-        // register the same shared texture message types in the same order.
+
         _messenger.ReceiveObject<SharedTextureStartMessage>(
             SharedTextureBridgeProtocol.StartMessageId,
             _ => { });
@@ -244,7 +243,6 @@ internal sealed class SharedTextureBridgeChannel : IDisposable
             }
         });
     }
-
 
     private void QueueStop(int slot, int generation)
     {

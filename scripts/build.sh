@@ -4,6 +4,20 @@ set -euo pipefail
 configuration="Release"
 profile_path="${DESKTOPBUDDY_PROFILE_PATH:-/home/devl0rd/.local/share/com.kesomannen.gale/resonite/profiles/Default}"
 no_deploy=0
+restart=0
+resonite_appid="${RESONITE_APPID:-2519830}"
+
+if [[ -x "$HOME/.dotnet/dotnet" ]]; then
+  export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+  case ":$PATH:" in
+    *":$DOTNET_ROOT:"*) ;;
+    *) export PATH="$DOTNET_ROOT:$PATH" ;;
+  esac
+  case ":$PATH:" in
+    *":$DOTNET_ROOT/tools:"*) ;;
+    *) export PATH="$DOTNET_ROOT/tools:$PATH" ;;
+  esac
+fi
 
 usage() {
   cat <<'EOF'
@@ -15,6 +29,7 @@ Options:
                              Default: $DESKTOPBUDDY_PROFILE_PATH or
                              /home/devl0rd/.local/share/com.kesomannen.gale/resonite/profiles/Default
       --no-deploy            Build only.
+  -r, --restart              After building/deploying, kill Resonite and relaunch via Steam.
   -h, --help                 Show this help.
 EOF
 }
@@ -31,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-deploy)
       no_deploy=1
+      shift
+      ;;
+    -r|--restart)
+      restart=1
       shift
       ;;
     -h|--help)
@@ -95,10 +114,12 @@ deploy_profile() {
   for required in \
     "$mod_out/DesktopBuddy.dll" \
     "$mod_out/icon_transparent.png" \
+    "$mod_out/plus.png" \
     "$root/scripts/CollectDesktopBuddyDiagnostics.ps1" \
     "$bridge_dll" \
     "$linux_bridge_dir/DesktopBuddyLinuxBridge.so" \
     "$linux_bridge_dir/libdesktopbuddy_linux_native.so" \
+    "$linux_bridge_dir/libdesktopbuddy_linux_stream.so" \
     "$runtime_source"; do
     if [[ ! -e "$required" ]]; then
       echo "Required deploy input not found: $required" >&2
@@ -119,11 +140,13 @@ deploy_profile() {
   copy_file "$mod_out/DesktopBuddy.dll" "$game_plugin_dir/DesktopBuddy.dll"
   [[ -f "$mod_out/DesktopBuddy.sha" ]] && copy_file "$mod_out/DesktopBuddy.sha" "$game_plugin_dir/DesktopBuddy.sha"
   copy_file "$mod_out/icon_transparent.png" "$game_plugin_dir/icon_transparent.png"
+  copy_file "$mod_out/plus.png" "$game_plugin_dir/plus.png"
   copy_file "$root/scripts/CollectDesktopBuddyDiagnostics.ps1" "$game_plugin_dir/CollectDesktopBuddyDiagnostics.ps1"
 
   copy_tree_files "$runtime_source" "$runtime_target"
   copy_file "$linux_bridge_dir/DesktopBuddyLinuxBridge.so" "$runtime_target/DesktopBuddyLinuxBridge.so"
   copy_file "$linux_bridge_dir/libdesktopbuddy_linux_native.so" "$runtime_target/libdesktopbuddy_linux_native.so"
+  copy_file "$linux_bridge_dir/libdesktopbuddy_linux_stream.so" "$runtime_target/libdesktopbuddy_linux_stream.so"
   for dependency in FFmpeg.AutoGen.dll Microsoft.Windows.SDK.NET.dll WinRT.Runtime.dll; do
     copy_file "$mod_out/$dependency" "$runtime_target/$dependency"
   done
@@ -131,6 +154,7 @@ deploy_profile() {
   copy_file "$bridge_dll" "$bridge_target/DesktopBuddySharedTextureBridge.dll"
   copy_file "$linux_bridge_dir/DesktopBuddyLinuxBridge.so" "$bridge_target/DesktopBuddyLinuxBridge.so"
   copy_file "$linux_bridge_dir/libdesktopbuddy_linux_native.so" "$bridge_target/libdesktopbuddy_linux_native.so"
+  copy_file "$linux_bridge_dir/libdesktopbuddy_linux_stream.so" "$bridge_target/libdesktopbuddy_linux_stream.so"
 
   rm -f \
     "$profile_path/BepInEx/cache/chainloader_typeloader.dat" \
@@ -140,6 +164,7 @@ deploy_profile() {
 require_tool dotnet
 require_tool cargo
 require_tool cc
+require_tool pkg-config
 
 cd "$root"
 
@@ -167,6 +192,10 @@ mkdir -p "$root/DesktopBuddyLinuxBridge/bin/$configuration"
 cc -shared -fPIC "$root/DesktopBuddyLinuxBridge/desktopbuddy_linux_bridge.c" \
   -o "$root/DesktopBuddyLinuxBridge/bin/$configuration/DesktopBuddyLinuxBridge.so" \
   -ldl
+cc -shared -fPIC "$root/DesktopBuddyLinuxNative/src/native_stream.c" \
+  -o "$root/DesktopBuddyLinuxBridge/bin/$configuration/libdesktopbuddy_linux_stream.so" \
+  $(pkg-config --cflags libavformat libavcodec libswscale libavutil) \
+  -ldl -lpthread
 cp -f \
   "$root/DesktopBuddyLinuxNative/target/release/libdesktopbuddy_linux_native.so" \
   "$root/DesktopBuddyLinuxBridge/bin/$configuration/libdesktopbuddy_linux_native.so"
@@ -184,6 +213,31 @@ if [[ "$no_deploy" -eq 0 ]]; then
   fi
 
   deploy_profile "$mod_out"
+fi
+
+restart_resonite() {
+  echo "Stopping any running Resonite..."
+  pkill -f 'common/Resonite' 2>/dev/null || true
+  pkill -f 'Renderite.Host' 2>/dev/null || true
+  sleep 2
+
+  local steam_cmd="steam"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) steam_cmd="steam.exe" ;;
+  esac
+
+  if ! command -v "$steam_cmd" >/dev/null 2>&1; then
+    echo "Cannot restart: '$steam_cmd' not found on PATH." >&2
+    return 1
+  fi
+
+  echo "Launching Resonite ($resonite_appid) via $steam_cmd..."
+  setsid "$steam_cmd" -applaunch "$resonite_appid" >/dev/null 2>&1 &
+  echo "Launch requested."
+}
+
+if [[ $restart -eq 1 ]]; then
+  restart_resonite
 fi
 
 echo "Done."

@@ -35,7 +35,7 @@ public partial class DesktopBuddyMod
 
     internal static bool ShowSetupNoticeFromDesktopClick(World world)
     {
-        if (DesktopBuddyPlatform.IsLinuxProton)
+        if (DesktopBuddyPlatform.IsLinux)
         {
             EnsureDependencyRuntimeStarted();
             return false;
@@ -81,7 +81,7 @@ public partial class DesktopBuddyMod
         }
         catch
         {
-            // FocusedWorld is best-effort here; context-menu setup still passes an explicit world.
+
         }
 
         return null;

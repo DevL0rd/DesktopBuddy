@@ -21,6 +21,10 @@ public partial class DesktopBuddyMod
         new("spawnNewWindowsInGame", "Automatically spawn DesktopBuddy panels for new standalone windows from the same process.", () => true);
     internal static readonly DesktopBuddyConfigKey<bool> SpawnNewWindowsPrivate =
         new("spawnNewWindowsPrivate", "Automatically spawned new-window panels start private.", () => true);
+    internal static readonly DesktopBuddyConfigKey<bool> NewWindowsStartPrivate =
+        new("newWindowsStartPrivate", "New DesktopBuddy panels you spawn (monitors, windows, desktop) start in Private mode.", () => false);
+    internal static readonly DesktopBuddyConfigKey<bool> DynamicLightsEnabled =
+        new("dynamicLights", "Cast a dynamic in-game light that matches the captured screen's average color.", () => false);
     internal static readonly DesktopBuddyConfigKey<int> Bitrate =
         new("bitrate", "Video encoding bitrate in Mbps.", () => 10);
     internal static readonly DesktopBuddyConfigKey<int> StreamFps =
@@ -47,6 +51,8 @@ public partial class DesktopBuddyMod
         new("portForwardUseNat", "Automatically create a UPnP/NAT TCP port mapping for the built-in stream port.", () => false);
     internal static readonly DesktopBuddyConfigKey<string> PanelCurvePreferences =
         new("panelCurvePreferences", "Saved DesktopBuddy panel curve values, keyed by application executable path or shared desktop capture.", () => "");
+    internal static readonly DesktopBuddyConfigKey<string> LinuxSharedSources =
+        new("linuxSharedSources", "Saved Linux desktop/window sources for instant re-share, with their restore tokens and icons.", () => "");
     internal static readonly DesktopBuddyConfigKey<string> ViewerCullingMode =
         new("viewerCullingMode", "Viewer culling mode for remote streams: frustum or distance.", () => "frustum");
     internal static readonly DesktopBuddyConfigKey<bool> ViewerCullingPreview =
@@ -62,7 +68,7 @@ public partial class DesktopBuddyMod
     internal static readonly DesktopBuddyConfigKey<string> PreferredGpuLuid =
         new("preferredGpuLuid", "Preferred DXGI adapter LUID for DesktopBuddy capture/encoding, or blank for auto.", () => "");
     internal static readonly DesktopBuddyConfigKey<float> StreamAudioOutputVolume =
-        new("streamAudioOutputVolume", "Default local stream AudioOutput volume.", () => 1.0f);
+        new("streamAudioOutputVolume", "Default local stream AudioOutput volume. 0 means viewers start muted and opt in.", () => 0.0f);
     internal static readonly DesktopBuddyConfigKey<string> StreamAudioGlobalMode =
         new("streamAudioGlobalMode", "Stream AudioOutput global mode: auto, global, or positional.", () => "positional");
     internal static readonly DesktopBuddyConfigKey<bool> StreamAudioSpatialize =
@@ -104,6 +110,8 @@ public partial class DesktopBuddyMod
         Config.Bind(ThrowToDestroy);
         Config.Bind(SpawnNewWindowsInGame);
         Config.Bind(SpawnNewWindowsPrivate);
+        Config.Bind(NewWindowsStartPrivate);
+        Config.Bind(DynamicLightsEnabled);
         Config.Bind(Bitrate);
         Config.Bind(StreamFps);
         Config.Bind(MaxStreamResolution);
@@ -117,6 +125,7 @@ public partial class DesktopBuddyMod
         Config.Bind(PortForwardHost);
         Config.Bind(PortForwardUseNat);
         Config.Bind(PanelCurvePreferences);
+        Config.Bind(LinuxSharedSources);
         Config.Bind(ViewerCullingMode);
         Config.Bind(ViewerCullingPreview);
         Config.Bind(ViewerFrustumWidth);

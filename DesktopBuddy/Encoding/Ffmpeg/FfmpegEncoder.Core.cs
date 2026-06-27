@@ -163,5 +163,4 @@ public sealed unsafe partial class FfmpegEncoder : ILiveStreamSource
         _rtspUrl = rtspUrl;
     }
 
-
 }

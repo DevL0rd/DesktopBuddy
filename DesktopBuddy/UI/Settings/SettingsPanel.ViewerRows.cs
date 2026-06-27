@@ -148,10 +148,9 @@ public partial class DesktopBuddyMod
             }
             catch
             {
-                // Keep the default avatar if the cloud profile icon cannot be loaded.
+
             }
         });
     }
 
 }
-

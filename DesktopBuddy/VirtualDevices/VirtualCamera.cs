@@ -19,6 +19,10 @@ internal sealed class VirtualCamera : IDisposable
     private int _frameFlags;
     internal bool _logNextFrame = true;
 
+    private readonly bool _linux = DesktopBuddyPlatform.IsLinux;
+    private readonly LinuxNativeBridge _linuxBridge = DesktopBuddyPlatform.IsLinux ? new LinuxNativeBridge() : null;
+    private int _v4l2Fd = -1;
+
     private const int IdleWidth = 1280;
     private const int IdleHeight = 720;
     private const int SoftcamPixelFormatBgr24 = 0;
@@ -32,6 +36,33 @@ internal sealed class VirtualCamera : IDisposable
     internal bool StartIdle()
     {
         if (_camera != IntPtr.Zero) return true;
+
+        if (_linux)
+        {
+            try
+            {
+                _v4l2Fd = _linuxBridge.VcamOpen(IdleWidth, IdleHeight);
+                if (_v4l2Fd < 0)
+                {
+                    Log.Msg("[VirtualCamera] v4l2loopback 'DesktopBuddy - Camera' not found; run virtual camera setup in the Devices tab");
+                    return false;
+                }
+                _camera = (IntPtr)1;
+                _width = IdleWidth;
+                _height = IdleHeight;
+                _pixelFormat = SoftcamPixelFormatBgr24;
+                AllocBuffer(IdleWidth, IdleHeight);
+                Log.Msg($"[VirtualCamera] v4l2 camera opened fd={_v4l2Fd} {IdleWidth}x{IdleHeight}");
+                _connectionThread = new Thread(ConnectionPollLoop) { Name = "VirtualCamera:Poll", IsBackground = true };
+                _connectionThread.Start();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Msg($"[VirtualCamera] Linux StartIdle failed: {ex.Message}");
+                return false;
+            }
+        }
 
         try
         {
@@ -65,6 +96,13 @@ internal sealed class VirtualCamera : IDisposable
             Thread.Sleep(500);
             if (_disposed || _camera == IntPtr.Zero) break;
 
+            if (_linux)
+            {
+
+                ConsumerConnected = _v4l2Fd >= 0;
+                continue;
+            }
+
             try
             {
                 ConsumerConnected = SoftCam.scIsConnected(_camera);
@@ -80,6 +118,34 @@ internal sealed class VirtualCamera : IDisposable
         int targetW = srcWidth & ~3;
         int targetH = srcHeight & ~3;
         if (targetW < 4 || targetH < 4) return;
+
+        if (_linux)
+        {
+            if (targetW != _width || targetH != _height)
+            {
+                _linuxBridge.VcamClose(_v4l2Fd);
+                _v4l2Fd = _linuxBridge.VcamOpen(targetW, targetH);
+                if (_v4l2Fd < 0) { Log.Msg("[VirtualCamera] v4l2 reopen failed on resize"); _camera = IntPtr.Zero; return; }
+                _width = targetW;
+                _height = targetH;
+                AllocBuffer(targetW, targetH);
+                _logNextFrame = true;
+            }
+
+            unsafe
+            {
+                fixed (byte* srcPtr = pixelData)
+                fixed (byte* dstPtr = _bgrBuffer)
+                {
+                    ConvertToBgr24(srcPtr, dstPtr, srcWidth, srcHeight, format);
+                }
+            }
+
+            int written = _linuxBridge.VcamWrite(_v4l2Fd, _bgrBuffer, _bgrBuffer.Length);
+            if (written < 0) Log.Msg("[VirtualCamera] v4l2 write failed");
+            return;
+        }
+
         int desiredFormat = SoftcamPixelFormatBgr24;
         int desiredFlags = 0;
 
@@ -157,7 +223,8 @@ internal sealed class VirtualCamera : IDisposable
 
         for (int y = 0; y < dstH; y++)
         {
-            byte* srcRow = src + (dstH - 1 - y) * srcStride;
+
+            byte* srcRow = src + (_linux ? y : (dstH - 1 - y)) * srcStride;
             byte* dstRow = dst + y * dstStride;
 
             if (format == TextureFormat.ARGB32)
@@ -225,7 +292,18 @@ internal sealed class VirtualCamera : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        if (_camera != IntPtr.Zero)
+        if (_linux)
+        {
+            if (_v4l2Fd >= 0)
+            {
+                try { _linuxBridge.VcamClose(_v4l2Fd); }
+                catch (Exception ex) { Log.Msg($"[VirtualCamera] v4l2 close error: {ex.Message}"); }
+                _v4l2Fd = -1;
+            }
+            try { _linuxBridge?.Dispose(); } catch { }
+            _camera = IntPtr.Zero;
+        }
+        else if (_camera != IntPtr.Zero)
         {
             try { SoftCam.scDeleteCamera(_camera); }
             catch (Exception ex) { Log.Msg($"[VirtualCamera] scDeleteCamera error: {ex.Message}"); }

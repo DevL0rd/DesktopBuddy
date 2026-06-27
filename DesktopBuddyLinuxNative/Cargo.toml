@@ -9,7 +9,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 async-std = "1.13"
-drm-fourcc = "2.2"
+async-channel = "2"
 libc = "0.2"
 log = "0.4"
+# Same ashpd wlx-capture already pulls (0.12, async-std); Cargo unifies one build. Used for the
+# RemoteDesktop portal (input injection) combined with ScreenCast for absolute pointer mapping.
+ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
 wlx-capture = { git = "https://github.com/wayvr-org/wayvr", package = "wlx-capture" }
+# Same git rev wlx-capture already resolves, so Cargo dedups (no second pipewire build).
+pipewire = { git = "https://gitlab.freedesktop.org/pipewire/pipewire-rs.git", rev = "670b0aabf04263ece5dc1e752e5d64aeae3056e8" }
