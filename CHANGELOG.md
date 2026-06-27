@@ -33,10 +33,12 @@ broken — please read the known issues below before relying on it.
 - The Diagnostics button can now also upload the log and spawn it in-game.
 
 ### Fixes
-- Fixed your avatar's eye tracking turning off (eyes freezing) while looking at your own
-  DesktopBuddy panel. Resonite's idle eye-look could latch onto the panel's local screen and
-  throw an error that disabled the eye manager; DesktopBuddy now keeps the eye system from
-  targeting its own local surfaces.
+- Patched a Resonite engine bug where your avatar's `EyeManager` gets disabled (eyes freeze)
+  while you look at your own DesktopBuddy panel. Resonite's idle eye-look targets the panel's
+  local-only screen with a synced reference and throws "Cannot reference local targets from a
+  non-local reference", which disables the `EyeManager`. This patch keeps the `EyeManager`
+  from targeting local-only surfaces so the bug no longer triggers, until Resonite fixes it
+  upstream.
 - Stability fixes around stream URL binding, private/public toggling, panel resizing, and
   session cleanup.
 
