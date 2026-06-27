@@ -154,9 +154,8 @@ function New-ZipFromStage {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::Open($OutZip, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
-        $stageRoot = $Stage.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
         foreach ($file in Get-ChildItem -LiteralPath $Stage -Recurse -File) {
-            $entryName = $file.FullName.Substring($stageRoot.Length).Replace('\', '/')
+            $entryName = [IO.Path]::GetRelativePath($Stage, $file.FullName).Replace('\', '/')
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                 $archive,
                 $file.FullName,
