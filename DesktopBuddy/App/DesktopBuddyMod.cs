@@ -53,7 +53,6 @@ public partial class DesktopBuddyMod : BasePlugin
         }
 
         InitializeCore();
-        EyeManagerEnabledDiagnostic.Install();
         if (!setupState.HasIssues)
             EnsureDependencyRuntimeStarted();
     }

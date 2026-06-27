@@ -186,19 +186,7 @@ dotnet build "$root/DesktopBuddy/DesktopBuddy.csproj" "${build_args[@]}"
 echo "Building DesktopBuddySharedTextureBridge ($configuration)"
 dotnet build "$root/DesktopBuddySharedTextureBridge/DesktopBuddySharedTextureBridge.csproj" "${build_args[@]}"
 
-echo "Building Linux native capture bridge"
-cargo build --manifest-path "$root/DesktopBuddyLinuxNative/Cargo.toml" --release
-mkdir -p "$root/DesktopBuddyLinuxBridge/bin/$configuration"
-cc -shared -fPIC "$root/DesktopBuddyLinuxBridge/desktopbuddy_linux_bridge.c" \
-  -o "$root/DesktopBuddyLinuxBridge/bin/$configuration/DesktopBuddyLinuxBridge.so" \
-  -ldl
-cc -shared -fPIC "$root/DesktopBuddyLinuxNative/src/native_stream.c" \
-  -o "$root/DesktopBuddyLinuxBridge/bin/$configuration/libdesktopbuddy_linux_stream.so" \
-  $(pkg-config --cflags libavformat libavcodec libswscale libavutil) \
-  -ldl -lpthread
-cp -f \
-  "$root/DesktopBuddyLinuxNative/target/release/libdesktopbuddy_linux_native.so" \
-  "$root/DesktopBuddyLinuxBridge/bin/$configuration/libdesktopbuddy_linux_native.so"
+"$root/scripts/build-native.sh" "$configuration"
 
 if [[ "$no_deploy" -eq 0 ]]; then
   if [[ ! -d "$profile_path/BepInEx/plugins" ]]; then

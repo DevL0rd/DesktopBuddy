@@ -1,20 +1,31 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build the DesktopBuddy Linux native libraries from a clean Debian/Ubuntu base image.
+# (The managed .NET assemblies are built separately via `dotnet build` / scripts/build.sh.)
+
+export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-apt-get install -y gcc pkg-config libavformat-dev libavcodec-dev libswscale-dev libavutil-dev
+apt-get install -y --no-install-recommends \
+  build-essential \
+  clang \
+  libclang-dev \
+  pkg-config \
+  curl \
+  ca-certificates \
+  libavformat-dev \
+  libavcodec-dev \
+  libswscale-dev \
+  libavutil-dev \
+  libpipewire-0.3-dev
 
-cargo build --manifest-path DesktopBuddyLinuxNative/Cargo.toml --release
+# Rust toolchain (edition 2024 requires Rust >= 1.85). Skip if already present.
+if ! command -v cargo >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
 
-mkdir -p DesktopBuddyLinuxBridge/bin/Release
-
-cc -shared -fPIC DesktopBuddyLinuxBridge/desktopbuddy_linux_bridge.c \
-  -o DesktopBuddyLinuxBridge/bin/Release/DesktopBuddyLinuxBridge.so \
-  -ldl
-
-cc -shared -fPIC DesktopBuddyLinuxNative/src/native_stream.c \
-  -o DesktopBuddyLinuxBridge/bin/Release/libdesktopbuddy_linux_stream.so \
-  $(pkg-config --cflags libavformat libavcodec libswscale libavutil) \
-  -ldl -lpthread
-
-cp -f DesktopBuddyLinuxNative/target/release/libdesktopbuddy_linux_native.so DesktopBuddyLinuxBridge/bin/Release/libdesktopbuddy_linux_native.so
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+"$root/scripts/build-native.sh" Release

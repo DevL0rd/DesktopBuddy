@@ -1,15 +1,44 @@
 ## 1.0.20 - 2026-06-26
 
-### Linux support
-- Cloudflare tunnel now runs on native Linux (bundled native `cloudflared` binary, `/dev/null` config, exec-bit re-asserted; skips the Windows-only kill-job).
-- Renamed the internal `IsLinuxProton` platform check to `IsLinux` (modern Resonite runs natively on Linux, not under Proton).
-- Linux desktop audio: the native stream now carries audio (AAC) captured via PipeWire, excluding Resonite's own output.
-- Linux virtual camera via v4l2loopback ("DesktopBuddy - Camera"), with a setup action to install/load the module.
+### Linux support (EXPERIMENTAL)
+DesktopBuddy now runs on native Linux Resonite. **This is an early, experimental port.** The
+core "share your desktop into Resonite" flow works, but several features are incomplete or
+broken — please read the known issues below before relying on it.
 
-### General
-- New General-tab toggles: Dynamic lights (default off) and "New windows start private".
-- Stream audio now defaults to muted (0) so viewers opt in.
-- Diagnostics button can also upload the log and spawn it in-game.
+- Desktop/window capture on Wayland via xdg-desktop-portal (PipeWire), with a Linux source
+  picker in the context menu and saved sources for one-click re-sharing.
+- Native streaming pipeline (FFmpeg) so remote viewers still get a stream.
+- Desktop audio captured via PipeWire and muxed into the stream (AAC), excluding Resonite's
+  own output.
+- Virtual camera via v4l2loopback ("DesktopBuddy - Camera"), with a Devices-tab setup action
+  to install/load the module.
+- Cloudflare tunnel runs natively (bundled Linux `cloudflared`).
+- GPU frames are shared to the renderer through a native DMA-buf texture bridge.
+
+**Known issues / not working yet on Linux:**
+- **Input does not work** — you can see and hear the desktop, but mouse/keyboard input to the
+  captured windows is not functional yet.
+- **Direct single-window audio is broken** — only full-desktop / native-stream audio works;
+  sharing an individual window's audio does not.
+- Expect other rough edges; the Linux platform is a work in progress.
+
+(Windows is unaffected and continues to work as before.)
+
+### Settings & UI
+- New "Dynamic lights" toggle (General tab, default off): casts an in-game light that matches
+  the captured screen's average color.
+- New "Windows I open start private" toggle so panels you spawn start in Private mode.
+- Stream audio now defaults to muted (volume 0) so viewers opt in to hearing it.
+- DesktopBuddy remembers your Linux desktop/window sources for instant re-sharing.
+- The Diagnostics button can now also upload the log and spawn it in-game.
+
+### Fixes
+- Fixed your avatar's eye tracking turning off (eyes freezing) while looking at your own
+  DesktopBuddy panel. Resonite's idle eye-look could latch onto the panel's local screen and
+  throw an error that disabled the eye manager; DesktopBuddy now keeps the eye system from
+  targeting its own local surfaces.
+- Stability fixes around stream URL binding, private/public toggling, panel resizing, and
+  session cleanup.
 
 ## 1.0.18 - 2026-05-24
 

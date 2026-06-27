@@ -7,7 +7,7 @@ on:
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -18,58 +18,69 @@ jobs:
 
       - name: Get release version
         id: version
-        shell: pwsh
         run: |
-          $version = (Get-Content -Raw VERSION).Trim()
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "VERSION must be semantic Major.Minor.Patch for releases. Current value: '$version'"
-          }
-
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-          echo "tag=v$version" >> $env:GITHUB_OUTPUT
-          echo "name=DesktopBuddy $version" >> $env:GITHUB_OUTPUT
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be semantic Major.Minor.Patch for releases. Current value: '$version'" >&2
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "name=DesktopBuddy $version"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
-      - name: Build release DLLs
-        shell: pwsh
-        run: ./scripts/build.ps1 -Configuration Release -NoDeploy
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev pkg-config \
+            libavformat-dev libavcodec-dev libswscale-dev libavutil-dev \
+            libpipewire-0.3-dev
+
+      - name: Build Windows DLLs and Linux native libraries
+        run: ./scripts/build.sh --no-deploy
 
       - name: Build manual release package
-        shell: pwsh
-        run: ./scripts/package.ps1 -Configuration Release -Package Manual
+        run: ./scripts/package.sh --package Manual
 
       - name: Render release notes
         id: notes
-        shell: pwsh
         run: |
-          $version = '${{ steps.version.outputs.version }}'
-          $changelog = Get-Content -Raw CHANGELOG.md
-          $sectionMatch = [regex]::Match(
-            $changelog,
-            "(?ms)^##\s+$([regex]::Escape($version))\b.*?(?=^##\s+|\z)"
-          )
-          $notes = if ($sectionMatch.Success) { $sectionMatch.Value.Trim() } else { $changelog.Trim() }
-          $readme = Get-Content -Raw README.md
-          $installMatch = [regex]::Match(
-            $readme,
-            '(?ms)^##\s+Install\s*(.*?)(?=^##\s+|\z)'
-          )
-          if (-not $installMatch.Success) {
-            throw "README.md Install section was not found"
-          }
-
-          $installNotes = "## Install`r`n`r`n" + $installMatch.Groups[1].Value.Trim()
-          $body = @(
-            $installNotes
-            $notes
-          ) -join "`r`n`r`n"
-          $path = Join-Path $env:RUNNER_TEMP 'release-notes.md'
-          Set-Content -NoNewline -Path $path -Value $body
-          echo "path=$path" >> $env:GITHUB_OUTPUT
+          version='${{ steps.version.outputs.version }}'
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+          changelog="$(awk -v ver="$version" '
+            /^## / {
+              if (started) exit
+              h=$0; sub(/^##[[:space:]]+/,"",h); n=length(ver)
+              if (substr(h,1,n)==ver) { c=substr(h,n+1,1); if (c=="" || c !~ /[0-9.]/) started=1 }
+            }
+            started { print }
+          ' CHANGELOG.md)"
+          if [[ -z "$changelog" ]]; then changelog="$(cat CHANGELOG.md)"; fi
+          install="$(awk '
+            /^##[[:space:]]+Install([[:space:]]|$)/ { started=1; next }
+            started && /^## / { exit }
+            started { print }
+          ' README.md)"
+          if [[ -z "$install" ]]; then
+            echo "README.md Install section was not found" >&2
+            exit 1
+          fi
+          {
+            printf '## Install\n\n'
+            printf '%s\n' "$install" | sed '1{/^[[:space:]]*$/d}'
+            printf '\n'
+            printf '%s\n' "$changelog"
+          } > "$notes_path"
+          echo "path=$notes_path" >> "$GITHUB_OUTPUT"
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
@@ -79,5 +90,4 @@ jobs:
           name: ${{ steps.version.outputs.name }}
           body_path: ${{ steps.notes.outputs.path }}
           make_latest: true
-          overwrite_files: true
           files: DesktopBuddy-${{ steps.version.outputs.version }}.zip

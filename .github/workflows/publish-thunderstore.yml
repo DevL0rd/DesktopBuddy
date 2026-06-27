@@ -3,9 +3,6 @@ name: Publish Thunderstore
 on:
   push:
     branches: [main]
-    paths:
-      - 'VERSION'
-      - 'RUNTIME_VERSION'
   workflow_dispatch:
     inputs:
       package:
@@ -20,7 +17,7 @@ on:
 
 jobs:
   publish:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     environment: main
     permissions:
       contents: read
@@ -30,40 +27,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check version file changes
-        id: version_changes
-        shell: pwsh
-        run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            echo "should_publish=true" >> $env:GITHUB_OUTPUT
-            exit 0
-          }
-
-          $before = '${{ github.event.before }}'
-          $after = '${{ github.sha }}'
-          $changed = @(git diff --name-only $before $after)
-          $versionChanged = $changed -contains 'VERSION' -or $changed -contains 'RUNTIME_VERSION'
-          echo "should_publish=$($versionChanged.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-
-          if (-not $versionChanged) {
-            Write-Host "VERSION and RUNTIME_VERSION did not change; skipping Thunderstore publish."
-          }
-
       - uses: actions/setup-dotnet@v4
-        if: steps.version_changes.outputs.should_publish == 'true'
         with:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
-      - name: Publish changed Thunderstore packages
-        if: steps.version_changes.outputs.should_publish == 'true'
-        shell: pwsh
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev pkg-config \
+            libavformat-dev libavcodec-dev libswscale-dev libavutil-dev \
+            libpipewire-0.3-dev
+
+      - name: Build Windows DLLs and Linux native libraries
+        run: ./scripts/build.sh --no-deploy
+
+      - name: Build Thunderstore packages
+        run: |
+          pkg='${{ github.event.inputs.package }}'
+          [[ -z "$pkg" ]] && pkg='All'
+          ./scripts/package.sh --package "$pkg"
+
+      - name: Publish to Thunderstore
         env:
           TCLI_AUTH_TOKEN: ${{ secrets.TCLI_AUTH_TOKEN }}
         run: |
-          $package = '${{ github.event.inputs.package }}'
-          if ([string]::IsNullOrWhiteSpace($package)) {
-            $package = 'All'
-          }
-
-          ./scripts/deploy-thunderstore.ps1 -Publish -Package $package
+          if [[ -z "${TCLI_AUTH_TOKEN}" ]]; then
+            echo "TCLI_AUTH_TOKEN is empty. Add it as a repository secret or to the 'main' environment." >&2
+            exit 1
+          fi
+          dotnet tool restore
+          # Publish the runtime package before the main package (main depends on it).
+          # Re-publishing an existing version is a no-op (Thunderstore rejects duplicates),
+          # so this is safe to run on every push without checking whether the version changed.
+          published_any=0
+          for zip in build/DevL0rd-DesktopBuddyRuntime-*.zip build/DevL0rd-DesktopBuddy-*.zip; do
+            [[ -e "$zip" ]] || continue
+            published_any=1
+            echo "::group::Publishing $zip"
+            if out="$(dotnet tcli publish --file "$zip" --token "$TCLI_AUTH_TOKEN" 2>&1)"; then
+              echo "$out"
+            else
+              echo "$out"
+              if grep -q "already exists" <<< "$out"; then
+                echo "Skipping; this exact package version already exists on Thunderstore."
+              else
+                echo "::endgroup::"
+                echo "Thunderstore publish failed: $zip" >&2
+                exit 1
+              fi
+            fi
+            echo "::endgroup::"
+          done
+          if [[ "$published_any" -eq 0 ]]; then
+            echo "No package zips were produced under build/." >&2
+            exit 1
+          fi
