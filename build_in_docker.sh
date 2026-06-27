@@ -18,7 +18,9 @@ apt-get install -y --no-install-recommends \
   libavcodec-dev \
   libswscale-dev \
   libavutil-dev \
-  libpipewire-0.3-dev
+  libpipewire-0.3-dev \
+  libxkbcommon-dev \
+  libwayland-dev
 
 # Rust toolchain (edition 2024 requires Rust >= 1.85). Skip if already present.
 if ! command -v cargo >/dev/null 2>&1; then
