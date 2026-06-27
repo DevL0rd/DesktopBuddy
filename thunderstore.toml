@@ -15,7 +15,7 @@ ResoniteModding-BepisResoniteWrapper = "1.0.2"
 Nytra-InterprocessLib = "3.0.0"
 ResoniteModding-BepInExRenderer = "5.4.233001"
 ResoniteModding-RenderiteHook = "1.1.1"
-DevL0rd-DesktopBuddyRuntime = "1.0.0"
+DevL0rd-DesktopBuddyRuntime = "1.1.0"
 [build]
 icon = "./icon.png"
 readme = "./README_THUNDERSTORE.md"
