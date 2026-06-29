@@ -12,22 +12,18 @@ internal static class LinuxVirtualCameraSetup
 set -e
 LABEL='DesktopBuddy - Camera'
 if ! modinfo v4l2loopback >/dev/null 2>&1; then
-  if command -v pacman >/dev/null 2>&1; then
-    pacman -S --noconfirm --needed v4l2loopback-dkms
-  elif command -v apt-get >/dev/null 2>&1; then
-    apt-get update && apt-get install -y v4l2loopback-dkms
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y v4l2loopback
-  else
-    echo 'No supported package manager found for v4l2loopback' >&2
-    exit 1
-  fi
+  echo 'The v4l2loopback kernel module is not installed.' >&2
+  echo 'Install it with your package manager, then run this setup again:' >&2
+  echo '  Arch / CachyOS : sudo pacman -S v4l2loopback-dkms' >&2
+  echo '  Debian / Ubuntu: sudo apt install v4l2loopback-dkms' >&2
+  echo '  Fedora         : sudo dnf install v4l2loopback' >&2
+  exit 1
 fi
 printf 'options v4l2loopback exclusive_caps=1 card_label=\""%s\""\n' ""$LABEL"" > /etc/modprobe.d/desktopbuddy-camera.conf
 printf 'v4l2loopback\n' > /etc/modules-load.d/desktopbuddy-camera.conf
 modprobe -r v4l2loopback 2>/dev/null || true
 modprobe v4l2loopback exclusive_caps=1 card_label=""$LABEL""
-echo 'DesktopBuddy virtual camera setup complete'
+echo 'DesktopBuddy virtual camera configured'
 ";
 
     private static int _running;
@@ -64,7 +60,7 @@ echo 'DesktopBuddy virtual camera setup complete'
         psi.ArgumentList.Add("sh");
         psi.ArgumentList.Add(scriptPath);
 
-        Log.Msg("[VirtualCamera] Requesting admin rights to install v4l2loopback (DesktopBuddy - Camera)");
+        Log.Msg("[VirtualCamera] Requesting admin rights to load and configure v4l2loopback (DesktopBuddy - Camera)");
         try
         {
             using var process = Process.Start(psi);

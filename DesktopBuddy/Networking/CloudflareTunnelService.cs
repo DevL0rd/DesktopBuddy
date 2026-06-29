@@ -61,8 +61,7 @@ public partial class DesktopBuddyMod
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(SafeFileHandle hJob, IntPtr hProcess);
 
-    private static string CloudflaredFileName =>
-        DesktopBuddyPlatform.IsLinux ? "cloudflared" : "cloudflared.exe";
+    private static string CloudflaredFileName => "cloudflared.exe";
 
     private const string LaunchClientName = "steam-runtime-launch-client";
     private static string _launchClientPath;
@@ -193,13 +192,18 @@ public partial class DesktopBuddyMod
 
     private static string FindCloudflared()
     {
+        if (DesktopBuddyPlatform.IsLinux)
+        {
+            if (ProbeCloudflared("cloudflared", isPath: false))
+                return "cloudflared";
+
+            Msg("[Tunnel] cloudflared not found on host PATH (install it: sudo pacman -S cloudflared)");
+            return null;
+        }
 
         string bundled = DesktopBuddyRuntimePaths.FindFile(CloudflaredFileName);
         if (ProbeCloudflared(bundled, isPath: true))
             return bundled;
-
-        if (DesktopBuddyPlatform.IsLinux && ProbeCloudflared("cloudflared", isPath: false))
-            return "cloudflared";
 
         Msg($"[Tunnel] cloudflared not usable (bundled='{bundled}')");
         return null;

@@ -9,8 +9,52 @@ concurrency:
   group: github-release-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SOFTCAM_REPO: DevL0rd/softcam
+  SOFTCAM_REF: main
+
 jobs:
+  softcam:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout softcam fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOFTCAM_REPO }}
+          ref: ${{ env.SOFTCAM_REF }}
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build softcam (x64 + Win32)
+        shell: cmd
+        run: |
+          nuget restore softcam.sln
+          msbuild src\softcam\softcam.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+          msbuild src\softcam\softcam.vcxproj /p:Configuration=Release /p:Platform=Win32 /m
+
+      - name: Collect softcam DLLs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          function Pick($platform, $dest) {
+            $c = Get-ChildItem -Recurse -Filter 'softcam*.dll' |
+              Where-Object { $_.FullName -match "\\$platform\\" -and $_.Name -notmatch 'd\.dll$' } |
+              Select-Object -First 1
+            if (-not $c) { throw "softcam dll for $platform not found" }
+            Copy-Item $c.FullName (Join-Path 'out' $dest)
+          }
+          Pick 'x64' 'softcam64.dll'
+          Pick 'Win32' 'softcam.dll'
+
+      - name: Upload softcam
+        uses: actions/upload-artifact@v4
+        with:
+          name: softcam
+          path: out/*.dll
+
   release:
+    needs: softcam
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,6 +95,17 @@ jobs:
 
       - name: Build Windows DLLs and Linux native libraries
         run: ./scripts/build.sh --no-deploy
+        env:
+          THIRDPARTY_FORCE: "1"
+
+      - name: Download softcam (built from fork on windows-latest)
+        uses: actions/download-artifact@v4
+        with:
+          name: softcam
+          path: DesktopBuddyRuntime
+
+      - name: Binary verification manifest
+        run: ./scripts/fetch-thirdparty.sh --manifest | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build manual release package
         run: ./scripts/package.sh --package Manual

@@ -20,8 +20,11 @@ public partial class DesktopBuddyMod
             Msg("[Startup] Linux runtime detected; skipping WGC prewarm");
         }
 
-        try { FfmpegEncoder.SetFfmpegPath(); }
-        catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
+        if (!DesktopBuddyPlatform.IsLinux)
+        {
+            try { FfmpegEncoder.SetFfmpegPath(); }
+            catch (Exception ex) { Msg($"[Startup] FFmpeg prewarm failed: {ex.Message}"); }
+        }
 
         if (!DesktopBuddyPlatform.IsLinux)
         {

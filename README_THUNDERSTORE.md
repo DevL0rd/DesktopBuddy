@@ -1,6 +1,6 @@
 # DesktopBuddy
 
-DesktopBuddy brings your Windows desktop, completely and seamlessly into Resonite, including screensharing, control, a virtual camera and microphone, and more.
+DesktopBuddy brings your desktop seamlessly into Resonite, including screensharing, control, a virtual camera and microphone, and more.
 
 
 ## Install
@@ -9,13 +9,26 @@ Use a Thunderstore mod manager, such as Gale, to install the mod directly.
 
 GitHub release zips are provided on the DesktopBuddy Github for manual installation. They will include bleeding-edge features and may update faster than Thunderstore while packages wait for review.
 
+### Linux prerequisites
+
+> **⚠️ Linux support is experimental and may have issues.** The core "share your desktop into Resonite" flow works (capture, input as touch, audio, virtual camera, streaming), but expect rough edges. In particular, the capture → renderer-side path is currently a **CPU copy** rather than a full GPU pipeline — due to some complexity this is a temporary path, so it may cause performance issues until it's replaced with a proper end-to-end GPU pipeline.
+
+On Linux, DesktopBuddy uses your system's FFmpeg and `cloudflared` at runtime, and the virtual camera needs the `v4l2loopback` kernel module. DesktopBuddy cannot install packages for you — install them with your package manager before launching:
+
+```sh
+# Arch / CachyOS
+sudo pacman -S ffmpeg v4l2loopback-dkms cloudflared
+```
+
+Then use Devices → "Virtual camera setup" in-world to load and configure the camera module. (Windows needs no prerequisites.)
+
 ## Features
 
-- Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
-- Interact with Windows using VR controllers, hand tracking, or touch input.
-- Fully GPU-accelerated WGC desktop capture.
+- Spawn full desktops or monitors (and individual application windows on Windows) as grabbable curved panels.
+- Interact with captured panels using VR controllers, hand tracking, or touch input.
+- Fully GPU-accelerated desktop capture — Windows Graphics Capture on Windows, PipeWire / xdg-desktop-portal on Linux.
 - Stream panels to other users through local encoding and remote HTTPS tunnel support.
-- Virtual video camera for Windows for video calls and more from within Resonite.
+- Virtual video camera (DirectShow on Windows, v4l2loopback on Linux) for video calls and more from within Resonite.
 - Virtual microphone for Windows for voice calls with spatialized voice from Resonite.
 - Use privacy controls for hiding or limiting what other users can see.
 - Adjust capture, streaming, audio, culling, viewer, and debug options from the in-world settings panel.

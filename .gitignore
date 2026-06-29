@@ -13,6 +13,7 @@ packages/
 target/
 DesktopBuddyLinuxNative/target/
 DesktopBuddyLinuxBridge/bin/
+DesktopBuddyRuntime/*
 *.ts
 DesktopBuddy*.zip
 DesktopBuddy*.exe

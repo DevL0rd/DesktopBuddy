@@ -12,7 +12,7 @@ use wlx_capture::WlxCapture;
 mod audio;
 mod portal_input;
 use wlx_capture::frame::{MemFdFrame, WlxFrame};
-use wlx_capture::pipewire::{PipewireCapture, pipewire_select_screen};
+use wlx_capture::pipewire::PipewireCapture;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -29,99 +29,25 @@ pub struct DbLinuxFrame {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct DbLinuxSelection {
-    pub status: i32,
     pub node_id: u32,
     pub width: u32,
     pub height: u32,
-    pub position_x: i32,
-    pub position_y: i32,
-    pub has_position: u32,
+    pub is_monitor: u32,
     pub restore_token_len: u32,
     pub restore_token: [u8; 256],
-
-    pub is_monitor: u32,
-
-    pub name_len: u32,
-    pub name: [u8; 256],
 }
 
 impl Default for DbLinuxSelection {
     fn default() -> Self {
         Self {
-            status: 0,
             node_id: 0,
             width: 0,
             height: 0,
-            position_x: 0,
-            position_y: 0,
-            has_position: 0,
+            is_monitor: 0,
             restore_token_len: 0,
             restore_token: [0; 256],
-            is_monitor: 0,
-            name_len: 0,
-            name: [0; 256],
         }
     }
-}
-
-fn fetch_node_label(node_id: u32) -> (String, bool) {
-    let out = Arc::new(Mutex::new((String::new(), false)));
-    let (tx, rx) = pw::channel::channel::<()>();
-
-    let timer = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(400));
-        let _ = tx.send(());
-    });
-
-    let scan = out.clone();
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        pw::init();
-        let mainloop = match pw::main_loop::MainLoopRc::new(None) {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        let context = match pw::context::ContextRc::new(&mainloop, None) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let core = match context.connect_rc(None) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let registry = match core.get_registry_rc() {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-
-        let quit = mainloop.clone();
-        let _recv = rx.attach(mainloop.loop_(), move |_| quit.quit());
-
-        let found = scan.clone();
-        let _listener = registry
-            .add_listener_local()
-            .global(move |global| {
-                if global.id != node_id {
-                    return;
-                }
-                let Some(props) = global.props else { return };
-                let name = props
-                    .get("media.name")
-                    .or_else(|| props.get("node.description"))
-                    .or_else(|| props.get("node.name"))
-                    .unwrap_or("");
-                let role = props.get("media.role").unwrap_or("");
-                if let Ok(mut guard) = found.lock() {
-                    guard.0 = name.to_string();
-                    guard.1 = role.eq_ignore_ascii_case("Screen");
-                }
-            })
-            .register();
-
-        mainloop.run();
-    }));
-
-    let _ = timer.join();
-    out.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
 struct CaptureRuntime {
@@ -207,92 +133,6 @@ pub struct DbLinuxStreamInfo {
     pub write_pos: i64,
     pub keyframe_pos: i64,
     pub frames: i64,
-}
-
-fn select_screen(
-    token: Option<&str>,
-) -> Result<wlx_capture::pipewire::PipewireSelectScreenResult, wlx_capture::pipewire::AshpdError> {
-
-    async_std::task::block_on(pipewire_select_screen(token, true, false, true, false))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn db_linux_select_stream(
-    token_ptr: *const u8,
-    token_len: usize,
-    out_selection: *mut DbLinuxSelection,
-) -> i32 {
-    if out_selection.is_null() {
-        return -1;
-    }
-
-    let token: Option<String> = if token_ptr.is_null() || token_len == 0 {
-        None
-    } else {
-        let slice = unsafe { std::slice::from_raw_parts(token_ptr, token_len) };
-        std::str::from_utf8(slice).ok().map(|s| s.to_owned())
-    };
-
-    let selection = match select_screen(token.as_deref()) {
-        Ok(selection) => selection,
-        Err(_) => {
-            unsafe {
-                *out_selection = DbLinuxSelection {
-                    status: -10,
-                    ..Default::default()
-                };
-            }
-            return -10;
-        }
-    };
-
-    let Some(stream) = selection.streams.first() else {
-        unsafe {
-            *out_selection = DbLinuxSelection {
-                status: -11,
-                ..Default::default()
-            };
-        }
-        return -11;
-    };
-
-    let mut result = DbLinuxSelection {
-        status: 0,
-        node_id: stream.node_id,
-        ..Default::default()
-    };
-
-    if let Some((width, height)) = stream.size {
-        result.width = width.max(1) as u32;
-        result.height = height.max(1) as u32;
-    }
-
-    if let Some((x, y)) = stream.position {
-        result.position_x = x;
-        result.position_y = y;
-        result.has_position = 1;
-    }
-
-    if let Some(token) = selection.restore_token {
-        let bytes = token.as_bytes();
-        let count = bytes
-            .len()
-            .min(result.restore_token.len().saturating_sub(1));
-        result.restore_token[..count].copy_from_slice(&bytes[..count]);
-        result.restore_token_len = count as u32;
-    }
-
-    let (name, is_monitor) = fetch_node_label(result.node_id);
-    result.is_monitor = if is_monitor { 1 } else { 0 };
-    if !name.is_empty() {
-        let bytes = name.as_bytes();
-        let count = bytes.len().min(result.name.len().saturating_sub(1));
-        result.name[..count].copy_from_slice(&bytes[..count]);
-        result.name_len = count as u32;
-    }
-
-    unsafe { *out_selection = result };
-    0
 }
 
 fn duplicate_memfd_frame(frame: &MemFdFrame) -> Option<DbLinuxFrame> {

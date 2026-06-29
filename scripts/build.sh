@@ -188,6 +188,8 @@ dotnet build "$root/DesktopBuddySharedTextureBridge/DesktopBuddySharedTextureBri
 
 "$root/scripts/build-native.sh" "$configuration"
 
+"$root/scripts/fetch-thirdparty.sh"
+
 if [[ "$no_deploy" -eq 0 ]]; then
   if [[ ! -d "$profile_path/BepInEx/plugins" ]]; then
     echo "Profile does not look like a Resonite BepInEx profile: $profile_path" >&2

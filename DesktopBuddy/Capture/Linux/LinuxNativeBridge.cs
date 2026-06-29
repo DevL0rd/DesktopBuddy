@@ -7,7 +7,6 @@ namespace DesktopBuddy;
 
 internal sealed unsafe class LinuxNativeBridge : IDisposable
 {
-    private delegate* unmanaged[Cdecl]<byte*, nuint, DbLinuxSelection*, int> _selectStream;
     private delegate* unmanaged[Cdecl]<uint, ulong*, int> _startNode;
     private delegate* unmanaged[Cdecl]<ulong, DbLinuxFrame*, int> _pollFrame;
     private delegate* unmanaged[Cdecl]<ulong, void> _stopCapture;
@@ -27,12 +26,15 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
     private delegate* unmanaged[Cdecl]<int, int, int> _vcamOpen;
     private delegate* unmanaged[Cdecl]<int, byte*, int, int> _vcamWrite;
     private delegate* unmanaged[Cdecl]<int, void> _vcamClose;
-    private delegate* unmanaged[Cdecl]<byte*, nuint, ulong*, int> _inputStart;
+    private delegate* unmanaged[Cdecl]<byte*, nuint, ulong*, DbLinuxSelection*, int> _inputStart;
     private delegate* unmanaged[Cdecl]<ulong, double, double, void> _inputMotion;
-    private delegate* unmanaged[Cdecl]<ulong, int, int, void> _inputButton;
+    private delegate* unmanaged[Cdecl]<ulong, uint, double, double, int> _inputTouchDown;
+    private delegate* unmanaged[Cdecl]<ulong, uint, double, double, void> _inputTouchMotion;
+    private delegate* unmanaged[Cdecl]<ulong, uint, void> _inputTouchUp;
     private delegate* unmanaged[Cdecl]<ulong, int, void> _inputScroll;
     private delegate* unmanaged[Cdecl]<ulong, int, int, void> _inputKey;
     private delegate* unmanaged[Cdecl]<ulong, void> _inputStop;
+    private delegate* unmanaged[Cdecl]<IntPtr> _inputLastError;
     private IntPtr _module;
     private IntPtr _streamModule;
     private bool _disposed;
@@ -53,7 +55,6 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
         try
         {
             _module = NativeLibrary.Load(nativePath);
-            _selectStream = (delegate* unmanaged[Cdecl]<byte*, nuint, DbLinuxSelection*, int>)NativeLibrary.GetExport(_module, "db_linux_select_stream");
             _startNode = (delegate* unmanaged[Cdecl]<uint, ulong*, int>)NativeLibrary.GetExport(_module, "db_linux_capture_start_node");
             _pollFrame = (delegate* unmanaged[Cdecl]<ulong, DbLinuxFrame*, int>)NativeLibrary.GetExport(_module, "db_linux_capture_poll");
             _stopCapture = (delegate* unmanaged[Cdecl]<ulong, void>)NativeLibrary.GetExport(_module, "db_linux_capture_stop");
@@ -63,12 +64,15 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _audioStart = (delegate* unmanaged[Cdecl]<ulong*, int>)NativeLibrary.GetExport(_module, "db_linux_audio_start");
             _audioPoll = (delegate* unmanaged[Cdecl]<ulong, float*, int, int>)NativeLibrary.GetExport(_module, "db_linux_audio_poll");
             _audioStop = (delegate* unmanaged[Cdecl]<ulong, void>)NativeLibrary.GetExport(_module, "db_linux_audio_stop");
-            _inputStart = (delegate* unmanaged[Cdecl]<byte*, nuint, ulong*, int>)NativeLibrary.GetExport(_module, "db_linux_input_start");
+            _inputStart = (delegate* unmanaged[Cdecl]<byte*, nuint, ulong*, DbLinuxSelection*, int>)NativeLibrary.GetExport(_module, "db_linux_input_start");
             _inputMotion = (delegate* unmanaged[Cdecl]<ulong, double, double, void>)NativeLibrary.GetExport(_module, "db_linux_input_motion");
-            _inputButton = (delegate* unmanaged[Cdecl]<ulong, int, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_button");
+            _inputTouchDown = (delegate* unmanaged[Cdecl]<ulong, uint, double, double, int>)NativeLibrary.GetExport(_module, "db_linux_input_touch_down");
+            _inputTouchMotion = (delegate* unmanaged[Cdecl]<ulong, uint, double, double, void>)NativeLibrary.GetExport(_module, "db_linux_input_touch_motion");
+            _inputTouchUp = (delegate* unmanaged[Cdecl]<ulong, uint, void>)NativeLibrary.GetExport(_module, "db_linux_input_touch_up");
             _inputScroll = (delegate* unmanaged[Cdecl]<ulong, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_scroll");
             _inputKey = (delegate* unmanaged[Cdecl]<ulong, int, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_key");
             _inputStop = (delegate* unmanaged[Cdecl]<ulong, void>)NativeLibrary.GetExport(_module, "db_linux_input_stop");
+            _inputLastError = (delegate* unmanaged[Cdecl]<IntPtr>)NativeLibrary.GetExport(_module, "db_linux_input_last_error");
             Log.Msg($"[LinuxNativeBridge] Loaded {nativePath}");
             return true;
         }
@@ -80,7 +84,6 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
                 NativeLibrary.Free(_module);
                 _module = IntPtr.Zero;
             }
-            _selectStream = null;
             _startNode = null;
             _pollFrame = null;
             _stopCapture = null;
@@ -92,33 +95,35 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _audioStop = null;
             _inputStart = null;
             _inputMotion = null;
-            _inputButton = null;
+            _inputTouchDown = null;
+            _inputTouchMotion = null;
+            _inputTouchUp = null;
             _inputScroll = null;
             _inputKey = null;
             _inputStop = null;
+            _inputLastError = null;
             return false;
         }
     }
 
-    internal int SelectStream(string restoreToken, out DbLinuxSelection selection, out string newRestoreToken,
-        out string sourceName, out bool isMonitor)
+    internal ulong SessionStart(string restoreToken, out DbLinuxSelection selection, out string newRestoreToken,
+        out bool isMonitor)
     {
         selection = default;
         newRestoreToken = null;
-        sourceName = null;
         isMonitor = false;
-        if (!TryLoad() || _selectStream == null) return -1;
+        if (!TryLoad() || _inputStart == null) return 0;
 
         byte[] tokenBytes = string.IsNullOrEmpty(restoreToken)
             ? null
             : System.Text.Encoding.UTF8.GetBytes(restoreToken);
 
-        int status;
-        fixed (DbLinuxSelection* ptr = &selection)
+        ulong id = 0;
+        fixed (DbLinuxSelection* selPtr = &selection)
         fixed (byte* tok = tokenBytes)
-            status = _selectStream(tok, (nuint)(tokenBytes?.Length ?? 0), ptr);
+            _inputStart(tok, (nuint)(tokenBytes?.Length ?? 0), &id, selPtr);
 
-        if (status == 0)
+        if (id != 0)
         {
             if (selection.RestoreTokenLen > 0)
             {
@@ -126,27 +131,21 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
                 fixed (byte* p = selection.RestoreToken)
                     newRestoreToken = System.Text.Encoding.UTF8.GetString(p, len);
             }
-            if (selection.NameLen > 0)
-            {
-                int len = (int)Math.Min(selection.NameLen, 256u);
-                fixed (byte* p = selection.Name)
-                    sourceName = System.Text.Encoding.UTF8.GetString(p, len);
-            }
             isMonitor = selection.IsMonitor != 0;
         }
-        return status;
+        return id;
     }
 
-    internal ulong InputStart(string restoreToken)
+    internal string GetInputLastError()
     {
-        if (!TryLoad() || _inputStart == null) return 0;
-        byte[] tokenBytes = string.IsNullOrEmpty(restoreToken)
-            ? null
-            : System.Text.Encoding.UTF8.GetBytes(restoreToken);
-        ulong id = 0;
-        fixed (byte* tok = tokenBytes)
-            _inputStart(tok, (nuint)(tokenBytes?.Length ?? 0), &id);
-        return id;
+        if (_inputLastError == null)
+            return null;
+        try
+        {
+            IntPtr ptr = _inputLastError();
+            return ptr == IntPtr.Zero ? null : Marshal.PtrToStringAnsi(ptr);
+        }
+        catch { return null; }
     }
 
     internal void InputMotion(ulong sessionId, double u, double v)
@@ -155,10 +154,22 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
         _inputMotion(sessionId, u, v);
     }
 
-    internal void InputButton(ulong sessionId, int evdevButton, bool pressed)
+    internal int TouchDown(ulong sessionId, uint slot, double u, double v)
     {
-        if (_inputButton == null || sessionId == 0) return;
-        _inputButton(sessionId, evdevButton, pressed ? 1 : 0);
+        if (_inputTouchDown == null || sessionId == 0) return -2;
+        return _inputTouchDown(sessionId, slot, u, v);
+    }
+
+    internal void TouchMotion(ulong sessionId, uint slot, double u, double v)
+    {
+        if (_inputTouchMotion == null || sessionId == 0) return;
+        _inputTouchMotion(sessionId, slot, u, v);
+    }
+
+    internal void TouchUp(ulong sessionId, uint slot)
+    {
+        if (_inputTouchUp == null || sessionId == 0) return;
+        _inputTouchUp(sessionId, slot);
     }
 
     internal void InputScroll(ulong sessionId, int steps)
@@ -452,7 +463,6 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _selectStream = null;
         _startNode = null;
         _pollFrame = null;
         _stopCapture = null;
@@ -464,10 +474,13 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
         _audioStop = null;
         _inputStart = null;
         _inputMotion = null;
-        _inputButton = null;
+        _inputTouchDown = null;
+        _inputTouchMotion = null;
+        _inputTouchUp = null;
         _inputScroll = null;
         _inputKey = null;
         _inputStop = null;
+        _inputLastError = null;
         _streamStart = null;
         _streamPushFrame = null;
         _streamPushAudio = null;
@@ -494,18 +507,12 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
 [StructLayout(LayoutKind.Sequential)]
 internal unsafe struct DbLinuxSelection
 {
-    public int Status;
     public uint NodeId;
     public uint Width;
     public uint Height;
-    public int PositionX;
-    public int PositionY;
-    public uint HasPosition;
+    public uint IsMonitor;
     public uint RestoreTokenLen;
     public fixed byte RestoreToken[256];
-    public uint IsMonitor;
-    public uint NameLen;
-    public fixed byte Name[256];
 }
 
 [StructLayout(LayoutKind.Sequential)]

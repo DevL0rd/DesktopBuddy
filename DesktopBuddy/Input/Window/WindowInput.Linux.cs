@@ -5,8 +5,6 @@ namespace DesktopBuddy;
 public static partial class WindowInput
 {
 
-    private const int BtnLeft = 0x110;
-
     internal static ulong LinuxInputSession;
 
     private static LinuxNativeBridge _linuxInput;
@@ -16,7 +14,14 @@ public static partial class WindowInput
     {
         if (_linuxInput != null) return _linuxInput;
         lock (_linuxInputLock)
-            _linuxInput ??= new LinuxNativeBridge();
+        {
+            if (_linuxInput == null)
+            {
+                var bridge = new LinuxNativeBridge();
+                bridge.TryLoad();
+                _linuxInput = bridge;
+            }
+        }
         return _linuxInput;
     }
 
@@ -26,19 +31,26 @@ public static partial class WindowInput
         if (s != 0) LinuxInput().InputMotion(s, u, v);
     }
 
-    internal static void LinuxButtonAt(float u, float v, bool pressed)
+    internal static void LinuxTouchDown(uint slot, float u, float v)
     {
         ulong s = LinuxInputSession;
         if (s == 0) return;
         var b = LinuxInput();
-        b.InputMotion(s, u, v);
-        b.InputButton(s, BtnLeft, pressed);
+        int rc = b.TouchDown(s, slot, u, v);
+        if (rc != 0)
+            Log.Msg($"[LinuxInput] touch down rc={rc} session={s} slot={slot} err={b.GetInputLastError() ?? "(none)"}");
     }
 
-    internal static void LinuxButton(bool pressed)
+    internal static void LinuxTouchMove(uint slot, float u, float v)
     {
         ulong s = LinuxInputSession;
-        if (s != 0) LinuxInput().InputButton(s, BtnLeft, pressed);
+        if (s != 0) LinuxInput().TouchMotion(s, slot, u, v);
+    }
+
+    internal static void LinuxTouchUp(uint slot)
+    {
+        ulong s = LinuxInputSession;
+        if (s != 0) LinuxInput().TouchUp(s, slot);
     }
 
     internal static void LinuxScroll(int wheelDelta)

@@ -17,7 +17,7 @@ public static partial class WindowInput
 
     public static void SendTouchDown(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
-        if (DesktopBuddyPlatform.IsLinux) { LinuxButtonAt(u, v, true); return; }
+        if (DesktopBuddyPlatform.IsLinux) { LinuxTouchDown(touchId, u, v); return; }
         lock (_sendLock)
         {
             if (!EnsureTouchInit()) return;
@@ -57,7 +57,7 @@ public static partial class WindowInput
 
     public static void SendTouchMove(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
-        if (DesktopBuddyPlatform.IsLinux) { LinuxMove(u, v); return; }
+        if (DesktopBuddyPlatform.IsLinux) { LinuxTouchMove(touchId, u, v); return; }
         lock (_sendLock)
         {
             if (!_touchInitialized) return;
@@ -93,7 +93,7 @@ public static partial class WindowInput
 
     public static void SendTouchUp(IntPtr hWnd, float u, float v, int clientW, int clientH, uint touchId = 0, IntPtr monitorHandle = default)
     {
-        if (DesktopBuddyPlatform.IsLinux) { LinuxButton(false); return; }
+        if (DesktopBuddyPlatform.IsLinux) { LinuxTouchUp(touchId); return; }
         lock (_sendLock)
         {
             if (!_touchInitialized) return;

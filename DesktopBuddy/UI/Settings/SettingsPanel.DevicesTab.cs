@@ -27,7 +27,7 @@ public partial class DesktopBuddyMod
         });
         if (DesktopBuddyPlatform.IsLinux)
         {
-            AddButtonRow(ui, state, "Virtual camera setup (v4l2loopback)", () => LinuxVirtualCameraSetup.Run(), buttonLabel: "Install");
+            AddButtonRow(ui, state, "Virtual camera setup (requires v4l2loopback installed)", () => LinuxVirtualCameraSetup.Run(), buttonLabel: "Configure");
         }
         AddVirtualCameraPreview(ui, state, session);
         AddCheckbox(ui, state, "Virtual mic muted", session?.VMicMuted ?? false, value =>

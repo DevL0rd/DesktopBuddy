@@ -1,3 +1,20 @@
+## 1.1.0 - 2026-06-29
+
+> **⚠️ Linux support is experimental and may have issues.** The capture → renderer-side path
+> is currently a **CPU copy** rather than a full GPU pipeline — due to some complexity this is
+> a temporary path and may cause performance issues until it's replaced with a proper
+> end-to-end GPU pipeline. (Windows is unaffected.)
+
+### Linux input now works
+- Sharing a desktop now injects real input via xdg-desktop-portal `RemoteDesktop`. Capture and
+  input share a single portal session, so there's one permission dialog and one restore token;
+  re-sharing an already-authorized monitor skips the dialog.
+- **All panel interaction is touch** — laser press, drag, and release map to portal touch events
+  (`NotifyTouchDown`/`Motion`/`Up`), with the per-hand touch id as the touch slot, so multiple
+  hands/users touching a panel are real multitouch. Dragging a panel is a touch-drag.
+- Mouse-wheel and controller-stick scrolling work (smooth-axis scroll). Note: scrolling inside
+  XWayland apps (e.g. Steam, Discord) can stutter — this is an XWayland smooth-scroll limitation; native-Wayland apps scroll smoothly.
+
 ## 1.0.20 - 2026-06-26
 
 ### Linux support (EXPERIMENTAL)
@@ -11,8 +28,9 @@ broken — please read the known issues below before relying on it.
 - Desktop audio captured via PipeWire and muxed into the stream (AAC), excluding Resonite's
   own output.
 - Virtual camera via v4l2loopback ("DesktopBuddy - Camera"), with a Devices-tab setup action
-  to install/load the module.
-- Cloudflare tunnel runs natively (bundled Linux `cloudflared`).
+  that loads and configures the module. Install `ffmpeg`, `cloudflared`, and `v4l2loopback-dkms`
+  yourself first — see the Linux prerequisites in the README; DesktopBuddy cannot install packages.
+- Cloudflare tunnel runs natively using your system `cloudflared`.
 - GPU frames are shared to the renderer through a native DMA-buf texture bridge.
 
 **Known issues / not working yet on Linux:**
@@ -74,130 +92,3 @@ broken — please read the known issues below before relying on it.
 
 ### Diagnostics And Packaging
 - Added a diagnostics collector script and included it in the package so users can send logs, Windows details, and existing crash dumps without creating huge live process dumps.
-
-## 1.0.17 - 2026-05-19
-
-### Build And Packaging
-- Aligned the manual install zip, local build deploy, and Gale/Thunderstore final install layout so DesktopBuddy uses the same package-style paths everywhere.
-- Fixed DesktopBuddy runtime lookup to resolve `DesktopBuddyRuntime` from `BepInEx\plugins\DevL0rd-DesktopBuddyRuntime\DesktopBuddy\DesktopBuddyRuntime`.
-- Moved the renderer bridge manual/local deploy path to match Gale's package-wrapped renderer install path.
-- Kept the runtime package version unchanged because the runtime payload files did not change.
-
-### Runtime
-- Fixed FFmpeg, Cloudflare tunnel, and SoftCam loading after the runtime payload split.
-- Fixed the setup panel missing the Install button when the runtime package was installed by Gale but DesktopBuddy was looking in the wrong folder.
-
-## 1.0.15 - 2026-05-18
-
-### Build And Packaging
-- Fixed zip layout.
-- Split runtime payloads into a separate `DesktopBuddyRuntime` Thunderstore package.
-
-## 1.0.14 - 2026-05-16
-
-### Settings And UI
-- Added a dedicated General settings tab after Viewers.
-- Added General toggles for showing DesktopBuddy in the context menu and enabling throw-to-destroy.
-- Moved experimental spatial audio from Devices to General.
-- Changed the settings panel title to show `DesktopBuddy - version`.
-- Replaced the generated context-menu Desktop icon with the packaged transparent DesktopBuddy icon.
-
-### Streaming And Audio
-- Fixed remote stream audio playback being tied to the owner's local stream preview state.
-- Kept stream audio volume local to each user instead of resetting it from shared stream settings.
-- Removed the global Audio tab volume slider to avoid confusing shared/local audio control.
-- Fixed the remote stream visual missing the current panel curvature on spawn.
-
-### Visual Fixes
-- Reworked quick-menu blur so it attaches to the actual quick-menu curved mesh like the settings panel blur.
-- Fixed quick-menu blur sizing so it follows the current rounded menu width during expand/collapse and resize.
-- Removed custom render-order/render-queue overrides from blur effect materials where they were not needed.
-
-### Build And Packaging
-- Packaged and deployed `icon_transparent.png` with the game plugin so runtime UI can use the same icon asset as documentation.
-- Kept Thunderstore/package metadata in sync with the new version.
-- Disabled Thunderstore publishing while keeping the package layout for GitHub release zips.
-- Updated GitHub releases to attach the install zip and show manual Gale/manual BepisLoader install paths before the changelog.
-- Moved in-game update links and checks to GitHub releases.
-
-## 1.0.12 - 2026-05-15
-
-### Loader And Distribution
-- Converted DesktopBuddy from Resonite Mod Loader to BepisLoader/BepInEx.
-- Added Thunderstore-first package metadata with BepisLoader, BepisResoniteWrapper, InterprocessLib, BepInExRenderer, and RenderiteHook declared as dependencies.
-- Removed the legacy RML manifest, RML deployment paths, RML config handling, bundled RML/BepInEx reference DLLs, and manual InterprocessLib source copy.
-- Added GitHub Actions support for Thunderstore publishing and changed GitHub releases to point users to the Thunderstore package page instead of uploading a second install zip.
-- Added a separate Thunderstore README focused on what DesktopBuddy is and what it does.
-
-### First-Run Setup
-- Added an in-world DesktopBuddy setup panel that appears from the Desktop context-menu item when local Windows setup is missing or outdated.
-- Setup now checks only the Windows pieces DesktopBuddy owns: SoftCam registration, VB-Cable installation, VB-Cable loopback, and the local streaming URL ACL.
-- Setup asks for administrator permission only after pressing Install, then refreshes the panel status and waits for Close before continuing startup.
-- The setup panel can be closed to continue loading DesktopBuddy even when optional setup is skipped.
-- Added packaged setup payload hashes so SoftCam and VB-Cable setup can be rerun when those bundled payloads change.
-
-### Organization And Maintenance
-- Reworked DesktopBuddy into a feature-sliced modular monolith with focused App, Configuration, Sessions, Streaming, Capture, Input, UI, Networking, VirtualDevices, Win32, and Utilities areas.
-- Split the old DesktopBuddyMod, SessionLoop, SessionSpawner, SettingsPanel, FfmpegEncoder, WgcCapture, and WindowInput monoliths into smaller responsibility-focused files.
-- Added shared UI primitives for curved panels, scrollbars, stick scrolling, and common styling.
-- Cleaned up naming around SoftCam, VB-Cable, Cloudflare tunnel handling, stream servers, and port forwarding.
-- Added `CODE_ORGANIZATION.md` guidance for keeping future changes dry and organized.
-
-### Streaming And Runtime
-- Moved shared stream ownership, release, refcount, and cleanup behavior into shared stream lifecycle/registry helpers.
-- Split session update behavior into resize, cleanup, virtual device ticking, window polling, and event processing services.
-- Improved built-in stream startup and delayed remote URL binding so stream URLs are attached when the encoder and public URL are actually ready.
-- Kept Cloudflare tunnel support as the built-in remote HTTPS path while leaving external MediaMTX mode available for users who configure it.
-
-### Settings And UI
-- Broke the settings panel into focused tab, layout, primitive, style, viewer row, culling preview, update, and debug modules.
-- Kept the current DesktopBuddy visual style while making settings controls reusable and less duplicated.
-- Updated README and package documentation for BepisLoader, Thunderstore, current build scripts, and the new release flow.
-
-### Build And Packaging
-- Replaced batch build/package scripts with PowerShell scripts.
-- Build and package scripts now generate `DesktopBuddySetupPayloads.md5` from the setup payloads.
-- Packaging now uses the Thunderstore layout directly and includes `CHANGELOG.md` plus the Thunderstore README.
-- Local build/deploy supports Gale profile selection while defaulting to the `Default` profile.
-- Removed old setup scripts and no longer packages `INSTALL.txt`.
-
-
-
-
-## 1.0.10 - Previous Release Notes
-
-DesktopBuddy got a major in-world control upgrade in this release, with a new curved Settings panel, a redesigned quick menu, richer streaming controls, and cleaner release/install tooling.
-
-### Highlights
-- Added a curved DesktopBuddy Settings panel that matches the main panel shape and opens directly in-world.
-- Redesigned the bottom quick menu as a compact hover pill with the new purple-to-blue visual theme.
-- Added tabbed settings for viewers, stream quality, networking, virtual devices, debug logs, and update info.
-- Added viewer-aware stream controls with per-user enable toggles and live culling status.
-- Added frustum and distance-based viewer culling with an in-world preview guide.
-- Added local-only stream playback gating so viewers outside the culling area stop receiving the stream while the panel itself remains visible.
-- Added a short grace period when viewers leave the culling area so streams do not flicker on brief boundary crossings.
-- Added stream presets for resolution, FPS, bitrate, encoder preference, and preferred GPU selection.
-- Added network controls for Cloudflare, port forwarding, automatic external IP detection, manual host entry, and stream port settings.
-- Added virtual device status cards for SoftCam, VB-Cable, virtual camera, virtual mic, and experimental spatial audio.
-- Added a rounded virtual camera preview on the devices page.
-- Added an in-game update/info page with project info, GitHub access, current version, changelog display, and reset-to-defaults.
-- Added a combined debug log export that includes DesktopBuddy and renderer-side logs.
-- Added an in-game debug log viewer that keeps the newest lines visible.
-
-### Streaming And Audio
-- Stream audio now plays at full source volume and is controlled locally by each user.
-- Owner stream preview uses the same stream playback path as remote viewers.
-- Stream playback now starts and stops per user instead of disabling shared panel visuals.
-- Stream quality changes are applied through the runtime stream pipeline instead of requiring broad manual resets.
-
-### Visual Polish
-- Settings and quick-menu surfaces now use rounded blurred backdrops that match the curved DesktopBuddy panel.
-- Controls, section headers, toggles, sliders, text fields, status badges, and scroll areas have been rethemed for a cleaner premium look.
-- Status badges have been standardized across network and virtual-device pages.
-- Viewer rows now use a cleaner list presentation with avatar-style icons.
-
-### Build, Install, And Packaging
-- Build scripts now refresh game-side and renderer-side dependency DLLs from the installed game where appropriate.
-- Harmony and game/render-side references are refreshed from the local Resonite install.
-- Packaging and installer scripts were updated for the dependency layout at the time.
-- Release automation includes the changelog artifact used by the in-game update page.

@@ -5,7 +5,7 @@
 </p>
 
 
-DesktopBuddy brings your Windows desktop into Resonite with a virtual camera and microphone to integrate windows completly and seemlessly into resonite.
+DesktopBuddy brings your desktop into Resonite with a virtual camera and microphone to integrate your destkop completly and seemlessly into resonite.
 
 
 ## Install
@@ -52,74 +52,29 @@ Install or enable these loader packages too:
 - BepInExRenderer
 - RenderiteHook
 
+### Linux prerequisites
+
+> **⚠️ Linux support is experimental and may have issues.** The core "share your desktop into Resonite" flow works (capture, input as touch, audio, virtual camera, streaming), but expect rough edges. In particular, the capture → renderer-side path is currently a **CPU copy** rather than a full GPU pipeline — due to some complexity this is a temporary path, so it may cause performance issues until it's replaced with a proper end-to-end GPU pipeline.
+
+On Linux, DesktopBuddy uses your system's FFmpeg and `cloudflared` (loaded at runtime), and the virtual camera needs the `v4l2loopback` kernel module. DesktopBuddy cannot install packages for you, so install these first:
+
+```sh
+# Arch / CachyOS
+sudo pacman -S ffmpeg v4l2loopback-dkms cloudflared
+```
+
+PipeWire and xdg-desktop-portal (used for screen capture) ship with most modern Wayland desktops. After installing `v4l2loopback`, open Devices → "Virtual camera setup" in-world to load and configure the camera module.
+
 ## Features
-- Spawn full desktops, monitors, or individual application windows as grabbable curved panels.
-- Interact with windows using VR controller, hand tracking, or touch input.
-- Fully gpu accelerated WGC desktop capture.
+- Spawn full desktops or monitors (and individual application windows on Windows) as grabbable curved panels.
+- Interact with captured panels using VR controllers, hand tracking, or touch input.
+- Fully GPU-accelerated desktop capture — Windows Graphics Capture on Windows, PipeWire / xdg-desktop-portal on Linux.
 - Stream panels to other users through local encoding and remote HTTPS tunnel support.
-- Virtual video camera drivers for windows so you can do video calls from within resonite.
-- Virtual microphone driver for windows so friends can hear you in calls in resonite.
+- Virtual video camera (DirectShow on Windows, v4l2loopback on Linux) so you can do video calls from within Resonite.
+- Virtual microphone driver (Windows) so friends can hear you in calls in Resonite.
 - Use privacy controls for hiding or limiting what other users can see.
 - Adjust capture, streaming, audio, culling, viewer, and debug options from the in-world settings panel.
 - Keep game-side and renderer-side work separated through the shared texture bridge.
-
-
-## Building
-
-Install:
-
-- .NET 10 SDK
-- Windows SDK 10.0.26100.0 or newer
-
-Build locally:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart
-```
-
-This builds the game-side BepInEx plugin and renderer-side shared texture bridge, deploys them into the local Gale profile named `Default` when present, and restarts Resonite through the root HookFxr loader with that profile's BepInEx target. Add `-Desktop` for desktop mode:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -Desktop
-```
-
-Use a different Gale profile name with `-ProfileName`, or an exact profile path with `-ProfilePath`:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -ProfileName MyProfile
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Restart -ProfilePath "$env:APPDATA\com.kesomannen.gale\resonite\profiles\MyProfile"
-```
-
-CI-style compile without deploy:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -NoDeploy
-```
-
-
-## Packaging And Release
-
-Thunderstore package metadata still lives in `thunderstore.toml`, while `scripts\package.ps1` builds a clean GitHub release zip for manual installation into a Gale profile or manual BepisLoader root. `VERSION` is the source of truth for the plugin package, and `RUNTIME_VERSION` is the source of truth for the separate `DesktopBuddyRuntime` Thunderstore package. After changing either file, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-version.ps1
-```
-
-Create the manual GitHub release zip locally with:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
-```
-
-The manual zip is always self-contained and includes both the mod DLLs and `DesktopBuddyRuntime`.
-
-To build the split Thunderstore packages for manager/testing use, add `-ThunderstoreFormat`:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1 -ThunderstoreFormat
-```
-
-GitHub Actions refreshes the manual release zip on pushes to `main`, even when `VERSION` does not change. Thunderstore publishing is separate and only uploads exact package versions that do not already exist.
 
 
 ## Credits
