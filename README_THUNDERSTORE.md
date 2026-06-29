@@ -5,7 +5,7 @@ DesktopBuddy brings your desktop seamlessly into Resonite, including screenshari
 
 ## Install
 
-Use a Thunderstore mod manager, such as Gale, to install the mod directly. 
+Use a Thunderstore mod manager, such as Gale, to install the mod directly.
 
 GitHub release zips are provided on the DesktopBuddy Github for manual installation. They will include bleeding-edge features and may update faster than Thunderstore while packages wait for review.
 
