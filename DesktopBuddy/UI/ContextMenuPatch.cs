@@ -436,6 +436,15 @@ public static class ContextMenuPatch
                 {
                     string err = bridge.GetInputLastError();
                     DesktopBuddyMod.Msg($"[ContextMenu] Linux portal session failed inputSession={inputSession} node={selection.NodeId} error={err ?? "(none)"}");
+
+                    // A restore token that no longer resolves stays broken forever, so drop it
+                    // and fall back to the picker instead of leaving a dead entry on the dial.
+                    if (reshare != null)
+                    {
+                        ForgetLinuxSource(reshare);
+                        DesktopBuddyMod.Msg("[ContextMenu] Dropped stale saved Linux source; reopening portal picker");
+                        OpenLinuxPortalPickerThenSpawn(world, null);
+                    }
                     return;
                 }
 
@@ -454,6 +463,14 @@ public static class ContextMenuPatch
                 DesktopBuddyMod.Msg($"[ContextMenu] Linux portal picker error: {ex}");
             }
         });
+    }
+
+    private static void ForgetLinuxSource(LinuxSharedSource source)
+    {
+        if (source == null) return;
+        lock (_linuxSourcesLock)
+            _linuxSources.Remove(source);
+        SaveLinuxSources();
     }
 
     private static string RememberLinuxSource(LinuxSharedSource existing, string token, bool isMonitor, int width, int height)

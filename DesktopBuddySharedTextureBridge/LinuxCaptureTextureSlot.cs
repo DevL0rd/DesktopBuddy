@@ -68,8 +68,22 @@ namespace DesktopBuddySharedTextureBridge
             if (_captureStarted || _disposed)
                 return;
 
+            if (!LinuxCaptureGuard.BeginNativeStart(_pipeWireNodeId))
+            {
+                _captureStarted = false;
+                return;
+            }
+
             SharedTextureBridgePlugin.LogInfo($"[LinuxCapture] SHM capture start calling native bridge node={_pipeWireNodeId}");
-            int status = _bridge.StartCapture(_pipeWireNodeId);
+            int status;
+            try
+            {
+                status = _bridge.StartCapture(_pipeWireNodeId);
+            }
+            finally
+            {
+                LinuxCaptureGuard.EndNativeStart();
+            }
             SharedTextureBridgePlugin.LogInfo($"[LinuxCapture] SHM capture start returned {status} node={_pipeWireNodeId}");
             if (status != 0)
                 SharedTextureBridgePlugin.LogWarning($"[LinuxCapture] SHM capture did not start cleanly: {status}");

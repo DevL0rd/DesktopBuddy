@@ -65,6 +65,12 @@ sudo pacman -S ffmpeg v4l2loopback-dkms cloudflared
 
 PipeWire and xdg-desktop-portal (used for screen capture) ship with most modern Wayland desktops. After installing `v4l2loopback`, open Devices → "Virtual camera setup" in-world to load and configure the camera module.
 
+Is is also important to add the following WINEDLLOVERRIDES as a prefix under your steam launch options:
+```
+WINEDLLOVERRIDES="winhttp=n,b" %command%
+```
+
+
 ## Features
 - Spawn full desktops or monitors (and individual application windows on Windows) as grabbable curved panels.
 - Interact with captured panels using VR controllers, hand tracking, or touch input.
