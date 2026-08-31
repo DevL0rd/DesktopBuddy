@@ -46,7 +46,11 @@ public partial class DesktopBuddyMod
             float userScale = GetUserSpawnScale(userRoot);
             root.LocalScale = float3.One * userScale;
             root.GlobalPosition = headPos + forward * (0.8f * userScale);
-            root.GlobalRotation = floatQ.LookRotation(forward, float3.Up);
+            // Face the user, then pitch about the panel's own right axis so the tilt is
+            // applied in panel space and stays correct whichever way the user is turned.
+            float spawnTilt = Config?.GetValue(SpawnTilt) ?? 0f;
+            spawnTilt = MathX.Clamp(spawnTilt, -85f, 85f);
+            root.GlobalRotation = floatQ.LookRotation(forward, float3.Up) * floatQ.Euler(spawnTilt, 0f, 0f);
             var destroyer = root.AttachComponent<DestroyOnUserLeave>();
 
             destroyer.TargetUser.Target = localUser;

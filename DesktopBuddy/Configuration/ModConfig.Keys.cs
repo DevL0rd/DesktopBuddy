@@ -53,6 +53,8 @@ public partial class DesktopBuddyMod
         new("panelCurvePreferences", "Saved DesktopBuddy panel curve values, keyed by application executable path or shared desktop capture.", () => "");
     internal static readonly DesktopBuddyConfigKey<string> LinuxSharedSources =
         new("linuxSharedSources", "Saved Linux desktop/window sources for instant re-share, with their restore tokens and icons.", () => "");
+    internal static readonly DesktopBuddyConfigKey<float> SpawnTilt =
+        new("spawnTilt", "Tilt of newly spawned panels, in degrees. Positive leans the top away from you like a monitor on a stand; negative tips it towards you, which reads better on a panel spawned above eye level. 0 is upright.", () => 0.0f);
     internal static readonly DesktopBuddyConfigKey<float> StickScrollSpeed =
         new("stickScrollSpeed", "Controller thumbstick scroll speed, in wheel notches per second at full deflection.", () => 8.0f);
     internal static readonly DesktopBuddyConfigKey<bool> LinuxPointerInput =
