@@ -21,6 +21,7 @@ enum Msg {
     TouchUp { slot: u32 },
     Scroll { steps: i32 },
     Key { keysym: i32, pressed: bool },
+    Button { button: i32, pressed: bool },
     Stop,
 }
 
@@ -55,7 +56,7 @@ fn sessions() -> &'static Mutex<HashMap<u64, InputSession>> {
 
 static LAST_ERROR: OnceLock<Mutex<Option<CString>>> = OnceLock::new();
 
-fn set_last_error(msg: &str) {
+pub(crate) fn set_last_error(msg: &str) {
     let cell = LAST_ERROR.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cell.lock() {
         *guard = CString::new(msg).ok();
@@ -265,6 +266,16 @@ pub extern "C" fn db_linux_input_start(
                             set_last_error(&format!("notify_keyboard_keysym: {e}"));
                         }
                     }
+                    Msg::Button { button, pressed } => {
+                        let state = if pressed {
+                            KeyState::Pressed
+                        } else {
+                            KeyState::Released
+                        };
+                        if let Err(e) = remote.notify_pointer_button(&session, button, state).await {
+                            set_last_error(&format!("notify_pointer_button: {e}"));
+                        }
+                    }
                     Msg::Stop => break,
                 }
             }
@@ -368,6 +379,16 @@ pub extern "C" fn db_linux_input_scroll(session_id: u64, steps: i32) {
     send(session_id, Msg::Scroll { steps });
 }
 
+/// Presses or releases a pointer button. `button` is an evdev code: BTN_LEFT is 0x110,
+/// BTN_RIGHT 0x111, BTN_MIDDLE 0x112.
+///
+/// The rest of the input surface is touch-based, which has no notion of a secondary button;
+/// this is the only path that can produce a real right-click.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_input_button(session_id: u64, button: i32, pressed: i32) {
+    send(session_id, Msg::Button { button, pressed: pressed != 0 });
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn db_linux_input_key(session_id: u64, keysym: i32, pressed: i32) {
     send(
@@ -407,6 +428,90 @@ fn effect_name(ptr: *const u8, len: usize) -> Option<String> {
     }
     let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
     std::str::from_utf8(slice).ok().map(|s| s.to_owned())
+}
+
+/// Looks up the connector name (`DP-5`, `HDMI-A-1`, ...) of the output whose geometry matches
+/// the given rectangle, writing it into `out_buf` and returning its length.
+///
+/// The ScreenCast portal deliberately hands back only a node id and geometry, never an output
+/// name, so the name has to be recovered by matching that geometry against what the
+/// compositor reports. KWin's `supportInformation` is the only interface that exposes it.
+/// Returns 0 when no output matches, negative on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_kwin_output_name(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    out_buf: *mut u8,
+    buf_len: usize,
+) -> i32 {
+    if out_buf.is_null() || buf_len == 0 {
+        return -1;
+    }
+
+    let info = match kwin_support_information() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(&format!("kwin_output_name: {e}"));
+            return -2;
+        }
+    };
+
+    let wanted = format!("{x},{y},{width}x{height}");
+    let Some(name) = find_output_named(&info, &wanted) else {
+        return 0;
+    };
+
+    let bytes = name.as_bytes();
+    let len = bytes.len().min(buf_len);
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, len) };
+    len as i32
+}
+
+fn kwin_support_information() -> Result<String, String> {
+    async_std::task::block_on(async {
+        let connection = ashpd::zbus::Connection::session()
+            .await
+            .map_err(|e| format!("session bus: {e}"))?;
+
+        let reply = connection
+            .call_method(
+                Some("org.kde.KWin"),
+                "/KWin",
+                Some("org.kde.KWin"),
+                "supportInformation",
+                &(),
+            )
+            .await
+            .map_err(|e| format!("supportInformation: {e}"))?;
+
+        reply
+            .body()
+            .deserialize::<String>()
+            .map_err(|e| format!("supportInformation body: {e}"))
+    })
+}
+
+/// Pairs each `Name:` with the `Geometry:` that follows it and returns the matching name.
+///
+/// Entries that are not outputs (the backend's own `Name: DRM`, for instance) are followed by
+/// another `Name:` rather than a geometry, so they never match and drop out naturally.
+fn find_output_named(info: &str, wanted_geometry: &str) -> Option<String> {
+    let mut current: Option<String> = None;
+
+    for line in info.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Name: ") {
+            current = Some(rest.trim().to_owned());
+        } else if let Some(rest) = line.strip_prefix("Geometry: ") {
+            if rest.trim() == wanted_geometry {
+                return current.clone();
+            }
+        }
+    }
+
+    None
 }
 
 /// Reports whether a KWin effect is currently loaded: 1 yes, 0 no, negative on error.
@@ -459,15 +564,35 @@ pub extern "C" fn db_linux_kwin_effect_set(name_ptr: *const u8, name_len: usize,
 /// token we are about to replace or forget has to be revoked here or it leaks forever.
 #[unsafe(no_mangle)]
 pub extern "C" fn db_linux_input_revoke_token(token_ptr: *const u8, token_len: usize) -> i32 {
-    if token_ptr.is_null() || token_len == 0 {
+    const TABLE: &str = "remote-desktop";
+    db_linux_portal_revoke_token(TABLE.as_ptr(), TABLE.len(), token_ptr, token_len)
+}
+
+/// Revokes a persisted grant from a named permission-store table.
+///
+/// RemoteDesktop grants land in `remote-desktop` and ScreenCast grants in `screencast`, so
+/// the table has to be chosen by the caller rather than assumed.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_portal_revoke_token(
+    table_ptr: *const u8,
+    table_len: usize,
+    token_ptr: *const u8,
+    token_len: usize,
+) -> i32 {
+    if token_ptr.is_null() || token_len == 0 || table_ptr.is_null() || table_len == 0 {
         return -1;
     }
 
-    let slice = unsafe { std::slice::from_raw_parts(token_ptr, token_len) };
-    let Ok(token) = std::str::from_utf8(slice) else {
+    let token_slice = unsafe { std::slice::from_raw_parts(token_ptr, token_len) };
+    let table_slice = unsafe { std::slice::from_raw_parts(table_ptr, table_len) };
+    let (Ok(token), Ok(table)) = (
+        std::str::from_utf8(token_slice),
+        std::str::from_utf8(table_slice),
+    ) else {
         return -2;
     };
     let token = token.to_owned();
+    let table = table.to_owned();
 
     async_std::task::block_on(async move {
         let connection = match ashpd::zbus::Connection::session().await {
@@ -484,13 +609,13 @@ pub extern "C" fn db_linux_input_revoke_token(token_ptr: *const u8, token_len: u
                 "/org/freedesktop/impl/portal/PermissionStore",
                 Some("org.freedesktop.impl.portal.PermissionStore"),
                 "Delete",
-                &("remote-desktop", token.as_str()),
+                &(table.as_str(), token.as_str()),
             )
             .await
         {
             Ok(_) => 0,
             Err(e) => {
-                set_last_error(&format!("revoke_token {token}: {e}"));
+                set_last_error(&format!("revoke_token {table}/{token}: {e}"));
                 -4
             }
         }

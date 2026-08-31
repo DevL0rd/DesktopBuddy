@@ -53,6 +53,12 @@ public partial class DesktopBuddyMod
         new("panelCurvePreferences", "Saved DesktopBuddy panel curve values, keyed by application executable path or shared desktop capture.", () => "");
     internal static readonly DesktopBuddyConfigKey<string> LinuxSharedSources =
         new("linuxSharedSources", "Saved Linux desktop/window sources for instant re-share, with their restore tokens and icons.", () => "");
+    internal static readonly DesktopBuddyConfigKey<float> StickScrollSpeed =
+        new("stickScrollSpeed", "Controller thumbstick scroll speed, in wheel notches per second at full deflection.", () => 8.0f);
+    internal static readonly DesktopBuddyConfigKey<bool> LinuxPointerInput =
+        new("linuxPointerInput", "Send laser interaction as real mouse button events instead of touchscreen events. Touch mode makes apps treat the panel as a touchscreen: drag pans instead of selecting text, press-and-hold opens context menus, and some shell surfaces ignore it entirely.", () => true);
+    internal static readonly DesktopBuddyConfigKey<string> LinuxInputRestoreToken =
+        new("linuxInputRestoreToken", "Portal restore token for the shared Linux input session, so input permission is only asked for once.", () => "");
     internal static readonly DesktopBuddyConfigKey<bool> LinuxSuspendShakeCursor =
         new("linuxSuspendShakeCursor", "Suspend KWin's shake-cursor effect while sharing, so laser and mouse input do not magnify the cursor (KDE only).", () => true);
     internal static readonly DesktopBuddyConfigKey<string> ViewerCullingMode =
