@@ -263,6 +263,7 @@ public partial class DesktopBuddyMod
             CleanupSession(session);
 
         ActiveSessions.Remove(session);
+        LinuxCursorEffectSuspender.Sync(ActiveSessions.Count);
     }
 
 }

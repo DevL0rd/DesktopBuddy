@@ -29,6 +29,7 @@ public partial class DesktopBuddyMod
                     ActiveSessions.RemoveAt(i);
                 }
             }
+            LinuxCursorEffectSuspender.Sync(ActiveSessions.Count);
             _scheduledWorlds.Remove(world);
             return;
         }
@@ -46,6 +47,7 @@ public partial class DesktopBuddyMod
                 if (session.Cleaned)
                 {
                     ActiveSessions.RemoveAt(i);
+                    LinuxCursorEffectSuspender.Sync(ActiveSessions.Count);
                     continue;
                 }
 

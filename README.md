@@ -107,6 +107,20 @@ busctl --user call org.freedesktop.impl.portal.PermissionStore \
   org.freedesktop.impl.portal.PermissionStore List s remote-desktop
 ```
 
+#### Cursor magnification on KDE
+
+While a panel is shared, two things drive one pointer: DesktopBuddy injecting motion where your laser points, and your real mouse. The cursor snaps between the two positions many times a second, and KWin's **"Shake cursor to find it"** effect — on by default in Plasma 6 — reads that as shaking and magnifies the cursor, growing it further the longer it continues.
+
+DesktopBuddy handles this for you: it unloads KWin's `shakecursor` effect while any panel is shared and restores it once the last one closes. It only restores what it actually suspended, so an effect you had already turned off stays off. The effect is unloaded at runtime rather than disabled in `kwinrc`, so if Resonite crashes mid-share your configuration is untouched and the effect returns on the next KWin restart or reconfigure.
+
+Set `linuxSuspendShakeCursor = false` in the mod config if you would rather DesktopBuddy left your compositor alone. To restore the effect by hand:
+
+```sh
+qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect shakecursor
+```
+
+This applies to KWin only; other compositors have no such effect and DesktopBuddy does nothing there.
+
 
 ## Features
 - Spawn full desktops or monitors (and individual application windows on Windows) as grabbable curved panels.

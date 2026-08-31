@@ -35,6 +35,8 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
     private delegate* unmanaged[Cdecl]<ulong, int, int, void> _inputKey;
     private delegate* unmanaged[Cdecl]<ulong, int> _inputStop;
     private delegate* unmanaged[Cdecl]<byte*, nuint, int> _inputRevokeToken;
+    private delegate* unmanaged[Cdecl]<byte*, nuint, int> _kwinEffectLoaded;
+    private delegate* unmanaged[Cdecl]<byte*, nuint, int, int> _kwinEffectSet;
     private delegate* unmanaged[Cdecl]<IntPtr> _inputLastError;
     private IntPtr _module;
     private IntPtr _streamModule;
@@ -74,6 +76,8 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _inputKey = (delegate* unmanaged[Cdecl]<ulong, int, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_key");
             _inputStop = (delegate* unmanaged[Cdecl]<ulong, int>)NativeLibrary.GetExport(_module, "db_linux_input_stop");
             _inputRevokeToken = (delegate* unmanaged[Cdecl]<byte*, nuint, int>)NativeLibrary.GetExport(_module, "db_linux_input_revoke_token");
+            _kwinEffectLoaded = (delegate* unmanaged[Cdecl]<byte*, nuint, int>)NativeLibrary.GetExport(_module, "db_linux_kwin_effect_loaded");
+            _kwinEffectSet = (delegate* unmanaged[Cdecl]<byte*, nuint, int, int>)NativeLibrary.GetExport(_module, "db_linux_kwin_effect_set");
             _inputLastError = (delegate* unmanaged[Cdecl]<IntPtr>)NativeLibrary.GetExport(_module, "db_linux_input_last_error");
             Log.Msg($"[LinuxNativeBridge] Loaded {nativePath}");
             return true;
@@ -104,9 +108,41 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _inputKey = null;
             _inputStop = null;
             _inputRevokeToken = null;
+            _kwinEffectLoaded = null;
+            _kwinEffectSet = null;
             _inputLastError = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Returns 1 if the named KWin effect is loaded, 0 if not, negative if KWin is
+    /// unavailable (any non-KDE desktop, where this is simply not applicable).
+    /// </summary>
+    internal int KWinEffectLoaded(string effect)
+    {
+        if (string.IsNullOrEmpty(effect)) return -1;
+        if (!TryLoad() || _kwinEffectLoaded == null) return -1;
+
+        byte[] bytes = Encoding.UTF8.GetBytes(effect);
+        fixed (byte* p = bytes)
+            return _kwinEffectLoaded(p, (nuint)bytes.Length);
+    }
+
+    /// <summary>Loads or unloads a KWin effect at runtime. Returns true on success.</summary>
+    internal bool KWinEffectSet(string effect, bool load)
+    {
+        if (string.IsNullOrEmpty(effect)) return false;
+        if (!TryLoad() || _kwinEffectSet == null) return false;
+
+        byte[] bytes = Encoding.UTF8.GetBytes(effect);
+        int status;
+        fixed (byte* p = bytes)
+            status = _kwinEffectSet(p, (nuint)bytes.Length, load ? 1 : 0);
+
+        if (status != 0)
+            Log.Msg($"[LinuxNativeBridge] KWin effect {(load ? "load" : "unload")} '{effect}' failed status={status}: {GetInputLastError() ?? "(none)"}");
+        return status == 0;
     }
 
     /// <summary>

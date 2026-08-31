@@ -270,6 +270,7 @@ public partial class DesktopBuddyMod
             SeenRelatedHwnds = seenRelatedHwnds,
         };
         ActiveSessions.Add(session);
+        LinuxCursorEffectSuspender.Sync(ActiveSessions.Count);
         root.Destroyed += _ => CleanupAndRemoveSession(session, "root destroyed");
         if (Config?.GetValue(DynamicLightsEnabled) ?? false)
             CreateAdaptiveScreenLight(root, session, hwnd, streamer.MonitorHandle);

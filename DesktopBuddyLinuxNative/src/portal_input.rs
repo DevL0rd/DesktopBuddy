@@ -379,6 +379,78 @@ pub extern "C" fn db_linux_input_key(session_id: u64, keysym: i32, pressed: i32)
     );
 }
 
+fn kwin_effect_call(method: &str, effect: &str) -> Result<bool, String> {
+    async_std::task::block_on(async {
+        let connection = ashpd::zbus::Connection::session()
+            .await
+            .map_err(|e| format!("session bus: {e}"))?;
+
+        let reply = connection
+            .call_method(
+                Some("org.kde.KWin"),
+                "/Effects",
+                Some("org.kde.kwin.Effects"),
+                method,
+                &(effect,),
+            )
+            .await
+            .map_err(|e| format!("{method}: {e}"))?;
+
+        // loadEffect/unloadEffect return nothing; only isEffectLoaded carries a body.
+        Ok(reply.body().deserialize::<bool>().unwrap_or(true))
+    })
+}
+
+fn effect_name(ptr: *const u8, len: usize) -> Option<String> {
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(slice).ok().map(|s| s.to_owned())
+}
+
+/// Reports whether a KWin effect is currently loaded: 1 yes, 0 no, negative on error.
+///
+/// Used to suspend KWin's `shakecursor` effect while a desktop is shared. Injected pointer
+/// motion and the user's real mouse fight over the cursor, which KWin reads as shaking and
+/// responds to by magnifying the cursor.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_kwin_effect_loaded(name_ptr: *const u8, name_len: usize) -> i32 {
+    let Some(name) = effect_name(name_ptr, name_len) else {
+        return -1;
+    };
+
+    match kwin_effect_call("isEffectLoaded", &name) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => {
+            set_last_error(&format!("kwin_effect_loaded: {e}"));
+            -2
+        }
+    }
+}
+
+/// Loads (`load` non-zero) or unloads a KWin effect. Returns 0 on success.
+///
+/// This is deliberately a runtime-only change rather than a kwinrc edit: if Resonite dies
+/// while an effect is suspended, the user's configuration is untouched and the effect comes
+/// back on the next KWin reconfigure or restart.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_kwin_effect_set(name_ptr: *const u8, name_len: usize, load: i32) -> i32 {
+    let Some(name) = effect_name(name_ptr, name_len) else {
+        return -1;
+    };
+
+    let method = if load != 0 { "loadEffect" } else { "unloadEffect" };
+    match kwin_effect_call(method, &name) {
+        Ok(_) => 0,
+        Err(e) => {
+            set_last_error(&format!("kwin_effect_set: {e}"));
+            -2
+        }
+    }
+}
+
 /// Revokes a persisted RemoteDesktop grant.
 ///
 /// `select_devices` above uses `PersistMode::ExplicitlyRevoked`, which is what lets a saved
