@@ -33,7 +33,8 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
     private delegate* unmanaged[Cdecl]<ulong, uint, void> _inputTouchUp;
     private delegate* unmanaged[Cdecl]<ulong, int, void> _inputScroll;
     private delegate* unmanaged[Cdecl]<ulong, int, int, void> _inputKey;
-    private delegate* unmanaged[Cdecl]<ulong, void> _inputStop;
+    private delegate* unmanaged[Cdecl]<ulong, int> _inputStop;
+    private delegate* unmanaged[Cdecl]<byte*, nuint, int> _inputRevokeToken;
     private delegate* unmanaged[Cdecl]<IntPtr> _inputLastError;
     private IntPtr _module;
     private IntPtr _streamModule;
@@ -71,7 +72,8 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _inputTouchUp = (delegate* unmanaged[Cdecl]<ulong, uint, void>)NativeLibrary.GetExport(_module, "db_linux_input_touch_up");
             _inputScroll = (delegate* unmanaged[Cdecl]<ulong, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_scroll");
             _inputKey = (delegate* unmanaged[Cdecl]<ulong, int, int, void>)NativeLibrary.GetExport(_module, "db_linux_input_key");
-            _inputStop = (delegate* unmanaged[Cdecl]<ulong, void>)NativeLibrary.GetExport(_module, "db_linux_input_stop");
+            _inputStop = (delegate* unmanaged[Cdecl]<ulong, int>)NativeLibrary.GetExport(_module, "db_linux_input_stop");
+            _inputRevokeToken = (delegate* unmanaged[Cdecl]<byte*, nuint, int>)NativeLibrary.GetExport(_module, "db_linux_input_revoke_token");
             _inputLastError = (delegate* unmanaged[Cdecl]<IntPtr>)NativeLibrary.GetExport(_module, "db_linux_input_last_error");
             Log.Msg($"[LinuxNativeBridge] Loaded {nativePath}");
             return true;
@@ -101,9 +103,29 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
             _inputScroll = null;
             _inputKey = null;
             _inputStop = null;
+            _inputRevokeToken = null;
             _inputLastError = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Revokes a persisted portal grant so it stops appearing in the desktop's remembered
+    /// screen-sharing permissions. Call whenever a restore token is superseded or discarded.
+    /// </summary>
+    internal bool InputRevokeToken(string restoreToken)
+    {
+        if (string.IsNullOrEmpty(restoreToken)) return false;
+        if (!TryLoad() || _inputRevokeToken == null) return false;
+
+        byte[] tokenBytes = System.Text.Encoding.UTF8.GetBytes(restoreToken);
+        int status;
+        fixed (byte* tok = tokenBytes)
+            status = _inputRevokeToken(tok, (nuint)tokenBytes.Length);
+
+        if (status != 0)
+            Log.Msg($"[LinuxNativeBridge] Revoke token failed status={status}: {GetInputLastError() ?? "(none)"}");
+        return status == 0;
     }
 
     internal ulong SessionStart(string restoreToken, out DbLinuxSelection selection, out string newRestoreToken,
@@ -184,10 +206,20 @@ internal sealed unsafe class LinuxNativeBridge : IDisposable
         _inputKey(sessionId, keysym, pressed ? 1 : 0);
     }
 
-    internal void InputStop(ulong sessionId)
+    /// <summary>
+    /// Stops a portal session. Returns the native status: 0 when the portal confirmed the
+    /// close, 1 if the worker ended without reaching it, -1 if the session was not
+    /// registered, -2 if the close failed, -3 on lock poisoning. Returns -10 when the native
+    /// library is unavailable, which is distinct from anything the native side reports.
+    /// </summary>
+    internal int InputStop(ulong sessionId)
     {
-        if (_inputStop == null || sessionId == 0) return;
-        _inputStop(sessionId);
+        if (sessionId == 0) return -10;
+        // Callers routinely build a bridge purely to stop a session (cleanup does), so the
+        // library has to be loaded here. Without this the delegate is still null and the
+        // session is silently never closed, leaking the portal grant.
+        if (!TryLoad() || _inputStop == null) return -10;
+        return _inputStop(sessionId);
     }
 
     internal int StartCapture(uint nodeId, out ulong captureId)

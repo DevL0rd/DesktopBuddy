@@ -468,9 +468,30 @@ public static class ContextMenuPatch
     private static void ForgetLinuxSource(LinuxSharedSource source)
     {
         if (source == null) return;
+        string token;
         lock (_linuxSourcesLock)
+        {
+            token = source.RestoreToken;
             _linuxSources.Remove(source);
+        }
         SaveLinuxSources();
+        RevokeLinuxToken(token);
+    }
+
+    /// <summary>
+    /// Drops a portal grant we no longer reference. Without this the grant persists in the
+    /// desktop's remembered-permissions list indefinitely, one entry per share.
+    /// </summary>
+    private static void RevokeLinuxToken(string token)
+    {
+        if (string.IsNullOrEmpty(token)) return;
+        try
+        {
+            using var bridge = new LinuxNativeBridge();
+            if (bridge.InputRevokeToken(token))
+                DesktopBuddyMod.Msg("[ContextMenu] Revoked superseded Linux portal grant");
+        }
+        catch (Exception ex) { DesktopBuddyMod.Msg($"[ContextMenu] Revoke token error: {ex.Message}"); }
     }
 
     private static string RememberLinuxSource(LinuxSharedSource existing, string token, bool isMonitor, int width, int height)
@@ -481,6 +502,7 @@ public static class ContextMenuPatch
             return existing?.Label ?? label;
 
         LinuxSharedSource entry;
+        string supersededToken = null;
         lock (_linuxSourcesLock)
         {
             entry = (existing != null && _linuxSources.Contains(existing)) ? existing : null;
@@ -492,6 +514,10 @@ public static class ContextMenuPatch
 
             if (entry != null)
             {
+                // The portal mints a fresh grant per start, so the token we are replacing is
+                // now unreferenced and has to be revoked rather than simply overwritten.
+                if (!string.IsNullOrEmpty(entry.RestoreToken) && entry.RestoreToken != token)
+                    supersededToken = entry.RestoreToken;
                 entry.RestoreToken = token;
                 entry.Label = label;
                 entry.IsMonitor = isMonitor;
@@ -504,6 +530,7 @@ public static class ContextMenuPatch
         }
 
         SaveLinuxSources();
+        RevokeLinuxToken(supersededToken);
 
         return label;
     }

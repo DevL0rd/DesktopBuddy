@@ -24,17 +24,25 @@ enum Msg {
     Stop,
 }
 
+/// Outcome of the worker's `Session::close` call, so `db_linux_input_stop` can report
+/// whether the portal actually released the session rather than silently succeeding.
+const CLOSE_PENDING: i32 = 1;
+const CLOSE_OK: i32 = 0;
+const CLOSE_FAILED: i32 = -2;
+
 struct InputSession {
     tx: async_channel::Sender<Msg>,
     thread: Option<JoinHandle<()>>,
+    close_result: std::sync::Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl InputSession {
-    fn stop(&mut self) {
+    fn stop(&mut self) -> i32 {
         let _ = self.tx.try_send(Msg::Stop);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
+        self.close_result.load(Ordering::SeqCst)
     }
 }
 
@@ -156,6 +164,9 @@ pub extern "C" fn db_linux_input_start(
     let (tx, rx) = async_channel::unbounded::<Msg>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<SessionInfo, String>>();
 
+    let close_result = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(CLOSE_PENDING));
+    let close_slot = close_result.clone();
+
     let thread = thread::spawn(move || {
         async_std::task::block_on(async move {
             let remote = match RemoteDesktop::new().await {
@@ -184,6 +195,9 @@ pub extern "C" fn db_linux_input_start(
             {
                 Ok(v) => v,
                 Err(e) => {
+                    // The session exists from create_session above even though setup failed
+                    // (a cancelled picker lands here), so it needs closing like any other.
+                    let _ = session.close().await;
                     let _ = ready_tx.send(Err(e));
                     return;
                 }
@@ -255,6 +269,17 @@ pub extern "C" fn db_linux_input_start(
                 }
             }
 
+            // Dropping the Session does not end it: Close is a D-Bus call and Drop cannot
+            // await. ashpd reuses a cached session-bus connection that outlives this thread,
+            // so without this the portal keeps the session alive for the life of the process
+            // and the desktop environment leaves a screencast indicator behind for each share.
+            match session.close().await {
+                Ok(()) => close_slot.store(CLOSE_OK, Ordering::SeqCst),
+                Err(e) => {
+                    set_last_error(&format!("session close: {e}"));
+                    close_slot.store(CLOSE_FAILED, Ordering::SeqCst);
+                }
+            }
         });
     });
 
@@ -298,6 +323,7 @@ pub extern "C" fn db_linux_input_start(
         InputSession {
             tx,
             thread: Some(thread),
+            close_result,
         },
     );
     unsafe { *out_session_id = id };
@@ -353,11 +379,77 @@ pub extern "C" fn db_linux_input_key(session_id: u64, keysym: i32, pressed: i32)
     );
 }
 
+/// Revokes a persisted RemoteDesktop grant.
+///
+/// `select_devices` above uses `PersistMode::ExplicitlyRevoked`, which is what lets a saved
+/// source be re-shared without a dialog. The cost is that every grant outlives the process
+/// and stays in the desktop's remembered-permissions list until something deletes it, so a
+/// token we are about to replace or forget has to be revoked here or it leaks forever.
 #[unsafe(no_mangle)]
-pub extern "C" fn db_linux_input_stop(session_id: u64) {
-    if let Ok(mut map) = sessions().lock() {
-        if let Some(mut s) = map.remove(&session_id) {
-            s.stop();
+pub extern "C" fn db_linux_input_revoke_token(token_ptr: *const u8, token_len: usize) -> i32 {
+    if token_ptr.is_null() || token_len == 0 {
+        return -1;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts(token_ptr, token_len) };
+    let Ok(token) = std::str::from_utf8(slice) else {
+        return -2;
+    };
+    let token = token.to_owned();
+
+    async_std::task::block_on(async move {
+        let connection = match ashpd::zbus::Connection::session().await {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(&format!("revoke_token: session bus: {e}"));
+                return -3;
+            }
+        };
+
+        match connection
+            .call_method(
+                Some("org.freedesktop.impl.portal.PermissionStore"),
+                "/org/freedesktop/impl/portal/PermissionStore",
+                Some("org.freedesktop.impl.portal.PermissionStore"),
+                "Delete",
+                &("remote-desktop", token.as_str()),
+            )
+            .await
+        {
+            Ok(_) => 0,
+            Err(e) => {
+                set_last_error(&format!("revoke_token {token}: {e}"));
+                -4
+            }
         }
+    })
+}
+
+/// Stops a session and reports what actually happened, so a portal session that was never
+/// released does not look identical to a clean shutdown from the caller's side.
+///
+/// Returns 0 when the portal confirmed the close, 1 if the worker ended without reaching it,
+/// -1 if no such session was registered, -2 if the close call itself failed, -3 on lock
+/// poisoning.
+#[unsafe(no_mangle)]
+pub extern "C" fn db_linux_input_stop(session_id: u64) -> i32 {
+    match sessions().lock() {
+        Ok(mut map) => match map.remove(&session_id) {
+            Some(mut s) => s.stop(),
+            None => {
+                // An empty map means the library was unloaded and reloaded between start and
+                // stop, taking these statics (and the worker threads) with it. A populated map
+                // means something else already removed this id. The two need different fixes.
+                let ids: Vec<String> = map.keys().map(|k| k.to_string()).collect();
+                set_last_error(&format!(
+                    "input_stop: session {session_id} not registered; map holds {} session(s): [{}]; next_id={}",
+                    ids.len(),
+                    ids.join(","),
+                    NEXT_SESSION_ID.load(Ordering::Relaxed)
+                ));
+                -1
+            }
+        },
+        Err(_) => -3,
     }
 }

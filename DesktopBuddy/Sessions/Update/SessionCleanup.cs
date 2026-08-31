@@ -25,8 +25,12 @@ public partial class DesktopBuddyMod
             try
             {
                 using var inputBridge = new LinuxNativeBridge();
-                inputBridge.InputStop(session.LinuxInputSessionId);
-                Msg($"[Cleanup] Stopped Linux input session {session.LinuxInputSessionId}");
+                int stopStatus = inputBridge.InputStop(session.LinuxInputSessionId);
+                if (stopStatus == 0)
+                    Msg($"[Cleanup] Stopped Linux input session {session.LinuxInputSessionId} (portal session closed)");
+                else
+                    Msg($"[Cleanup] Linux input session {session.LinuxInputSessionId} stop returned {stopStatus} " +
+                        $"(portal session may still be open): {inputBridge.GetInputLastError() ?? "(no error)"}");
             }
             catch (Exception ex) { Msg($"[Cleanup] Linux input stop error: {ex.Message}"); }
             if (WindowInput.LinuxInputSession == session.LinuxInputSessionId)
