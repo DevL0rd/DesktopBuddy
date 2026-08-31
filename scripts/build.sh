@@ -2,7 +2,7 @@
 set -euo pipefail
 
 configuration="Release"
-profile_path="${DESKTOPBUDDY_PROFILE_PATH:-/home/devl0rd/.local/share/com.kesomannen.gale/resonite/profiles/Default}"
+profile_path="${DESKTOPBUDDY_PROFILE_PATH:-$HOME/.local/share/com.kesomannen.gale/resonite/profiles/Default}"
 no_deploy=0
 restart=0
 resonite_appid="${RESONITE_APPID:-2519830}"

@@ -10,6 +10,7 @@ use pipewire as pw;
 use wlx_capture::WlxCapture;
 
 mod audio;
+mod portal_capture;
 mod portal_input;
 use wlx_capture::frame::{MemFdFrame, WlxFrame};
 use wlx_capture::pipewire::PipewireCapture;
@@ -35,6 +36,11 @@ pub struct DbLinuxSelection {
     pub is_monitor: u32,
     pub restore_token_len: u32,
     pub restore_token: [u8; 256],
+    /// Offset of the captured source within the compositor's coordinate space. Needed to map
+    /// panel-local input onto the workspace when capture and input come from separate
+    /// sessions. Appended after the existing fields so the older layout stays aligned.
+    pub position_x: i32,
+    pub position_y: i32,
 }
 
 impl Default for DbLinuxSelection {
@@ -46,6 +52,8 @@ impl Default for DbLinuxSelection {
             is_monitor: 0,
             restore_token_len: 0,
             restore_token: [0; 256],
+            position_x: 0,
+            position_y: 0,
         }
     }
 }
